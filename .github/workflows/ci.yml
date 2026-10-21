@@ -51,7 +51,7 @@ jobs:
         if: env.GUI_DEPS == 'true'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pkgconf libgtk-4-dev libgtk-4-bin libadwaita-1-dev
+          sudo apt-get install -y --no-install-recommends pkgconf libgtk-4-dev libgtk-4-bin libadwaita-1-dev desktop-file-utils
 
       # Chave pelo Cargo.lock da raiz e pela versao do rustc (target/ compilado
       # por outro rustc nao serve). Restaura sempre; grava so em push na main,
