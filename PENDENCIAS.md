@@ -14,7 +14,7 @@ aprovação funcional da app; os gates abaixo continuam abertos.
 - [ ] Obter aceite independente das últimas correções do controle Pi (CC1)
   e do retorno explícito a Reclaim (CC2), respeitando esse controle nativo.
 - [ ] Fazer o gate integral passar sem afrouxar testes ou orçamentos.
-  O último CI integrado falhou: mediana D-state de 5,036 ms, limite <5 ms.
+  O último gate local medido falhou: mediana D-state de 5,036 ms, limite <5 ms.
 - [ ] Resolver os gates da GUI. As últimas medições registraram:
 
   | Árvore | Primeiro frame, limite <300 ms | CPU, limite <2% de um core | PSS, limite <80 MiB |
@@ -47,7 +47,10 @@ aprovação funcional da app; os gates abaixo continuam abertos.
   Não enviar o histórico antigo, que contém metadados internos, nem `.agenfk`,
   sessões, logs, `target`, `node_modules` ou runtime gerado. Não usar push
   `--all`/`--mirror`.
-- [ ] Validar clone e build limpos depois do primeiro envio.
+- [x] Validar o clone público, checksums e ausência de histórico privado.
+- [x] Corrigir SC2115 no teste de instalação e confirmar ShellCheck e suíte
+  do instalador, sem desabilitar o lint ou enfraquecer as verificações.
+- [ ] Confirmar build e CI completos a partir do clone/remoto.
 - [ ] Antes de distribuir binários, remover paths locais do compilador e
   empacotar as licenças e avisos das dependências efetivamente distribuídas.
   Os binários atuais são apenas locais.

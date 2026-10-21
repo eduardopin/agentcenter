@@ -201,7 +201,7 @@ for operation in install uninstall; do
     for relative in bin share/applications share/icons/hicolor share/glib-2.0/schemas share/agentcenter; do
         security_fixture
         cp -a "$secure/$relative" "$external/redirected"
-        rm -rf "$secure/$relative"
+        rm -rf "${secure:?}/${relative:?}"
         ln -s "$external/redirected" "$secure/$relative"
         refuse_unchanged "directory-symlink-$relative" "$operation"
     done
