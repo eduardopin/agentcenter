@@ -1,0 +1,75 @@
+{
+ "schema_version": 5,
+ "taken_at_ms": 1792200000000,
+ "interval_ms": 1000,
+ "machine": {
+  "cores": 16,
+  "cpu_pct": 41.8,
+  "io_stall_source": "delayacct",
+  "processes": 402,
+  "session_processes": 0,
+  "mem_total_bytes": 40802189312,
+  "mem_available_bytes": 34252364185,
+  "swap_total_bytes": 28991029248,
+  "swap_free_bytes": 28991029248,
+  "load_avg": {
+   "one": 13.4,
+   "five": 13.9,
+   "fifteen": 14.7
+  },
+  "psi": {
+   "cpu": {
+    "some_avg10": 1.1,
+    "some_avg60": 6.7,
+    "full_avg10": 0.0,
+    "full_avg60": 0.0
+   },
+   "memory": {
+    "some_avg10": 0.0,
+    "some_avg60": 0.0,
+    "full_avg10": 0.0,
+    "full_avg60": 0.3
+   },
+   "io": {
+    "some_avg10": 0.0,
+    "some_avg60": 0.6,
+    "full_avg10": 0.03,
+    "full_avg60": 0.2
+   }
+  }
+ },
+ "sessions": [],
+ "summary": {
+  "sessions": 0,
+  "multiplexers": 0,
+  "by_agent": {},
+  "status": {
+   "busy": 0,
+   "blocked": 0,
+   "idle": 0,
+   "unknown": 0
+  },
+  "sessions_with_working_children": 0,
+  "child_processes": 0,
+  "working_child_processes": 0,
+  "io_bound_sessions": 0,
+  "sessions_cpu_pct": null,
+  "sessions_pss_bytes": null,
+  "sessions_swap_pss_bytes": null,
+  "tool_calls_open": null,
+  "tool_calls_per_min": null,
+  "subagents_live": null,
+  "cockpit": {
+   "continuar": 0,
+   "compactar": 0,
+   "handoff": 0,
+   "ociosa": 0,
+   "loop": 0,
+   "sem_dado": 0
+  },
+  "cockpit_pending": 0,
+  "sessions_burn_weighted": null,
+  "cache_hit": null,
+  "ctx_pct_max": null
+ }
+}

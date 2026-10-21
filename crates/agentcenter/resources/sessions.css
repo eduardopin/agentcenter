@@ -1,0 +1,558 @@
+/* Lista de sessoes (C18): rack de linhas ricas agrupado por estado,
+ * docs/DESIGN.md secao 5. Le so tokens semanticos de tokens.css; o contraste
+ * de cada par usado aqui e medido por scripts/contrast.py pelo nome do token.
+ */
+
+/* Componente: altura minima da linha rica (tres linhas de texto). */
+:root {
+  --ac-session-row-min-height: 56px;
+}
+
+/* Barra da lista: ordem e filtro, quieta sobre a janela. */
+.session-controls {
+  padding: var(--ac-space-1) var(--ac-space-3);
+  background-color: var(--ac-surface-window);
+}
+
+listview.session-rack {
+  background-color: var(--ac-surface-view);
+  color: var(--ac-text-primary);
+}
+
+/* Linha: filete de 1 px entre linhas no lugar da zebra. */
+listview.session-rack > row {
+  min-height: var(--ac-session-row-min-height);
+  padding: var(--ac-space-2) var(--ac-space-3);
+  border-bottom: 1px solid var(--ac-track);
+}
+
+listview.session-rack > row:selected {
+  background-color: var(--ac-selection);
+  color: var(--ac-on-selection-text);
+}
+
+/* Foco do teclado: anel solido do token, dentro da linha para nao cortar. */
+listview.session-rack > row:focus-visible {
+  outline: 2px solid var(--ac-mark-focus);
+  outline-offset: -2px;
+}
+
+/* Cabecalho de secao: "Blocked · 3". Bloqueadas em carmim: precisam de voce. */
+listview.session-rack > header {
+  padding: var(--ac-space-3) var(--ac-space-3) var(--ac-space-1);
+  background-color: var(--ac-surface-view);
+}
+
+.session-section {
+  font-size: 0.86em;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+  color: var(--ac-text-secondary);
+}
+
+.session-section.alert {
+  color: var(--ac-text-alert);
+}
+
+/* O glifo da linha acende com o estado, como o LED de um rack. */
+.session-icon.quiet {
+  color: var(--ac-text-secondary);
+}
+
+.session-icon.busy {
+  color: var(--ac-text-busy);
+}
+
+.session-icon.blocked {
+  color: var(--ac-text-alert);
+}
+
+.session-name {
+  font-weight: 600;
+}
+
+/* Identidade e custo: um degrau abaixo do nome, solidos (sem opacidade). */
+.session-meta,
+.session-caption,
+.session-value {
+  font-size: 0.86em;
+}
+
+.session-meta,
+.session-caption {
+  color: var(--ac-text-secondary);
+}
+
+.session-caption {
+  font-weight: 600;
+}
+
+.session-value {
+  color: var(--ac-text-primary);
+}
+
+.numeric {
+  font-feature-settings: "tnum";
+}
+
+.session-flag {
+  font-size: 0.86em;
+  font-weight: 700;
+  color: var(--ac-text-alert);
+}
+
+/* ==== Cockpit e pilulas (C24) ==== Secao do cockpit: so ela muda neste card.
+ * Pilulas. Estado: preenchida em busy (ambar) e blocked (carmim), contorno em
+ * idle e unknown. Recomendacao: erro preenchida de carmim, aviso contorno
+ * carmim, o resto contorno neutro; nunca tinge a linha. */
+.ac-pill {
+  padding: 0 var(--ac-space-2);
+  border-radius: var(--ac-radius-pill);
+  border: 1px solid var(--ac-mark-machine);
+  font-size: 0.78em;
+  font-weight: 700;
+  color: var(--ac-text-secondary);
+}
+
+.ac-pill.busy {
+  background-color: var(--ac-busy);
+  border-color: var(--ac-busy);
+  color: var(--ac-on-busy-text);
+}
+
+.ac-pill.blocked {
+  background-color: var(--ac-blocked);
+  border-color: var(--ac-blocked);
+  color: var(--ac-on-blocked-text);
+}
+
+/* HANDOFF e LOOP: precisa de voce, preenchida de carmim. */
+.ac-pill.rec-error {
+  background-color: var(--ac-rec-handoff);
+  border-color: var(--ac-rec-handoff);
+  color: var(--ac-on-rec-handoff-text);
+}
+
+/* COMPACTAR: contorno carmim, um degrau abaixo do handoff. */
+.ac-pill.rec-warning {
+  border-color: var(--ac-mark-rec-compact);
+  color: var(--ac-text-rec-compact);
+}
+
+/* OK (continuar): neutro, nunca verde nem ambar. */
+.ac-pill.rec-ok {
+  border-color: var(--ac-mark-rec-ok);
+  color: var(--ac-text-rec-ok);
+}
+
+/* Sem dado: so o travessao, sem contorno; uma pilula vazia leria como botao. */
+.ac-pill.rec-none {
+  border-color: transparent;
+}
+
+/* ==== fim da secao do cockpit (C24) ==== */
+
+/* Barras finas: trilho vazio e o preenchido, 4 px; entalhe na cor da lista. */
+levelbar.meter trough {
+  min-height: 4px;
+  padding: 0;
+  border: none;
+  border-radius: var(--ac-radius-rule);
+  background-color: var(--ac-track);
+}
+
+levelbar.meter block {
+  min-height: 4px;
+  min-width: 0;
+  border: none;
+  border-radius: var(--ac-radius-rule);
+}
+
+levelbar.meter block.filled {
+  background-color: var(--ac-mark-agents);
+}
+
+levelbar.meter block.filled.meter-hot {
+  background-color: var(--ac-mark-alert);
+}
+
+levelbar.meter block.empty {
+  background-color: transparent;
+}
+
+.meter-tick {
+  background-color: var(--ac-surface-view);
+}
+
+/* ==== Detalhe da sessao (C11) ==== detail.rs e process_table.rs.
+ * A pagina e a contabilidade de uma sessao: a face (identidade e fatos) num
+ * painel elevado, como a faixa da maquina, e a tabela de processos noutro.
+ * Fatos sao uma linha de texto "Legenda valor", nao azulejos (DESIGN.md
+ * secao 2). Cor so com significado: ambar e a fatia de PSS e o trabalho em
+ * curso, carmim e "precisa de voce" (bloqueada, stall acima do limiar). A
+ * recomendacao do cockpit e so a pilula .ac-pill.rec-* da secao acima.
+ * Le so tokens semanticos; o contraste de cada --ac-text-* sobre toda
+ * --ac-surface-* e medido por scripts/contrast.py. */
+
+:root {
+  --ac-detail-radius: 12px;
+}
+
+.session-detail {
+  background-color: var(--ac-surface-window);
+  color: var(--ac-text-primary);
+}
+
+/* A face: o mesmo painel da faixa da maquina. */
+.session-detail .detail-face {
+  background-color: var(--ac-surface-panel);
+  padding: var(--ac-space-3) var(--ac-space-4);
+  margin: var(--ac-space-3) var(--ac-space-3) 0;
+  border-radius: var(--ac-detail-radius);
+}
+
+/* O nome e o titulo da pagina: um degrau acima do nome da linha. */
+.session-detail .detail-name {
+  font-size: 1.2em;
+  font-weight: 700;
+}
+
+.session-detail .detail-meta {
+  font-size: 0.9em;
+  color: var(--ac-text-secondary);
+}
+
+.session-detail .detail-meta.numeric {
+  font-feature-settings: "tnum";
+}
+
+/* Fatos: legenda secundaria e solida, valor em tinta com numerais
+ * tabulares, como os contadores da faixa. */
+.session-detail .detail-caption {
+  color: var(--ac-text-secondary);
+  font-weight: 600;
+}
+
+.session-detail .detail-value {
+  color: var(--ac-text-primary);
+  font-feature-settings: "tnum";
+}
+
+/* Cabecalho de secao ("Transcript", "Processes · 17"): o mesmo das secoes
+ * da lista, alinhado ao texto de dentro dos paineis (margem + recuo). */
+.session-detail .detail-section {
+  font-size: 0.86em;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+  color: var(--ac-text-secondary);
+  padding: var(--ac-space-4) var(--ac-space-4) var(--ac-space-1);
+  margin: 0 var(--ac-space-3);
+}
+
+.session-detail .detail-block {
+  padding: 0 var(--ac-space-4);
+  margin: 0 var(--ac-space-3);
+}
+
+.session-detail .detail-note {
+  font-size: 0.86em;
+  color: var(--ac-text-secondary);
+  padding: 0 var(--ac-space-4) var(--ac-space-2);
+  margin: 0 var(--ac-space-3);
+}
+
+/* A tabela: segundo painel, recortado no raio (detail.rs pede overflow
+ * hidden). Sem zebra e sem separador de coluna: filete de 1 px por linha. */
+.session-detail .detail-table {
+  margin: 0 var(--ac-space-3) var(--ac-space-3);
+  border-radius: var(--ac-detail-radius);
+  background-color: var(--ac-surface-panel);
+}
+
+columnview.process-table {
+  background-color: var(--ac-surface-panel);
+  color: var(--ac-text-primary);
+}
+
+columnview.process-table > header {
+  background-color: var(--ac-surface-panel);
+  border-bottom: 1px solid var(--ac-track);
+}
+
+columnview.process-table > header > button {
+  padding: var(--ac-space-2) var(--ac-space-2);
+  font-size: 0.86em;
+  font-weight: 600;
+  color: var(--ac-text-secondary);
+}
+
+/* A coluna que ordena fica em tinta: diz qual chave manda na ordem. */
+columnview.process-table > header > button:checked,
+columnview.process-table > header > button sort-indicator:checked {
+  color: var(--ac-text-primary);
+}
+
+columnview.process-table > listview > row {
+  border-bottom: 1px solid var(--ac-track);
+}
+
+columnview.process-table > listview > row > cell {
+  padding: var(--ac-space-1) var(--ac-space-2);
+}
+
+/* Foco do teclado na linha (Tab entra na tabela, setas andam): o anel
+ * solido do token, por dentro para nao cortar no raio do painel. */
+columnview.process-table > listview > row:focus-visible {
+  outline: 2px solid var(--ac-mark-focus);
+  outline-offset: -2px;
+}
+
+columnview.process-table > header > button:focus-visible {
+  outline: 2px solid var(--ac-mark-focus);
+  outline-offset: -2px;
+}
+
+.proc-value {
+  font-feature-settings: "tnum";
+}
+
+/* pid sob o comm: secundario, um ponto menor; codigo, entao monospace. */
+.proc-pid {
+  font-size: 0.86em;
+  color: var(--ac-text-secondary);
+}
+
+/* Stall no limiar do io_bound: carmim e negrito, nao so a cor. */
+.proc-value.hot {
+  color: var(--ac-text-alert);
+  font-weight: 700;
+}
+
+/* Detalhe estreito (breakpoint de detail.rs, ate 480 sp): menos ar nas
+ * margens para a tabela manter processo, CPU, PSS e RSS. Nada some aqui;
+ * as colunas saem pelos breakpoints de process_table.rs. */
+.session-detail.narrow .detail-face {
+  padding: var(--ac-space-2) var(--ac-space-3);
+  margin: var(--ac-space-2) var(--ac-space-2) 0;
+}
+
+.session-detail.narrow .detail-section {
+  padding: var(--ac-space-3) var(--ac-space-3) var(--ac-space-1);
+  margin: 0 var(--ac-space-2);
+}
+
+.session-detail.narrow .detail-block,
+.session-detail.narrow .detail-note {
+  padding-left: var(--ac-space-3);
+  padding-right: var(--ac-space-3);
+  margin: 0 var(--ac-space-2);
+}
+
+.session-detail.narrow .detail-table {
+  margin: 0 var(--ac-space-2) var(--ac-space-2);
+}
+
+.session-detail.narrow columnview.process-table > listview > row > cell,
+.session-detail.narrow columnview.process-table > header > button {
+  padding-left: var(--ac-space-1);
+  padding-right: var(--ac-space-1);
+}
+
+/* ==== fim da secao do detalhe (C11) ==== */
+
+/* ==== Acoes e Reclaim (C12) ==== actions_ui.rs e reclaim_page.rs.
+ * Acao e ferramenta, nao enfeite: o botao "mais" fica em tinta secundaria
+ * ate o ponteiro ou o foco, e nenhuma linha muda de cor por ter acao. O
+ * vermelho destrutivo so aparece no botao de confirmar do dialogo
+ * (--destructive-* em tokens.css, apontado para o carmim). A pagina Reclaim
+ * veste a anatomia do detalhe (C11): a face com o total num painel, a lista
+ * noutro, filete de 1 px por linha. Le so tokens semanticos. */
+
+/* Botao "mais" (linha, cabecalho do detalhe, tabela): alvo de 32 px, acima
+ * dos 24 px do WCAG 2.5.8, sem crescer a linha de 56 px. */
+menubutton.ac-actions > button {
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  color: var(--ac-text-secondary);
+}
+
+menubutton.ac-actions > button:hover,
+menubutton.ac-actions > button:checked {
+  color: var(--ac-text-primary);
+}
+
+menubutton.ac-actions > button:focus-visible {
+  outline: 2px solid var(--ac-mark-focus);
+  outline-offset: -2px;
+}
+
+/* Na tabela a linha e baixa (texto de duas linhas): o botao fica na altura
+ * do piso de 24 px para nao abrir a linha. */
+columnview.process-table menubutton.ac-actions > button {
+  min-height: 24px;
+}
+
+/* A regra da pagina, dentro da face: texto corrido, sem margem propria. */
+.session-detail .detail-note-inline {
+  font-size: 0.86em;
+  color: var(--ac-text-secondary);
+}
+
+/* O total recuperavel e a leitura da pagina: 700 a 1.4em, como a da faixa
+ * (DESIGN.md secao 2), em tinta. Nao e ambar: nada esta trabalhando. */
+.reclaim-page .reclaim-total {
+  font-size: 1.4em;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+  color: var(--ac-text-primary);
+}
+
+list.reclaim-list {
+  background-color: var(--ac-surface-panel);
+  color: var(--ac-text-primary);
+}
+
+list.reclaim-list > row {
+  padding: 0;
+  border-bottom: 1px solid var(--ac-track);
+}
+
+list.reclaim-list > row:last-child {
+  border-bottom: none;
+}
+
+list.reclaim-list > row:focus-visible {
+  outline: 2px solid var(--ac-mark-focus);
+  outline-offset: -2px;
+}
+
+.reclaim-row {
+  min-height: var(--ac-session-row-min-height);
+  padding: var(--ac-space-2) var(--ac-space-4);
+}
+
+/* A lista e o segundo painel: separado da face pelo mesmo ar da grade. */
+.reclaim-page .detail-table {
+  margin-top: var(--ac-space-3);
+}
+
+.session-detail.narrow.reclaim-page .detail-table {
+  margin-top: var(--ac-space-2);
+}
+
+/* "Terminate…" em toda linha: compacto (28 px, acima do piso de 24) para
+ * nao ditar a altura da linha; neutro, porque o carmim e do confirmar. */
+.reclaim-row button.reclaim-end {
+  min-height: 28px;
+  padding: 0 var(--ac-space-3);
+  font-size: 0.9em;
+}
+
+/* Memoria que sai com a sessao: o numero da linha, em negrito tabular. */
+.reclaim-row .reclaim-memory {
+  font-weight: 700;
+  font-feature-settings: "tnum";
+  color: var(--ac-text-primary);
+}
+
+.session-detail.narrow .reclaim-row {
+  padding: var(--ac-space-2) var(--ac-space-3);
+}
+
+/* Dialogo de confirmacao: a lista de alvos e uma tabela pequena, legenda
+ * secundaria em cima, pid e comm em monospace (codigo), memoria tabular. */
+.ac-victims {
+  margin-top: var(--ac-space-1);
+}
+
+.ac-victims label.monospace {
+  font-size: 0.9em;
+}
+
+.ac-victims label.numeric {
+  font-feature-settings: "tnum";
+}
+
+.ac-dialog-caption {
+  font-size: 0.86em;
+  font-weight: 600;
+  color: var(--ac-text-secondary);
+}
+
+.ac-dialog-note {
+  font-size: 0.86em;
+  color: var(--ac-text-secondary);
+}
+
+/* ==== fim da secao de acoes e Reclaim (C12) ==== */
+
+/* ==== Historico do detalhe (C19) ==== graph.rs e detail.rs.
+ * "Last 10 minutes": a regua da maquina estendida no tempo, num terceiro
+ * painel com a anatomia da face. Cada celula e legenda + leitura em cima e a
+ * faixa embaixo. Nos de graph.rs: strip (o proprio no e o trilho),
+ * strip > line.primary|.secondary (a cor do no, `color`, e a da serie; o
+ * traco da segunda serie e desenhado em graph.rs) e strip > box.mark (o
+ * limite, 1 px alocado por graph.rs). Le so tokens semanticos: a serie
+ * principal e ambar como a fatia das sessoes, a segunda e ardosia como o
+ * resto da maquina, o limite e carmim. */
+
+.session-detail .detail-history {
+  background-color: var(--ac-surface-panel);
+  padding: var(--ac-space-3) var(--ac-space-4);
+  margin: 0 var(--ac-space-3);
+  border-radius: var(--ac-detail-radius);
+}
+
+/* Duas celulas por linha cabem em 360 px (2 x 150 + 16 de vao em 320 de
+ * miolo); quatro numa linha no detalhe largo. */
+.history-cell {
+  min-width: 150px;
+}
+
+/* A leitura de agora: numerais tabulares em tinta, como os fatos. */
+.history-readout {
+  color: var(--ac-text-primary);
+  font-weight: 600;
+  font-feature-settings: "tnum";
+}
+
+/* Stall acima do limite: carmim e negrito, nao so a cor (como .proc-value.hot). */
+.history-readout.alert {
+  color: var(--ac-text-alert);
+  font-weight: 700;
+}
+
+/* O trilho: a cor de capacidade livre da regua, mais alto que ela para a
+ * forma da serie se ler. */
+strip {
+  min-height: 32px;
+  border-radius: var(--ac-radius-rule);
+  background-color: var(--ac-track);
+}
+
+strip > line.primary {
+  color: var(--ac-mark-agents);
+}
+
+strip > line.secondary {
+  color: var(--ac-mark-machine);
+}
+
+/* A leitura passou do limite: a serie vira carmim, como o preenchimento da
+ * regua de pressao (rule.alert). O limite continua legivel pela forma: e
+ * o unico traco horizontal reto. */
+strip.alert > line.primary {
+  color: var(--ac-mark-alert);
+}
+
+strip > box.mark {
+  background-color: var(--ac-mark-alert);
+}
+
+.session-detail.narrow .detail-history {
+  padding: var(--ac-space-2) var(--ac-space-3);
+  margin: 0 var(--ac-space-2);
+}
+
+/* ==== fim da secao do historico (C19) ==== */

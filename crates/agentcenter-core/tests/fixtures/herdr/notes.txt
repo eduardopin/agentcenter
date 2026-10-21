@@ -1,0 +1,19 @@
+Respostas do socket API do herdr 0.9.1 (protocolo 22), na forma gravada de
+`agent.list` e `pane.process_info` desta maquina, com todos os valores
+trocados por valores ficticios (ids, pids, caminhos, titulos). Os campos e a
+estrutura sao os do servidor, incluindo os que o overlay nao le
+(`state_change_seq`, `revision`, `tokens`, `tty`, `argv0`); `future_field`
+foi acrescentado para provar que campo desconhecido e tolerado.
+
+AGENTCENTER-CANARY-7f3a9c aparece em todo campo que o overlay nao deve
+expor (argv, cmdline, cwd, foreground_cwd, agent_session.value): o teste
+confere que ele nao chega ao snapshot.
+
+Cenario (o /proc falso e montado no teste):
+  w1:p1 claude working: shell 4100, claude 4101, node de MCP 4102 e um
+        codex 4103 aberto pelo claude (casa so o claude).
+  w1:p2 pi idle: shell 4200, pi 4201.
+  w2:p3 codex blocked: o processo 4301 ja saiu (nao existe no /proc).
+  w2:p5 claude done: process_info responde pane_not_found (fechou entre as
+        duas chamadas); sem process_info/w2-p5.json.
+  claude 4400 roda fora do herdr.

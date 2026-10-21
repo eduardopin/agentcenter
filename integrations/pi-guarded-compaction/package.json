@@ -1,0 +1,13 @@
+{
+  "name": "agentcenter-pi-guarded-compaction",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Opt-in private Pi 0.87.0 control API build and offline regression tests",
+  "scripts": {
+    "test": "node --test --test-concurrency=1 --test-timeout=20000 tests/*.test.mjs"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

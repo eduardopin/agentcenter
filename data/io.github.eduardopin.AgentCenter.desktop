@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=AgentCenter
+GenericName=Agent Resource Monitor
+Comment=See what each AI coding session costs your machine
+Exec=agentcenter
+Icon=io.github.eduardopin.AgentCenter
+Terminal=false
+Categories=System;Monitor;
+Keywords=claude;codex;agent;session;cpu;memory;pss;swap;disk;stall;monitor;
+StartupNotify=true

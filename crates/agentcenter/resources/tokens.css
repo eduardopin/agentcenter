@@ -1,0 +1,161 @@
+/* AgentCenter: tokens da GUI. Direcao e razao de cada valor: docs/DESIGN.md.
+ *
+ * Tres camadas. Primitivo (--ac-p-*): o valor cru, nunca lido por regra de
+ * widget. Semantico (--ac-surface-*, --ac-text-*, --ac-mark-*, ...): o papel;
+ * so esta camada troca com o tema. Componente: em summary.css (faixa da
+ * maquina) e sessions.css (lista), lendo so o semantico.
+ *
+ * O tema segue o sistema: o AdwStyleManager liga prefers-color-scheme, e o
+ * bloco @media abaixo remapeia a camada semantica. Escuro e mapeamento de
+ * luminancia, nao inversao. As variaveis do libadwaita (--window-bg-color,
+ * --accent-bg-color, ...) sao reapontadas para a camada semantica, entao todo
+ * widget padrao (headerbar, banner, dialogo, foco) veste a mesma paleta.
+ *
+ * Contraste medido por scripts/contrast.py a partir dos nomes: --ac-text-*
+ * >= 4.5:1 e --ac-mark-* >= 3:1 sobre todo --ac-surface-*, --ac-on-X-* sobre
+ * --ac-X. Hex apenas: o script nao calcula color-mix.
+ */
+
+:root {
+  /* Primitivos: grafite (frio, levemente azulado), gelo, tinta, ardosia,
+   * ambar (trabalho em curso) e carmim (precisa de voce). */
+  --ac-p-grafite-950: #101116;
+  --ac-p-grafite-900: #15161c;
+  --ac-p-grafite-850: #1c1d24;
+  --ac-p-grafite-800: #24252e;
+  --ac-p-grafite-700: #30323d;
+  --ac-p-gelo-0: #ffffff;
+  --ac-p-gelo-50: #f7f8fa;
+  --ac-p-gelo-100: #eef0f4;
+  --ac-p-gelo-200: #dfe2e9;
+  --ac-p-tinta-950: #15161c;
+  --ac-p-tinta-700: #474a58;
+  --ac-p-tinta-300: #a7aab8;
+  --ac-p-tinta-50: #e9eaf0;
+  --ac-p-ardosia-600: #6b6f80;
+  --ac-p-ardosia-400: #858a9c;
+  --ac-p-ambar-800: #7a4300;
+  --ac-p-ambar-700: #9a5800;
+  --ac-p-ambar-300: #f2a93f;
+  --ac-p-ambar-950: #241500;
+  --ac-p-carmim-700: #b3123f;
+  --ac-p-carmim-300: #ff7590;
+  --ac-p-carmim-950: #2a0610;
+
+  /* Semantico, tema claro. */
+  --ac-surface-window: var(--ac-p-gelo-100);
+  --ac-surface-view: var(--ac-p-gelo-50);
+  --ac-surface-panel: var(--ac-p-gelo-0);
+  --ac-surface-header: var(--ac-p-gelo-100);
+
+  --ac-text-primary: var(--ac-p-tinta-950);
+  --ac-text-secondary: var(--ac-p-tinta-700);
+  --ac-text-busy: var(--ac-p-ambar-800);
+  --ac-text-alert: var(--ac-p-carmim-700);
+
+  /* Gauge: trilho vazio, fatia das sessoes, resto da maquina, foco. */
+  --ac-track: var(--ac-p-gelo-200);
+  --ac-mark-agents: var(--ac-p-ambar-700);
+  --ac-mark-machine: var(--ac-p-ardosia-600);
+  --ac-mark-alert: var(--ac-p-carmim-700);
+  --ac-mark-focus: var(--ac-p-ambar-700);
+
+  /* Fundos coloridos e o texto sobre eles (pilula de estado, selecao). */
+  --ac-busy: var(--ac-p-ambar-700);
+  --ac-on-busy-text: var(--ac-p-gelo-0);
+  --ac-blocked: var(--ac-p-carmim-700);
+  --ac-on-blocked-text: var(--ac-p-gelo-0);
+  --ac-selection: #f6e3c6;
+  --ac-on-selection-text: var(--ac-p-tinta-950);
+
+  /* Cockpit (C24): estados da pilula de recomendacao. OK (continuar) e
+   * neutro; COMPACTAR e contorno carmim; HANDOFF (e LOOP) preenchida de
+   * carmim: precisa de voce. Apontam para a camada semantica, entao o tema
+   * escuro segue sem bloco proprio. contrast.py mede cada um sobre toda
+   * superficie e sobre a selecao (a linha selecionada continua com a pilula). */
+  --ac-text-rec-ok: var(--ac-text-primary);
+  --ac-mark-rec-ok: var(--ac-mark-machine);
+  --ac-text-rec-compact: var(--ac-text-alert);
+  --ac-mark-rec-compact: var(--ac-mark-alert);
+  --ac-rec-handoff: var(--ac-blocked);
+  --ac-on-rec-handoff-text: var(--ac-on-blocked-text);
+
+  /* Espaco e forma (px): grade de 4. */
+  --ac-space-1: 4px;
+  --ac-space-2: 8px;
+  --ac-space-3: 12px;
+  --ac-space-4: 16px;
+  --ac-space-6: 24px;
+  --ac-radius-rule: 3px;
+  --ac-radius-pill: 999px;
+  --ac-rule-height: 8px;
+  --ac-row-min-height: 40px;
+
+  /* libadwaita reapontado para a camada semantica. */
+  --window-bg-color: var(--ac-surface-window);
+  --window-fg-color: var(--ac-text-primary);
+  --view-bg-color: var(--ac-surface-view);
+  --view-fg-color: var(--ac-text-primary);
+  --headerbar-bg-color: var(--ac-surface-header);
+  --headerbar-fg-color: var(--ac-text-primary);
+  --headerbar-backdrop-color: var(--ac-surface-header);
+  --card-bg-color: var(--ac-surface-panel);
+  --card-fg-color: var(--ac-text-primary);
+  --popover-bg-color: var(--ac-surface-panel);
+  --popover-fg-color: var(--ac-text-primary);
+  --dialog-bg-color: var(--ac-surface-panel);
+  --dialog-fg-color: var(--ac-text-primary);
+  /* Acento fixo, nao o do sistema: num monitor cor e significado, e o
+   * laranja do Ubuntu colidiria com o aviso. Ambar = trabalho em curso. */
+  --accent-bg-color: var(--ac-busy);
+  --accent-fg-color: var(--ac-on-busy-text);
+  --accent-color: var(--ac-text-busy);
+  --warning-bg-color: var(--ac-blocked);
+  --warning-fg-color: var(--ac-on-blocked-text);
+  --warning-color: var(--ac-text-alert);
+  /* Destrutivo (terminar, matar no dialogo do C12) e carmim: acabar uma
+   * sessao e "precisa de voce". Os pares ja sao medidos como --ac-blocked e
+   * --ac-on-blocked-text; o vermelho do libadwaita nao entra na paleta. */
+  --destructive-bg-color: var(--ac-blocked);
+  --destructive-fg-color: var(--ac-on-blocked-text);
+  --destructive-color: var(--ac-text-alert);
+  /* .dim-label: os 55% do libadwaita medem 3,86:1 no gelo-100; 66% medem
+   * 5,49:1 e sobram para o contraste alto do sistema (90%). */
+  --dim-opacity: 66%;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --ac-surface-window: var(--ac-p-grafite-900);
+    --ac-surface-view: var(--ac-p-grafite-950);
+    --ac-surface-panel: var(--ac-p-grafite-850);
+    --ac-surface-header: var(--ac-p-grafite-900);
+
+    --ac-text-primary: var(--ac-p-tinta-50);
+    --ac-text-secondary: var(--ac-p-tinta-300);
+    --ac-text-busy: var(--ac-p-ambar-300);
+    --ac-text-alert: var(--ac-p-carmim-300);
+
+    --ac-track: var(--ac-p-grafite-700);
+    --ac-mark-agents: var(--ac-p-ambar-300);
+    --ac-mark-machine: var(--ac-p-ardosia-400);
+    --ac-mark-alert: var(--ac-p-carmim-300);
+    --ac-mark-focus: var(--ac-p-ambar-300);
+
+    --ac-busy: var(--ac-p-ambar-300);
+    --ac-on-busy-text: var(--ac-p-ambar-950);
+    --ac-blocked: var(--ac-p-carmim-300);
+    --ac-on-blocked-text: var(--ac-p-carmim-950);
+    --ac-selection: #3a2c17;
+    --ac-on-selection-text: var(--ac-p-tinta-50);
+  }
+}
+
+/* Foco: anel solido do token, nao o acento a 50% do libadwaita (que no
+ * ambar claro nao chega a 3:1). Teclado so; clique nao acende. A janela fica
+ * de fora: o GTK poe :focus-visible em toda a cadeia do foco, e o outline da
+ * janela e a borda CSD do libadwaita, que viraria um segundo anel em volta de
+ * tudo (achado na sonda da volta, C11). */
+:not(window):focus-visible {
+  outline-color: var(--ac-mark-focus);
+}

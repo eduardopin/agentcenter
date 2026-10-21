@@ -1,0 +1,15 @@
+[package]
+name = "agentcenter-cli"
+description = "Headless AgentCenter: snapshot of AI coding sessions as a table or JSON"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[[bin]]
+name = "agentcenter-cli"
+path = "src/main.rs"
+
+[dependencies]
+agentcenter-core.workspace = true
+serde_json = "1.0.154"

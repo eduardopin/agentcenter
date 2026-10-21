@@ -1,0 +1,207 @@
+{
+ "schema_version": 5,
+ "taken_at_ms": 1792200000000,
+ "interval_ms": 1000,
+ "machine": {
+  "cores": 16,
+  "cpu_pct": 41.8,
+  "io_stall_source": "d_state",
+  "processes": 861,
+  "session_processes": 4,
+  "mem_total_bytes": 40802189312,
+  "mem_available_bytes": 30709016166,
+  "swap_total_bytes": 28991029248,
+  "swap_free_bytes": 28454158336,
+  "load_avg": {
+   "one": 13.4,
+   "five": 13.9,
+   "fifteen": 14.7
+  },
+  "psi": {
+   "cpu": {
+    "some_avg10": 1.1,
+    "some_avg60": 6.7,
+    "full_avg10": 0.0,
+    "full_avg60": 0.0
+   },
+   "memory": {
+    "some_avg10": 0.0,
+    "some_avg60": 0.0,
+    "full_avg10": 0.0,
+    "full_avg60": 0.3
+   },
+   "io": {
+    "some_avg10": 0.8,
+    "some_avg60": 0.6,
+    "full_avg10": 0.03,
+    "full_avg60": 0.2
+   }
+  }
+ },
+ "sessions": [
+  {
+   "agent": "claude",
+   "role": "agent",
+   "pid": 41000,
+   "cmdline": "claude",
+   "cwd": "/home/dev/src/atlas",
+   "procs": 4,
+   "cpu_pct": 9.83,
+   "cpu_share_pct": 0.614375,
+   "pss_bytes": 255852544,
+   "swap_pss_bytes": 12919135,
+   "read_bps": 4198400.0,
+   "write_bps": 270336.0,
+   "stall_pct": null,
+   "threads_d": 2,
+   "io_bound": false,
+   "partial": [],
+   "overlay": {
+    "name": "atlas-api-docs",
+    "agent_session_id": "00000000-0000-4000-8000-000000041000",
+    "status": "busy",
+    "kind": "interactive",
+    "herdr": {
+     "workspace_id": "w1",
+     "tab_id": "w1:t27",
+     "pane_id": "w1:p27",
+     "title": "atlas-api-docs",
+     "status": "working"
+    },
+    "model": "claude-haiku-5",
+    "tokens_in": null,
+    "tokens_out": null,
+    "context_pct": 89.8,
+    "tool_calls": null,
+    "tool_calls_open": null,
+    "tool_calls_per_min": null,
+    "subagents_live": null,
+    "subagents_total": null,
+    "provider": "anthropic",
+    "cockpit": null,
+    "cockpit_pending": false
+   },
+   "processes": [
+    {
+     "pid": 41000,
+     "ppid": 1,
+     "comm": "claude",
+     "state": "S",
+     "uid": 1000,
+     "threads": 16,
+     "cpu_pct": 0.24,
+     "rss_bytes": 275985203,
+     "pss_bytes": 197132288,
+     "swap_bytes": 0,
+     "swap_pss_bytes": 0,
+     "read_bps": 2097152.0,
+     "write_bps": 131072.0,
+     "rchar_bps": 0.0,
+     "wchar_bps": 0.0,
+     "stall_pct": null,
+     "threads_d": 0,
+     "voluntary_ctxt_switches": 27619,
+     "nonvoluntary_ctxt_switches": 1547
+    },
+    {
+     "pid": 41001,
+     "ppid": 41000,
+     "comm": "rg",
+     "state": "S",
+     "uid": 1000,
+     "threads": 6,
+     "cpu_pct": 1.3,
+     "rss_bytes": 4404019,
+     "pss_bytes": 3145728,
+     "swap_bytes": 1686079,
+     "swap_pss_bytes": 1405066,
+     "read_bps": 4096.0,
+     "write_bps": 8192.0,
+     "rchar_bps": 0.0,
+     "wchar_bps": 0.0,
+     "stall_pct": null,
+     "threads_d": 2,
+     "voluntary_ctxt_switches": 30084,
+     "nonvoluntary_ctxt_switches": 1684
+    },
+    {
+     "pid": 41002,
+     "ppid": 41000,
+     "comm": "npm",
+     "state": "S",
+     "uid": 1000,
+     "threads": 6,
+     "cpu_pct": 0.0,
+     "rss_bytes": 4404019,
+     "pss_bytes": 3145728,
+     "swap_bytes": 42130,
+     "swap_pss_bytes": 35109,
+     "read_bps": 0.0,
+     "write_bps": 131072.0,
+     "rchar_bps": 0.0,
+     "wchar_bps": 0.0,
+     "stall_pct": null,
+     "threads_d": 0,
+     "voluntary_ctxt_switches": 3906,
+     "nonvoluntary_ctxt_switches": 8654
+    },
+    {
+     "pid": 41003,
+     "ppid": 41000,
+     "comm": "rustc",
+     "state": "S",
+     "uid": 1000,
+     "threads": 2,
+     "cpu_pct": 8.29,
+     "rss_bytes": 73400320,
+     "pss_bytes": 52428800,
+     "swap_bytes": 13774752,
+     "swap_pss_bytes": 11478960,
+     "read_bps": 2097152.0,
+     "write_bps": 0.0,
+     "rchar_bps": 0.0,
+     "wchar_bps": 0.0,
+     "stall_pct": null,
+     "threads_d": 0,
+     "voluntary_ctxt_switches": 60341,
+     "nonvoluntary_ctxt_switches": 4757
+    }
+   ]
+  }
+ ],
+ "summary": {
+  "sessions": 1,
+  "multiplexers": 0,
+  "by_agent": {
+   "claude": 1
+  },
+  "status": {
+   "busy": 1,
+   "blocked": 0,
+   "idle": 0,
+   "unknown": 0
+  },
+  "sessions_with_working_children": 1,
+  "child_processes": 3,
+  "working_child_processes": 2,
+  "io_bound_sessions": 0,
+  "sessions_cpu_pct": 9.83,
+  "sessions_pss_bytes": 255852544,
+  "sessions_swap_pss_bytes": 12919135,
+  "tool_calls_open": null,
+  "tool_calls_per_min": null,
+  "subagents_live": null,
+  "cockpit": {
+   "continuar": 0,
+   "compactar": 0,
+   "handoff": 0,
+   "ociosa": 0,
+   "loop": 0,
+   "sem_dado": 1
+  },
+  "cockpit_pending": 0,
+  "sessions_burn_weighted": null,
+  "cache_hit": null,
+  "ctx_pct_max": 89.8
+ }
+}

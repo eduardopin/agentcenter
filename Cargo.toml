@@ -1,0 +1,17 @@
+[workspace]
+resolver = "3"
+members = ["crates/agentcenter-core", "crates/agentcenter-cli", "crates/agentcenter"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+rust-version = "1.99"
+repository = "https://github.com/eduardopin/agentcenter"
+
+[workspace.dependencies]
+agentcenter-core = { path = "crates/agentcenter-core" }
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

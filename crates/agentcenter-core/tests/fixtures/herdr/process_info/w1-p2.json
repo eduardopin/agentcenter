@@ -1,0 +1,14 @@
+{
+  "id": "agentcenter:3",
+  "result": {
+    "type": "pane_process_info",
+    "process_info": {
+      "pane_id": "w1:p2",
+      "shell_pid": 4200,
+      "foreground_process_group_id": 4201,
+      "foreground_processes": [
+        { "pid": 4201, "name": "pi", "argv": ["pi"], "cmdline": "pi", "cwd": "/home/dev/app" }
+      ]
+    }
+  }
+}

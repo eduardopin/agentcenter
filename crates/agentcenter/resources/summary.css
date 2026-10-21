@@ -1,0 +1,177 @@
+/* Session history extends the existing instrument language, not KPI cards. */
+.session-dashboard {
+  padding: var(--ac-space-4);
+  color: var(--ac-text-primary);
+}
+.session-dashboard .history-source {
+  color: var(--ac-text-secondary);
+}
+.session-dashboard .history-readout {
+  font-weight: 600;
+  font-feature-settings: "tnum";
+}
+.session-dashboard strip {
+  min-height: 56px;
+  background-color: var(--ac-track);
+  border-radius: var(--ac-radius-rule);
+}
+.session-dashboard strip > line.primary {
+  color: var(--ac-mark-agents);
+}
+
+/* Faixa da maquina (C17, layout B de docs/DESIGN.md): reguas de CPU, RAM e
+ * swap divididas em agentes / resto / livre, e a faixa de contadores. Le so
+ * tokens semanticos de tokens.css; nenhum hex aqui.
+ *
+ * Nos: .machine-header (o painel), rule (a regua de gauge.rs: o proprio no e
+ * o trilho), rule > box.segment.agents|.rest, rule > box.mark (limite).
+ */
+
+/* A face do instrumento: painel elevado sobre a janela. */
+.machine-header {
+  background-color: var(--ac-surface-panel);
+  color: var(--ac-text-primary);
+  padding: var(--ac-space-3) var(--ac-space-4);
+  margin: var(--ac-space-3);
+  border-radius: 12px;
+}
+
+/* Rotulo da regua: secundario solido, sem a opacidade do dim-label. */
+.machine-header .gauge-label {
+  color: var(--ac-text-secondary);
+  font-weight: 600;
+}
+
+/* Leitura: o numero e o que se le de longe; numerais tabulares. A
+ * capacidade fica regular e secundaria ("of 38.0 GiB"). */
+.machine-header .readout {
+  font-size: 1.4em;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+}
+
+.machine-header .capacity {
+  color: var(--ac-text-secondary);
+  font-feature-settings: "tnum";
+}
+
+/* A fatia dos agentes em texto, na cor do segmento: a legenda da regua diz
+ * a palavra "agents", a cor nao e o unico canal. */
+.machine-header .agents {
+  color: var(--ac-text-busy);
+  font-weight: 600;
+  font-feature-settings: "tnum";
+}
+
+/* BreakpointBin needs an explicit minimum: three readouts plus row spacing.
+ * em follows the system font scale; a fixed 48px cropped the Swap row. */
+.machine-header .machine-rules {
+  min-height: 6em;
+}
+.machine-header.narrow .machine-rules {
+  min-height: 5em;
+}
+
+/* Desktop pointer/keyboard filters, not 44px mobile touch tiles. Keep the
+ * native GtkButton activation and a visible token-bound hover/focus state. */
+.machine-header button.counter-filter {
+  min-width: 24px;
+  min-height: 24px;
+  padding: 0 4px;
+  font-weight: normal;
+}
+.machine-header button.counter-filter .counter {
+  font-weight: normal;
+}
+.machine-header button.counter-filter:hover,
+.machine-header button.counter-filter:active {
+  background-color: var(--ac-selection);
+}
+.machine-header button.counter-filter:focus-visible {
+  outline: 2px solid var(--ac-mark-focus);
+  outline-offset: -2px;
+}
+
+/* Contadores: uma linha de texto, nao azulejos. */
+.machine-header .counter {
+  font-feature-settings: "tnum";
+}
+
+.machine-header .group-label {
+  color: var(--ac-text-secondary);
+  font-weight: 600;
+}
+
+.machine-header .dim {
+  color: var(--ac-text-secondary);
+}
+
+.machine-header .busy {
+  color: var(--ac-text-busy);
+  font-weight: 600;
+}
+
+.machine-header .alert {
+  color: var(--ac-text-alert);
+  font-weight: 600;
+}
+
+/* A regua: trilho vazio (capacidade livre), 8 px, cantos de 3 px. */
+rule {
+  min-height: var(--ac-rule-height);
+  min-width: 48px;
+  border-radius: var(--ac-radius-rule);
+  background-color: var(--ac-track);
+}
+
+/* Regua pequena da faixa (pressao, cockpit): mesma anatomia, mais curta. */
+rule.mini {
+  min-width: 64px;
+  min-height: 6px;
+}
+
+rule > box.segment {
+  border-radius: var(--ac-radius-rule);
+}
+
+rule > box.segment.agents {
+  background-color: var(--ac-mark-agents);
+}
+
+rule > box.segment.rest {
+  background-color: var(--ac-mark-machine);
+}
+
+/* Pressao acima do limite: a leitura e o preenchimento em carmim. */
+rule.alert > box.segment.rest {
+  background-color: var(--ac-mark-alert);
+}
+
+/* Limite: 2 px em tinta, com um aro na cor do trilho que o separa do
+ * preenchimento que passa por baixo (tinta sobre trilho: 11:1 ou mais). */
+rule > box.mark {
+  background-color: var(--ac-text-primary);
+  box-shadow: 0 0 0 1px var(--ac-track);
+}
+
+/* Janela estreita (breakpoint de machine_header.rs, ate ~600 sp): a faixa
+ * empilha os grupos e aperta o ar para nao comer a lista. Nada some. */
+.machine-header.narrow {
+  padding: var(--ac-space-2) var(--ac-space-3);
+  margin: var(--ac-space-2);
+}
+
+.machine-header.narrow .readout {
+  font-size: 1.15em;
+}
+
+.machine-header.narrow rule.mini {
+  min-width: 40px;
+}
+
+/* Contadores um ponto menores: em 360 px cada grupo cabe numa linha (a
+ * pressao, memoria e E/S juntas) e a faixa perde duas linhas. */
+.machine-header.narrow .counter,
+.machine-header.narrow .group-label {
+  font-size: 0.9em;
+}

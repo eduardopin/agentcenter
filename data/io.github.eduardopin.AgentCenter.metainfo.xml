@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Copyright 2026 Eduardo José Pin -->
+<component type="desktop-application">
+  <id>io.github.eduardopin.AgentCenter</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <name>AgentCenter</name>
+  <summary>See what each AI coding session costs your machine</summary>
+  <developer id="io.github.eduardopin">
+    <name>Eduardo José Pin</name>
+  </developer>
+
+  <description>
+    <p>
+      AgentCenter is a resource monitor for AI coding sessions. Each Claude Code,
+      Codex, pi or other coding agent session is one row, with every process it
+      started counted in it.
+    </p>
+    <p>Per session, updated every second:</p>
+    <ul>
+      <li>CPU, memory (PSS) and swap</li>
+      <li>Disk reads and writes per second</li>
+      <li>I/O stall, and a flag when the session is waiting on disk</li>
+      <li>Context use, herdr workspace and pane, and working directory, when the agent reports them</li>
+    </ul>
+    <p>
+      A header shows the whole machine: CPU, memory, swap, and memory and I/O
+      pressure. Every column sorts. AgentCenter only reads; it never asks for root.
+    </p>
+  </description>
+
+  <launchable type="desktop-id">io.github.eduardopin.AgentCenter.desktop</launchable>
+  <provides>
+    <binary>agentcenter</binary>
+  </provides>
+
+  <url type="homepage">https://github.com/eduardopin/agentcenter</url>
+  <url type="vcs-browser">https://github.com/eduardopin/agentcenter</url>
+
+  <categories>
+    <category>System</category>
+    <category>Monitor</category>
+  </categories>
+
+  <requires>
+    <display_length compare="ge">360</display_length>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+
+  <branding>
+    <color type="primary" scheme_preference="light">#d9dee5</color>
+    <color type="primary" scheme_preference="dark">#26303b</color>
+  </branding>
+
+  <content_rating type="oars-1.1" />
+</component>

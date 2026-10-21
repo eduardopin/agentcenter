@@ -1,0 +1,8 @@
+/target
+*.swp
+.claude/
+.pi/
+.agenfk/
+**/node_modules/
+.env
+.env.*

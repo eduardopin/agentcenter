@@ -1,0 +1,14 @@
+{
+  "id": "agentcenter:4",
+  "result": {
+    "type": "pane_process_info",
+    "process_info": {
+      "pane_id": "w2:p3",
+      "shell_pid": 4300,
+      "foreground_process_group_id": 4301,
+      "foreground_processes": [
+        { "pid": 4301, "name": "codex", "argv": ["codex"], "cmdline": "codex", "cwd": "/home/dev/lib" }
+      ]
+    }
+  }
+}

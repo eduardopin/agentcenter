@@ -1,0 +1,90 @@
+# O CI e scripts/ci.sh; este workflow so prepara a maquina e o chama.
+# Nada de logica de build aqui: o que roda localmente com `bash scripts/ci.sh`
+# e exatamente o que roda no runner.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# GITHUB_TOKEN so le o repositorio; nenhum passo escreve no GitHub.
+permissions:
+  contents: read
+
+# PR: um push novo cancela a rodada anterior da mesma branch.
+# main: cada commit termina a propria rodada (nada fica sem veredito).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  ci:
+    # 26.04: o apt traz GTK 4.22 e libadwaita 1.9, as features do crate da GUI.
+    runs-on: ubuntu-26.04
+    timeout-minutes: 30
+    env:
+      # Mesma versao do rust-version do Cargo.toml. Trocar aqui e la juntos.
+      RUST_TOOLCHAIN: "1.99.0"
+      # GUI GTK4 + libadwaita (crates/agentcenter): o workspace inteiro precisa.
+      GUI_DEPS: "true"
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --component rustfmt,clippy
+          rustup default "$RUST_TOOLCHAIN"
+          rustc --version
+          cargo --version
+
+      - name: GTK4 + libadwaita
+        if: env.GUI_DEPS == 'true'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkgconf libgtk-4-dev libgtk-4-bin libadwaita-1-dev
+
+      # Chave pelo Cargo.lock da raiz e pela versao do rustc (target/ compilado
+      # por outro rustc nao serve). Restaura sempre; grava so em push na main,
+      # para que rodada de PR nao encha a cota nem gere cache que a main consuma.
+      - name: Cargo cache (restore)
+        id: cargo-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-cargo-${{ env.RUST_TOOLCHAIN }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ env.RUST_TOOLCHAIN }}-
+
+      # Registra a maquina: bench vermelho so no runner se le contra isto.
+      - name: Runner
+        run: |
+          nproc
+          lscpu | grep -E '^(Model name|CPU\(s\)|Thread\(s\) per core):' || true
+
+      - name: scripts/ci.sh
+        run: bash scripts/ci.sh
+
+      - name: Cargo cache (save)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main' && steps.cargo-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}

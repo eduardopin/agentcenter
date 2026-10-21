@@ -1,0 +1,22 @@
+{
+  "format": 1,
+  "package": "@earendil-works/pi-coding-agent",
+  "version": "0.87.0",
+  "upstream": "https://github.com/earendil-works/pi/tree/v0.87.0",
+  "compiler": "5.9.3",
+  "tested_node": "22.23.1",
+  "sdk_inventory_files": 1100,
+  "sdk_inventory_sha256": "1de6b719b1d1a3db02d610691b1c25eed28e490fd027f96579c3dfb327d7830c",
+  "dependencies_inventory_files": 12906,
+  "dependencies_inventory_sha256": "3a932d6911bd1e89cf577f9faa93b08ae907b1a66f9fb51a0019e0417a979409",
+  "inventory_scope": "Entire SDK package excluding node_modules and generated agentcenter-ready.json; SDK symlinks rejected. Complete node_modules inventory copied privately; only relative symlinks resolving inside the dependency root accepted.",
+  "source_sha256": {
+    "core/agent-session": "e5c020bced4ada5c5e116cbd160f66e111016fc717ae30d79994a45527e7f3d7",
+    "core/extensions/types": "601261b3deee1d61f85c930efed2767d66fe6c8d9637e19f4f53135b5fecf4d1",
+    "core/extensions/runner": "bf68eaf27a3e54f1cfc0982554e0598c050fd9a06c8e8b7d6cd2d8e3d8d5990c",
+    "core/session-manager": "ded5d65112f8666f0e3ae71dab39a302607c29a000745a3d06e00c2103c8f257",
+    "core/extensions/index": "73f8b18ea7e72836dc90198bb74c29045f1d14571925fb706184c5eba6c7e666",
+    "index": "60472823b30980d1c482f6aed19e4cab09cfeddffaa3be570d67a6cc1d7af2a0"
+  },
+  "public_capability": "agentcenter.compactGuarded.v1"
+}

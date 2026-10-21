@@ -1,0 +1,32 @@
+[
+  {
+    "path": "crates/agentcenter-core/tests/fixtures/proc/nested/10/cwd",
+    "type": "symlink",
+    "target": "/home/dev",
+    "sha256": "12fbd7e74df64398ae219001dbf28100f97ff10ef6e6353377067292919d97b7"
+  },
+  {
+    "path": "crates/agentcenter-core/tests/fixtures/proc/nested/20/cwd",
+    "type": "symlink",
+    "target": "/home/dev/app",
+    "sha256": "720d8948da0bcc78a2caee13f1ca58a1ffd37756430e9700be128c797528407b"
+  },
+  {
+    "path": "crates/agentcenter-core/tests/fixtures/proc/nested/30/cwd",
+    "type": "symlink",
+    "target": "/home/dev/app/sub",
+    "sha256": "464e08b6800dd2255226e0ec902877dfe3a0606591c27d0415aeb4067ecfeb66"
+  },
+  {
+    "path": "crates/agentcenter-core/tests/fixtures/proc/nested/50/cwd",
+    "type": "symlink",
+    "target": "/tmp",
+    "sha256": "e9671acd244849c57167c658fa2f969752048f7ab184a3dcf5c46cb4d56ae124"
+  },
+  {
+    "path": "crates/agentcenter-core/tests/fixtures/proc/vanished/20/cwd",
+    "type": "symlink",
+    "target": "/home/dev/app",
+    "sha256": "720d8948da0bcc78a2caee13f1ca58a1ffd37756430e9700be128c797528407b"
+  }
+]

@@ -1,0 +1,33 @@
+AgentCenter
+Copyright (c) 2026 Eduardo José Pin e contribuidores do AgentCenter
+
+Licensed under the MIT license (LICENSE; also provided as LICENSE-MIT).
+Third-party notices and licenses remain applicable to their respective code.
+
+Reference credits
+-----------------
+
+The projects below informed the design of AgentCenter. None of their code is
+copied into this repository unless an entry says so explicitly, together with
+the file it went into and the license notice it carries.
+
+- MBrassey/agtop (MIT) - https://github.com/MBrassey/agtop
+  Terminal dashboard for AI coding agents. Consulted as prior art for agent
+  detection and for what such a tool shows (docs/ARCHITECTURE.md, Problem).
+
+- Mission Center (GPL-3.0) - https://gitlab.com/mission-center-devs/mission-center
+  Resources (GPL-3.0) - https://github.com/nokyan/resources
+  Desktop resource monitors used as the performance baseline and as a source
+  of ideas only (UI layout, helper-process design). GPL-3.0 code is never
+  copied into this MIT-licensed project.
+
+- Stacer - https://github.com/oguzhaninan/Stacer
+  Measured as part of the same performance baseline; no code used.
+
+Development tools that are not part of AgentCenter
+--------------------------------------------------
+
+Ghidra and REA may be used by contributors to find out where closed-source
+agents keep their session state (see CONTRIBUTING.md). They are not
+dependencies: AgentCenter does not link, bundle or distribute them, and no
+decompiled code is part of this repository.

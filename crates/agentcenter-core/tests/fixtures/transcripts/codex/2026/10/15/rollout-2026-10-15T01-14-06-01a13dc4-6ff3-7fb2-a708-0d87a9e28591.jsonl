@@ -1,0 +1,18 @@
+{"timestamp":"2026-10-15T04:14:06.123Z","type":"session_meta","payload":{"id":"01a13dc4-6ff3-7fb2-a708-0d87a9e28591","timestamp":"2026-10-15T04:14:06.000Z","cwd":"/home/dev/app","originator":"codex_cli_rs","cli_version":"0.200.0","base_instructions":{"text":"instrucoes AGENTCENTER-CANARY-7f3a9c"}}}
+{"timestamp":"2026-10-15T04:14:07.000Z","type":"turn_context","payload":{"cwd":"/home/dev/app","model":"gpt-5.5-codex","approval_policy":"never"}}
+{"timestamp":"2026-10-15T04:14:07.500Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1","model_context_window":258400}}
+{"timestamp":"2026-10-15T04:14:08.000Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"prompt AGENTCENTER-CANARY-7f3a9c"}]}}
+{"timestamp":"2026-10-15T04:14:08.500Z","type":"event_msg","payload":{"type":"token_count","info":null,"rate_limits":null}}
+{"timestamp":"2026-10-15T04:14:09.000Z","type":"response_item","payload":{"type":"reasoning","summary":[{"type":"summary_text","text":"AGENTCENTER-CANARY-7f3a9c"}],"encrypted_content":"AGENTCENTER-CANARY-7f3a9c"}}
+{"timestamp":"2026-10-15T04:14:10.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\": [\"echo\", \"AGENTCENTER-CANARY-7f3a9c\"]}","call_id":"c1"}}
+{"timestamp":"2026-10-15T04:14:11.000Z","type":"response_item","payload":{"type":"function_call_output","call_id":"c1","output":"saida AGENTCENTER-CANARY-7f3a9c"}}
+{"type":"event_msg","timestamp":"2026-10-15T04:15:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":30000,"cached_input_tokens":12000,"cache_write_input_tokens":0,"output_tokens":900,"total_tokens":30900},"last_token_usage":{"input_tokens":30000,"cached_input_tokens":12000,"cache_write_input_tokens":0,"output_tokens":900},"model_context_window":258400},"rate_limits":{"primary":{"used_percent":1.0}}}}
+{"timestamp":"2026-10-15T04:15:30.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"resposta AGENTCENTER-CANARY-7f3a9c"}]}}
+{"timestamp":"2026-10-15T04:15:31.000Z","type":"event_msg","payload":{"type":"agent_message","message":"AGENTCENTER-CANARY-7f3a9c"}}
+{"type":"event_msg","timestamp":"2026-10-15T04:15:00.000Z","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":71000,"cached_input_tokens":52000,"cache_write_input_tokens":1500,"output_tokens":2300,"total_tokens":73300},"last_token_usage":{"input_tokens":41000,"cached_input_tokens":40000,"cache_write_input_tokens":1500,"output_tokens":1400},"model_context_window":258400},"rate_limits":{"primary":{"used_percent":1.0}}}}
+{"timestamp":"2026-10-15T04:15:40.000Z","type":"event_msg","payload":{"type":"task_complete","last_agent_message":"AGENTCENTER-CANARY-7f3a9c"}}
+{"timestamp":"2026-10-15T04:16:00.000Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t2","model_context_window":258400}}
+{"timestamp":"2026-10-15T04:16:01.000Z","type":"response_item","payload":{"type":"custom_tool_call","name":"apply_patch","input":"*** AGENTCENTER-CANARY-7f3a9c","call_id":"c2","status":"completed"}}
+{"timestamp":"2026-10-15T04:16:02.000Z","type":"response_item","payload":{"type":"custom_tool_call_output","call_id":"c2","output":"ok AGENTCENTER-CANARY-7f3a9c"}}
+{"timestamp":"2026-10-15T04:16:03.000Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{\"command\": [\"cat\", \"AGENTCENTER-CANARY-7f3a9c\"]}","call_id":"c3"}}
+{"timestamp":"2026-10-15T04:16:04.000Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"t2","reason":"interrupted"}}

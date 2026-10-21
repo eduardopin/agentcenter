@@ -1,0 +1,22 @@
+[package]
+name = "agentcenter-core"
+description = "Sampler, session model and adapters for AgentCenter"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[dev-dependencies]
+criterion = { version = "0.8.2", default-features = false, features = ["cargo_bench_support"] }
+
+[[bench]]
+name = "tick"
+harness = false
+
+[[bench]]
+name = "transcripts"
+harness = false

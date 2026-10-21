@@ -1,0 +1,37 @@
+{
+  "id": "agentcenter:2",
+  "result": {
+    "type": "pane_process_info",
+    "process_info": {
+      "pane_id": "w1:p1",
+      "shell_pid": 4100,
+      "foreground_process_group_id": 4101,
+      "tty": "/dev/pts/7",
+      "foreground_processes": [
+        {
+          "pid": 4101,
+          "name": "claude",
+          "argv": ["claude", "--resume", "AGENTCENTER-CANARY-7f3a9c"],
+          "argv0": "claude",
+          "cmdline": "claude --resume AGENTCENTER-CANARY-7f3a9c",
+          "cwd": "/home/dev/AGENTCENTER-CANARY-7f3a9c"
+        },
+        {
+          "pid": 4102,
+          "name": "node",
+          "argv": ["node", "mcp-server.js", "--token=AGENTCENTER-CANARY-7f3a9c"],
+          "cmdline": "node mcp-server.js --token=AGENTCENTER-CANARY-7f3a9c",
+          "cwd": "/home/dev/AGENTCENTER-CANARY-7f3a9c",
+          "future_field": "ignored"
+        },
+        {
+          "pid": 4103,
+          "name": "codex",
+          "argv": ["codex", "exec", "AGENTCENTER-CANARY-7f3a9c"],
+          "cmdline": "codex exec AGENTCENTER-CANARY-7f3a9c",
+          "cwd": "/home/dev/AGENTCENTER-CANARY-7f3a9c"
+        }
+      ]
+    }
+  }
+}

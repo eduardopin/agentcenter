@@ -1,0 +1,84 @@
+{
+  "id": "agentcenter:1",
+  "result": {
+    "type": "agent_list",
+    "agents": [
+      {
+        "terminal_id": "term_0000000000a1",
+        "agent": "claude",
+        "terminal_title": "✳ Refatorar o parser",
+        "terminal_title_stripped": "Refatorar o parser",
+        "agent_status": "working",
+        "agent_session": {
+          "source": "herdr:claude",
+          "agent": "claude",
+          "kind": "id",
+          "value": "AGENTCENTER-CANARY-7f3a9c"
+        },
+        "workspace_id": "w1",
+        "tab_id": "w1:t1",
+        "pane_id": "w1:p1",
+        "focused": false,
+        "state_change_seq": 56,
+        "cwd": "/home/dev/AGENTCENTER-CANARY-7f3a9c",
+        "foreground_cwd": "/home/dev/AGENTCENTER-CANARY-7f3a9c",
+        "revision": 2,
+        "future_field": { "nested": [1, 2, 3], "flag": true }
+      },
+      {
+        "terminal_id": "term_0000000000a2",
+        "agent": "pi",
+        "terminal_title": "π - app",
+        "terminal_title_stripped": "π - app",
+        "agent_status": "idle",
+        "screen_detection_skipped": true,
+        "agent_session": {
+          "source": "herdr:pi",
+          "agent": "pi",
+          "kind": "path",
+          "value": "/home/dev/.pi/agent/sessions/AGENTCENTER-CANARY-7f3a9c.jsonl"
+        },
+        "workspace_id": "w1",
+        "tab_id": "w1:t2",
+        "pane_id": "w1:p2",
+        "focused": true,
+        "state_change_seq": 43,
+        "cwd": "/home/dev/app",
+        "foreground_cwd": "/home/dev/app",
+        "revision": 2,
+        "tokens": { "branch": "main" }
+      },
+      {
+        "terminal_id": "term_0000000000a3",
+        "agent": "codex",
+        "terminal_title": "codex",
+        "terminal_title_stripped": "codex",
+        "agent_status": "blocked",
+        "agent_session": null,
+        "workspace_id": "w2",
+        "tab_id": "w2:t3",
+        "pane_id": "w2:p3",
+        "focused": false,
+        "state_change_seq": 7,
+        "cwd": "/home/dev/lib",
+        "foreground_cwd": "/home/dev/lib",
+        "revision": 2
+      },
+      {
+        "terminal_id": "term_0000000000a5",
+        "agent": "claude",
+        "terminal_title": "Claude Code",
+        "terminal_title_stripped": "Claude Code",
+        "agent_status": "done",
+        "workspace_id": "w2",
+        "tab_id": "w2:t5",
+        "pane_id": "w2:p5",
+        "focused": false,
+        "state_change_seq": 3,
+        "cwd": "/home/dev/lib",
+        "foreground_cwd": "/home/dev/lib",
+        "revision": 2
+      }
+    ]
+  }
+}

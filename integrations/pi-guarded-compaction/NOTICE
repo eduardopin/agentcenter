@@ -1,0 +1,14 @@
+Pi 0.87.0 (@earendil-works/pi-coding-agent)
+Source: https://github.com/earendil-works/pi/tree/v0.87.0
+License: MIT, Copyright (c) 2025 Mario Zechner. See LICENSE.pi.
+License source: https://raw.githubusercontent.com/earendil-works/pi/v0.87.0/LICENSE
+
+This integration transforms exact pinned TypeScript sources embedded in the
+installed package's source maps. Original SDK files are read-only inputs;
+derived SDK files are generated only in an explicit private output directory.
+Pi's original copyright and license apply to those derived files. No release,
+upstream endorsement, global installation or update is implied.
+
+TypeScript 5.9.3 is a development-only compiler dependency used for syntax-aware
+relative import rewriting and public API declaration checks; it is not bundled
+with the AgentCenter monitor. Its license remains in node_modules/typescript.
