@@ -2,6 +2,7 @@
 //! 0600 socket) and nonce, not a nonexistent Node peercred getter. This client
 //! additionally verifies the server's Linux SO_PEERCRED and /proc starttime.
 //! Same-UID processes and root are not isolated by this protocol.
+pub use super::{Capability, State};
 use serde::{Deserialize, Serialize};
 use std::{
     fs::{self, File, OpenOptions},
@@ -37,14 +38,6 @@ pub struct Expected {
     pub session_id: String,
     pub session_file: String,
     pub leaf_id: Option<String>,
-}
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Capability {
-    #[serde(default)]
-    pub cancel_supported: bool,
-    pub enabled: bool,
-    pub disabled_reason: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -118,17 +111,6 @@ impl Request {
         r.action = Action::Cancel;
         r
     }
-}
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum State {
-    Accepted,
-    Running,
-    Completed,
-    Rejected,
-    Failed,
-    Cancelled,
-    Unknown,
 }
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

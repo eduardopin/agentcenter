@@ -41,6 +41,26 @@ test('real socket is private; disabled actions never claim completion; cleanup i
   await assert.rejects(lstat(endpoint.manifest), { code: 'ENOENT' });
 });
 
+test('well-formed wrong nonce is unauthorized before the dispatcher runs', async () => {
+  let calls = 0;
+  const dispatcher = request => { calls++; return { protocol_version: 2, operation_id: request.operation_id, state: 'accepted', code: 'accepted' }; };
+  const endpoint = await listenPrivate(runtime, identity, dispatcher);
+  try {
+    const real = endpoint.metadata.instance_nonce;
+    const wrong = real.slice(0, -1) + (real.at(-1) === '0' ? '1' : '0');
+    assert.match(wrong, /^[0-9a-f]{64}$/);
+    assert.notEqual(wrong, real);
+    for (const action of ['handoff', 'compact', 'status', 'cancel']) {
+      const result = await query(endpoint, { action, instance_nonce: wrong });
+      assert.deepEqual([result.state, result.code], ['rejected', 'unauthorized'], action);
+    }
+    assert.equal(calls, 0);
+    // The same request with the real nonce reaches the dispatcher: the spy is live.
+    assert.equal((await query(endpoint)).code, 'accepted');
+    assert.equal(calls, 1);
+  } finally { await endpoint.close(); }
+});
+
 test('rejects symlink and permissive runtime directory before publishing', async () => {
   const directory = await mkdtemp(`${runtime}/ac-test-`);
   try {

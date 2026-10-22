@@ -400,6 +400,12 @@ impl Controller {
     }
 }
 
+/// Off-thread discovery + authentication of one sampled session.
+/// A seam so tests count calls without touching a real runtime directory.
+type Authenticate = fn(
+    &agentcenter_core::Session,
+) -> Result<(agentcenter_core::control::pi::Endpoint, Session), &'static str>;
+
 /// GTK owns presentation only; all discovery and socket work runs off-thread.
 pub struct SessionControls {
     pub widget: gtk::Box,
@@ -422,6 +428,7 @@ struct Panel {
     busy: Cell<bool>,
     epoch: Cell<u64>,
     endpoint_key: RefCell<Option<String>>,
+    authenticate: Cell<Authenticate>,
 }
 impl SessionControls {
     pub fn new(live: bool) -> Self {
@@ -461,6 +468,7 @@ impl SessionControls {
             busy: Cell::new(false),
             epoch: Cell::new(0),
             endpoint_key: RefCell::new(None),
+            authenticate: Cell::new(authenticated_session),
         });
         for (action, b) in &panel.buttons {
             let weak = Rc::downgrade(&panel);
@@ -524,9 +532,18 @@ impl SessionControls {
 impl Panel {
     fn render(&self) {
         let c = self.controller.borrow();
+        // Owner rule (22/10): a control the session cannot run is not shown.
+        // An unresolved operation stays reachable after the selection moves.
+        let supported = c.selection.is_some()
+            || selection_blocker(self.live, self.native.borrow().as_ref()).is_empty();
         for (a, b) in &self.buttons {
+            b.set_visible(supported);
             b.set_sensitive(!self.busy.get() && c.disabled_reason(*a).is_none());
         }
+        self.refresh_button.set_visible(supported);
+        self.query.set_visible(c.query().is_some());
+        self.cancel
+            .set_visible(c.query().is_some_and(|r| r.session.cancel_supported));
         self.query
             .set_sensitive(!self.busy.get() && c.query().is_some());
         // A supported cancel may queue behind the one bounded read in flight.
@@ -593,9 +610,10 @@ impl Panel {
         };
         self.render();
         let epoch = self.epoch.get();
+        let authenticate = self.authenticate.get();
         let weak = Rc::downgrade(self);
         glib::spawn_future_local(async move {
-            let result = gio::spawn_blocking(move || authenticated_session(&native)).await;
+            let result = gio::spawn_blocking(move || authenticate(&native)).await;
             let Some(p) = weak.upgrade() else {
                 return;
             };
@@ -649,10 +667,11 @@ impl Panel {
             return;
         };
         let epoch = self.epoch.get();
+        let authenticate = self.authenticate.get();
         let weak = Rc::downgrade(self);
         self.render();
         glib::spawn_future_local(async move {
-            let result = gio::spawn_blocking(move || authenticated_session(&native)).await;
+            let result = gio::spawn_blocking(move || authenticate(&native)).await;
             let Some(p) = weak.upgrade() else {
                 return;
             };
@@ -803,7 +822,7 @@ fn selection_blocker(live: bool, session: Option<&agentcenter_core::Session>) ->
         return "Select a session";
     };
     if session.agent != "pi" {
-        return "Unsupported agent. Use handoff or compact in the native agent manually.";
+        return "Handoff and Compact are not available for this agent yet.";
     }
     if session.starttime.is_none()
         || session

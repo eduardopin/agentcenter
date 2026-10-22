@@ -360,6 +360,62 @@ SO_PEERCRED do not isolate hostile processes running as the same UID or root.
 The linked contract documents bounds, activation, test inputs and cancellation.
 No extension is installed or attached to an existing session automatically.
 
+## Claude Code control through Herdr (CC4)
+
+The common contract lives in `control/mod.rs`: the CC1 states
+(accepted/running/completed/rejected/failed/cancelled/unknown, where only
+unknown is non-terminal), `Capability{enabled, disabled_reason,
+cancel_supported}`, a canonical lowercase UUID per operation, closed codes, and
+evidence that carries path, time, size and sha256, never content. `pi.rs`
+re-exports `State` and `Capability`; the Pi protocol 2 wire is unchanged.
+`control/pickup.rs` only declares the composite handoff-pickup stages
+(`handoff_running` -> `handoff_persisted` -> `clearing` ->
+`new_session_confirmed` -> `pickup_sent` -> `pickup_loaded`) and the old
+session reference for manual resume; nothing implements them yet.
+
+`control/claude.rs` enables Handoff and Compact only when the session is
+`claude`, maps to an explicit Herdr workspace/tab/pane, `/proc` starttime,
+`pane.process_info` and `agent.get` agree on pid and session ID, the agent is
+`idle`, the transcript resolves and no squad-vigia claim
+(`~/.claude/squad/trocas/<session>.claim`, stat only) exists. The Herdr socket
+must be a 0600 socket of the UID under ancestors that are not group- or
+world-writable (the default `~/.config/herdr` is created 0775 and is therefore
+refused until tightened). The adapter, not the client, chooses the text:
+`/compact`, or `/clear-pickup handoff agentcenter-op:<operation_id>`. Busy or
+another operation in flight for the session rejects; there is no queue and no
+`/clear`.
+
+Completion is by evidence, read from the transcript only when the operation
+starts or is queried, from the byte offset it had just before the send:
+
+- Compact: a `system`/`compact_boundary` entry of the same `sessionId` with
+  `compactMetadata.trigger == "manual"`, timestamped at or after the send and
+  the operation's `/compact` user entry. Claude writes that user entry after
+  the boundary in file order, so the order is by timestamp. Auto boundaries and
+  earlier boundaries never count.
+- Handoff: the user entry carrying the operation mark, then a `Write` whose
+  result succeeded for a path under `<git-root>/.claude/handoffs/`,
+  `~/.claude/handoffs/` or `~/.claude/squad/handoffs/`; the file must be
+  regular, reached without any symlink, owned by the UID and modified at or
+  after the send. Size and sha256 are recorded; the bytes are hashed and
+  dropped.
+
+No evidence within the evidence timeout is `unknown`; a later status with the
+same operation ID re-reads that operation's evidence only, and an `unknown`
+operation still blocks new ones on the session for a hold period. A repeated
+operation ID with the same action and session never resends. Local telemetry
+keeps action, code, duration and a truncated sha256 of the operation ID.
+
+Residual risk: Herdr has no compare-and-swap and answers one request per
+connection. Revalidation (`/proc` starttime, `agent.list` +
+`pane.process_info`, `agent.get` session and `idle`) runs on fresh
+connections to the same pinned server (peer pid and starttime checked on each)
+immediately before `agent.prompt`, but the pane can still change between the
+last read and the prompt being typed. The window is a few milliseconds; a
+prompt that lands in another session cannot complete this operation, because
+evidence is matched by session ID and operation mark. A `herdr` reply to
+`agent.prompt` only means the text was typed.
+
 ## Performance budget (measured, gated in CI where possible)
 
 | Target | Budget |

@@ -1,6 +1,10 @@
-//! Explicit pane focus, protocol 22. No prompt, current-pane or default target.
-//! Client revalidation is not a server-side CAS: Herdr has no process precondition
-//! on pane.focus. Completion means pane focus, not desktop-window activation.
+//! Explicit pane focus and agent prompt, protocol 22. No current-pane or default
+//! target. Client revalidation is not a server-side CAS: Herdr has no process or
+//! session precondition on pane.focus or agent.prompt, and it answers one request
+//! per connection, so revalidation and effect are separate connections to the
+//! same pinned server (peer pid and starttime rechecked on each). Completion of
+//! focus means pane focus, not desktop-window activation; a prompt reply only
+//! means Herdr typed it, never that the agent acted on it.
 use crate::overlay::herdr::{adapter_id, client::MAX_LINE, parse_agent_list, parse_process_info};
 use serde_json::{Value, json};
 use std::{
@@ -24,7 +28,7 @@ pub struct Endpoint {
     pub server_pid: u32,
     pub server_starttime: u64,
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Target {
     pub pid: u32,
     pub starttime: u64,
@@ -52,6 +56,10 @@ pub enum Error {
     Identity,
     Stale,
     Ambiguous,
+    /// Agent status is not `idle` (working, blocked in a dialog, unknown).
+    Busy,
+    /// The pane reports no agent session or a different one.
+    Session,
     UnsafeSocket,
     Transport,
     Unknown,
@@ -104,7 +112,7 @@ impl Endpoint {
             }
         }
         let m = fs::symlink_metadata(&self.socket).map_err(|_| Error::UnsafeSocket)?;
-        if !m.file_type().is_socket() || m.uid() != super::pi::getuid() {
+        if !m.file_type().is_socket() || m.uid() != super::pi::getuid() || m.mode() & 0o077 != 0 {
             return Err(Error::UnsafeSocket);
         }
         process(self.server_pid, self.server_starttime)?;
@@ -268,15 +276,7 @@ impl Endpoint {
     }
     /// Global deadline includes all reads and the effect. No automatic retry.
     pub fn focus(&self, t: &Target, timeout: Duration) -> Result<(), Error> {
-        if timeout.is_zero()
-            || timeout > Duration::from_secs(5)
-            || [&t.adapter, &t.workspace_id, &t.tab_id, &t.pane_id]
-                .iter()
-                .any(|s| s.is_empty() || matches!(s.as_str(), "current" | "default"))
-        {
-            return Err(Error::Invalid);
-        }
-        let end = Instant::now() + timeout;
+        let end = inputs(t, timeout)?;
         self.validate(t, end)?;
         // A fresh snapshot, not cached sampler metadata, immediately before focus.
         self.validate(t, end)?;
@@ -290,6 +290,108 @@ impl Endpoint {
         }
         Ok(())
     }
+    /// `agent.get` of one pane: only identity, status and session ID are read.
+    fn agent_get(&self, pane_id: &str, end: Instant) -> Result<AgentInfo, Error> {
+        let line = self.request("agent.get", json!({"target": pane_id}), end, false)?;
+        let v: Value = serde_json::from_slice(&line).map_err(|_| Error::Invalid)?;
+        if v["result"]["type"] != "agent_info" {
+            return Err(Error::Invalid);
+        }
+        let a = &v["result"]["agent"];
+        let text = |k: &str| a[k].as_str().map(str::to_string);
+        let session = &a["agent_session"];
+        Ok(AgentInfo {
+            agent: text("agent"),
+            status: text("agent_status"),
+            session_id: (session["kind"] == "id")
+                .then(|| session["value"].as_str().map(str::to_string))
+                .flatten(),
+            pane_id: text("pane_id"),
+            workspace_id: text("workspace_id"),
+            tab_id: text("tab_id"),
+        })
+    }
+    /// Fresh reads only: /proc identity, a single pane holding the pid
+    /// (`agent.list` + `pane.process_info`), then `agent.get` of that pane for
+    /// agent type, explicit location, session ID and `idle`.
+    fn agent_checks(&self, t: &Target, session_id: &str, end: Instant) -> Result<(), Error> {
+        self.validate(t, end)?;
+        let a = self.agent_get(&t.pane_id, end)?;
+        if a.pane_id.as_deref() != Some(t.pane_id.as_str())
+            || a.workspace_id.as_deref() != Some(t.workspace_id.as_str())
+            || a.tab_id.as_deref() != Some(t.tab_id.as_str())
+            || a.agent.as_deref().map(adapter_id) != Some(t.adapter.as_str())
+        {
+            return Err(Error::Stale);
+        }
+        if a.session_id.as_deref() != Some(session_id) {
+            return Err(Error::Session);
+        }
+        if a.status.as_deref() != Some("idle") {
+            return Err(Error::Busy);
+        }
+        process(t.pid, t.starttime)
+    }
+    /// Read-only capability probe for an agent pane bound to `session_id`.
+    pub fn check_agent(
+        &self,
+        t: &Target,
+        session_id: &str,
+        timeout: Duration,
+    ) -> Result<(), Error> {
+        let end = inputs(t, timeout)?;
+        if session_id.is_empty() {
+            return Err(Error::Invalid);
+        }
+        self.agent_checks(t, session_id, end)
+    }
+    /// Revalidates everything immediately before one `agent.prompt`; any
+    /// divergence returns before the effect. Crate-private: the text is closed
+    /// by the adapter, never taken from a client. Failure after the write
+    /// begins is [`Error::Unknown`]; there is no retry.
+    pub(crate) fn prompt(
+        &self,
+        t: &Target,
+        session_id: &str,
+        text: &str,
+        timeout: Duration,
+    ) -> Result<(), Error> {
+        let end = inputs(t, timeout)?;
+        if session_id.is_empty() || text.is_empty() || text.chars().any(char::is_control) {
+            return Err(Error::Invalid);
+        }
+        self.agent_checks(t, session_id, end)?;
+        let line = self.request(
+            "agent.prompt",
+            json!({"target": t.pane_id, "text": text}),
+            end,
+            true,
+        )?;
+        let v: Value = serde_json::from_slice(&line).map_err(|_| Error::Unknown)?;
+        if v["result"]["type"] != "agent_prompted" || v["result"]["agent"]["pane_id"] != t.pane_id {
+            return Err(Error::Unknown);
+        }
+        Ok(())
+    }
+}
+struct AgentInfo {
+    agent: Option<String>,
+    status: Option<String>,
+    session_id: Option<String>,
+    pane_id: Option<String>,
+    workspace_id: Option<String>,
+    tab_id: Option<String>,
+}
+fn inputs(t: &Target, timeout: Duration) -> Result<Instant, Error> {
+    if timeout.is_zero()
+        || timeout > Duration::from_secs(5)
+        || [&t.adapter, &t.workspace_id, &t.tab_id, &t.pane_id]
+            .iter()
+            .any(|s| s.is_empty() || matches!(s.as_str(), "current" | "default"))
+    {
+        return Err(Error::Invalid);
+    }
+    Ok(Instant::now() + timeout)
 }
 
 #[cfg(test)]

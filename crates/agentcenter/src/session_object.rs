@@ -29,8 +29,6 @@ mod imp {
         #[property(get, set)]
         cpu_text: RefCell<String>,
         #[property(get, set)]
-        cpu_frac: Cell<f64>,
-        #[property(get, set)]
         cpu_tooltip: RefCell<String>,
         #[property(get, set)]
         pss: Cell<i64>,
@@ -40,6 +38,18 @@ mod imp {
         mem: Cell<i64>,
         #[property(get, set)]
         mem_text: RefCell<String>,
+        #[property(get, set)]
+        pss_pct: Cell<f64>,
+        #[property(get, set)]
+        pss_tooltip: RefCell<String>,
+        #[property(get, set)]
+        swap_pct: Cell<f64>,
+        #[property(get, set)]
+        swap_text: RefCell<String>,
+        #[property(get, set)]
+        swap_tooltip: RefCell<String>,
+        #[property(get, set)]
+        has_swap: Cell<bool>,
         #[property(get, set)]
         io_bound: Cell<bool>,
         #[property(get, set)]
@@ -51,7 +61,7 @@ mod imp {
         #[property(get, set)]
         ctx_text: RefCell<String>,
         #[property(get, set)]
-        ctx_frac: Cell<f64>,
+        ctx_tooltip: RefCell<String>,
         #[property(get, set)]
         place: RefCell<String>,
         #[property(get, set)]
@@ -70,6 +80,10 @@ mod imp {
         burn_text: RefCell<String>,
         #[property(get, set)]
         burn_tooltip: RefCell<String>,
+        #[property(get, set)]
+        burn_pct: Cell<f64>,
+        #[property(get, set)]
+        burn_pct_text: RefCell<String>,
         #[property(get, set)]
         cache_text: RefCell<String>,
         #[property(get, set)]
@@ -106,7 +120,7 @@ glib::wrapper! {
 
 /// Propriedades do objeto, na ordem dos bits de [`Changed`] e das chamadas
 /// de `sync!` em [`SessionObject::apply`] (conferido em build de debug).
-pub const PROPS: [&str; 37] = [
+pub const PROPS: [&str; 44] = [
     "pid",
     "agent",
     "name",
@@ -114,18 +128,23 @@ pub const PROPS: [&str; 37] = [
     "group",
     "cpu",
     "cpu-text",
-    "cpu-frac",
     "cpu-tooltip",
     "pss",
     "pss-text",
     "mem",
     "mem-text",
+    "pss-pct",
+    "pss-tooltip",
+    "swap-pct",
+    "swap-text",
+    "swap-tooltip",
+    "has-swap",
     "io-bound",
     "io-text",
     "io-tooltip",
     "ctx",
     "ctx-text",
-    "ctx-frac",
+    "ctx-tooltip",
     "place",
     "cwd",
     "meta",
@@ -135,6 +154,8 @@ pub const PROPS: [&str; 37] = [
     "burn",
     "burn-text",
     "burn-tooltip",
+    "burn-pct",
+    "burn-pct-text",
     "cache-text",
     "cache-tooltip",
     "handoff-text",
@@ -219,18 +240,23 @@ impl SessionObject {
         sync!(group, set_group, row.group);
         sync!(cpu, set_cpu, row.cpu);
         sync!(cpu_text, set_cpu_text, row.cpu_text.as_str());
-        sync!(cpu_frac, set_cpu_frac, row.cpu_frac);
         sync!(cpu_tooltip, set_cpu_tooltip, row.cpu_tooltip.as_str());
         sync!(pss, set_pss, row.pss);
         sync!(pss_text, set_pss_text, row.pss_text.as_str());
         sync!(mem, set_mem, row.mem);
         sync!(mem_text, set_mem_text, row.mem_text.as_str());
+        sync!(pss_pct, set_pss_pct, row.pss_pct);
+        sync!(pss_tooltip, set_pss_tooltip, row.pss_tooltip.as_str());
+        sync!(swap_pct, set_swap_pct, row.swap_pct);
+        sync!(swap_text, set_swap_text, row.swap_text.as_str());
+        sync!(swap_tooltip, set_swap_tooltip, row.swap_tooltip.as_str());
+        sync!(has_swap, set_has_swap, row.has_swap);
         sync!(io_bound, set_io_bound, row.io_bound);
         sync!(io_text, set_io_text, row.io_text.as_str());
         sync!(io_tooltip, set_io_tooltip, row.io_tooltip.as_str());
         sync!(ctx, set_ctx, row.ctx);
         sync!(ctx_text, set_ctx_text, row.ctx_text.as_str());
-        sync!(ctx_frac, set_ctx_frac, row.ctx_frac);
+        sync!(ctx_tooltip, set_ctx_tooltip, row.ctx_tooltip.as_str());
         sync!(place, set_place, row.place.as_str());
         sync!(cwd, set_cwd, row.cwd.as_str());
         sync!(meta, set_meta, row.meta.as_str());
@@ -240,6 +266,8 @@ impl SessionObject {
         sync!(burn, set_burn, row.burn);
         sync!(burn_text, set_burn_text, row.burn_text.as_str());
         sync!(burn_tooltip, set_burn_tooltip, row.burn_tooltip.as_str());
+        sync!(burn_pct, set_burn_pct, row.burn_pct);
+        sync!(burn_pct_text, set_burn_pct_text, row.burn_pct_text.as_str());
         sync!(cache_text, set_cache_text, row.cache_text.as_str());
         sync!(cache_tooltip, set_cache_tooltip, row.cache_tooltip.as_str());
         sync!(handoff_text, set_handoff_text, row.handoff_text.as_str());

@@ -100,7 +100,8 @@ impl SessionModel {
         self.identities = identities;
         let mut new = Vec::new();
         for s in &snap.sessions {
-            let row = Row::from_session(s, source, home);
+            let row =
+                Row::from_session_in(s, source, home, &crate::format::Scale::of(&snap.machine));
             match self.by_pid.get(&s.pid) {
                 Some(obj) => {
                     let c = obj.apply(&row);
@@ -886,6 +887,22 @@ mod tests {
             after.downcast::<SessionObject>().unwrap().pss_text(),
             "5.0 MiB"
         );
+    }
+
+    /// CC8: PSS e Swap da linha tem escala real com a capacidade do tick.
+    #[test]
+    fn rows_scale_pss_and_swap_by_the_machine_of_the_same_tick() {
+        let mut m = SessionModel::default();
+        let mut sn = snap(vec![(10, 1 << 30)]);
+        sn.machine.mem_total_bytes = Some(4 << 30);
+        sn.machine.swap_total_bytes = Some(0);
+        m.apply(&sn, None);
+        let o = m.store().item(0).and_downcast::<SessionObject>().unwrap();
+        assert!((o.pss_pct() - 25.0).abs() < 1e-9, "{}", o.pss_pct());
+        assert!(!o.has_swap(), "machine without swap");
+        sn.machine.mem_total_bytes = None;
+        m.apply(&sn, None);
+        assert!(o.pss_pct() < 0.0, "unknown capacity: track only");
     }
 
     /// Reusing the selected row object transfers selection to a replacement process.

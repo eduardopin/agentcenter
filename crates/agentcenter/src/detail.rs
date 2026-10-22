@@ -21,13 +21,15 @@
 
 use crate::actions_ui;
 use crate::format::{DASH, Group, Row, bytes, human, provider_name, rec_class, sanitize};
-use crate::graph::{Strip, nice_max, peak};
+use crate::graph::{Strip, nice_max, peak, runs_at_least};
 use crate::process_table::ProcessTable;
 use adw::prelude::*;
 use agentcenter_core::actions::Target;
+use agentcenter_core::cockpit::{LOOP_REPEATS, Thresholds};
 use agentcenter_core::control::herdr::{Endpoint, Target as FocusTarget};
 use agentcenter_core::{HISTORY_LEN, History, IoStallSource, Session, SessionHistory, Snapshot};
 use std::cell::{Cell, RefCell};
+use std::ops::Range;
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -266,6 +268,13 @@ const HISTORY_SERIES: [usize; 4] = [1, 2, 2, 1];
 pub const STALL_LIMIT_PCT: f64 = 10.0;
 const MIB: f64 = 1024.0 * 1024.0;
 
+/// Legendas das faixas do transcript (CC9), na ordem de [`StripData::cockpit`].
+pub const COCKPIT_STRIPS: [&str; 3] = ["Context", "Burn", "Tool calls/min"];
+/// Series por faixa do transcript: contexto = contexto + releitura (tracejada).
+const COCKPIT_SERIES: [usize; 3] = [2, 1, 1];
+/// Piso da escala de tool calls/min: um ritmo calmo nao enche a faixa.
+const TOOL_CALLS_FLOOR: f64 = 10.0;
+
 /// Uma faixa de historico pronta para desenhar, sem GTK.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct StripData {
@@ -273,11 +282,13 @@ pub struct StripData {
     /// Topo da escala.
     pub max: f64,
     pub cap: usize,
-    /// Limite na escala (stall com delay accounting).
-    pub limit: Option<f64>,
-    /// A ultima leitura passou do limite.
+    /// Limites na escala (stall com delay accounting; contexto 70/90; burn).
+    pub limits: Vec<f64>,
+    /// Trechos marcados no rodape (indices de amostra): o sinal de loop.
+    pub bands: Vec<Range<usize>>,
+    /// A ultima leitura passou do limite (ou esta em loop).
     pub alert: bool,
-    /// `max 140%`, ou travessao sem leitura.
+    /// `max 140%`, `LOOP ×5`, ou travessao sem leitura.
     pub readout: String,
     pub tooltip: String,
     /// Rotulo do leitor de tela: legenda, janela, maximo, agora e escala.
@@ -299,20 +310,77 @@ pub fn span_text(interval_ms: u64) -> String {
     }
 }
 
+/// Faixa sem historico: trilho vazio e travessao, nunca 0.
+fn no_history(caption: &str, span: &str) -> StripData {
+    StripData {
+        readout: DASH.to_string(),
+        tooltip: "No history for this session yet".to_string(),
+        a11y: format!("{caption}, {span}: no history yet"),
+        max: 1.0,
+        cap: HISTORY_LEN,
+        ..Default::default()
+    }
+}
+
+/// Escala e texto de uma faixa: topo "redondo" que cobre o pico (nunca abaixo
+/// de `floor`), `max` e `now` de cada serie, e a leitura (`max` do pico).
+fn make_strip(
+    caption: &str,
+    span: &str,
+    cap: usize,
+    series: Vec<Vec<f32>>,
+    (floor, binary): (f64, bool),
+    fmt: &dyn Fn(f64) -> String,
+    names: &[&str],
+) -> StripData {
+    let all = peak(series.iter().map(Vec::as_slice));
+    let max = nice_max(all.unwrap_or(f64::NAN), floor, binary);
+    let peaks: Vec<String> = series
+        .iter()
+        .zip(names)
+        .map(|(s, n)| {
+            let p = peak([s.as_slice()]).map_or_else(|| DASH.to_string(), fmt);
+            let now = last(s).map_or_else(|| DASH.to_string(), fmt);
+            format!("{n}: max {p}, now {now}")
+        })
+        .collect();
+    let detail = peaks.join("; ");
+    StripData {
+        readout: all.map_or_else(|| DASH.to_string(), |p| format!("max {}", fmt(p))),
+        tooltip: format!("{detail}. Scale 0 to {}", fmt(max)),
+        a11y: format!("{caption}, {span}: {detail}; scale 0 to {}", fmt(max)),
+        series,
+        max,
+        cap,
+        limits: Vec::new(),
+        bands: Vec::new(),
+        alert: false,
+    }
+}
+
+/// Acrescenta os limites ao texto (tooltip e leitor de tela), na ordem dada.
+fn with_marks(mut d: StripData, marks: &[(&str, f64)], fmt: &dyn Fn(f64) -> String) -> StripData {
+    if marks.is_empty() {
+        return d;
+    }
+    let said: Vec<String> = marks
+        .iter()
+        .map(|(n, v)| format!("{n} at {}", fmt(*v)))
+        .collect();
+    let said = said.join(", ");
+    d.tooltip = format!("{}. Marks: {said}", d.tooltip);
+    d.a11y = format!("{}; marks: {said}", d.a11y);
+    d.limits = marks.iter().map(|(_, v)| *v).collect();
+    d
+}
+
 impl StripData {
     /// As quatro faixas de uma sessao; sem historico, trilhos vazios e
     /// travessao (nunca 0).
     pub fn of(h: Option<&SessionHistory>, source: IoStallSource, span: &str) -> [StripData; 4] {
         let span = span.to_lowercase();
         let Some(h) = h.filter(|h| !h.is_empty()) else {
-            return HISTORY_STRIPS.map(|cap| StripData {
-                readout: DASH.to_string(),
-                tooltip: "No history for this session yet".to_string(),
-                a11y: format!("{cap}, {span}: no history yet"),
-                max: 1.0,
-                cap: HISTORY_LEN,
-                ..Default::default()
-            });
+            return HISTORY_STRIPS.map(|cap| no_history(cap, &span));
         };
         let cap = h.cpu_pct.capacity();
         let make = |caption: &str,
@@ -321,28 +389,7 @@ impl StripData {
                     binary: bool,
                     fmt: &dyn Fn(f64) -> String,
                     names: &[&str]| {
-            let all = peak(series.iter().map(Vec::as_slice));
-            let max = nice_max(all.unwrap_or(f64::NAN), floor, binary);
-            let peaks: Vec<String> = series
-                .iter()
-                .zip(names)
-                .map(|(s, n)| {
-                    let p = peak([s.as_slice()]).map_or_else(|| DASH.to_string(), fmt);
-                    let now = last(s).map_or_else(|| DASH.to_string(), fmt);
-                    format!("{n}: max {p}, now {now}")
-                })
-                .collect();
-            let detail = peaks.join("; ");
-            StripData {
-                readout: all.map_or_else(|| DASH.to_string(), |p| format!("max {}", fmt(p))),
-                tooltip: format!("{detail}. Scale 0 to {}", fmt(max)),
-                a11y: format!("{caption}, {span}: {detail}; scale 0 to {}", fmt(max)),
-                series,
-                max,
-                cap,
-                limit: None,
-                alert: false,
-            }
+            make_strip(caption, &span, cap, series, (floor, binary), fmt, names)
         };
         let pct = |v: f64| format!("{v:.0}%");
         let size = |v: f64| bytes(v);
@@ -383,7 +430,7 @@ impl StripData {
                     &pct,
                     &["longest block I/O wait, % of the interval"],
                 );
-                s.limit = Some(STALL_LIMIT_PCT);
+                s.limits = vec![STALL_LIMIT_PCT];
                 s.alert = now.is_some_and(|n| n >= STALL_LIMIT_PCT);
                 s
             }
@@ -398,6 +445,113 @@ impl StripData {
         };
         [cpu, mem, disk, stall]
     }
+
+    /// As tres faixas do transcript (CC9): contexto com releitura, burn e
+    /// tool calls/min com o sinal de loop. So o que o sampler gravou do
+    /// overlay; amostra sem fonte quebra a linha. Limites de `th`: piso da
+    /// releitura e handoff no contexto, burn cheio no burn.
+    pub fn cockpit(h: Option<&SessionHistory>, th: &Thresholds, span: &str) -> [StripData; 3] {
+        let span = span.to_lowercase();
+        let Some(h) = h.filter(|h| !h.is_empty()) else {
+            return COCKPIT_STRIPS.map(|cap| no_history(cap, &span));
+        };
+        let cap = h.ctx_pct.capacity();
+        let pct = |v: f64| format!("{v:.0}%");
+
+        let ctx = h.ctx_pct.to_vec();
+        let ctx_now = last(&ctx);
+        let reread: Vec<f32> = h.reread_share.iter().map(|v| v * 100.0).collect();
+        let handoff = f64::from(th.handoff_now);
+        let floor = f64::from(th.reread_floor_pct.min(th.handoff_now));
+        let mut marks = vec![("re-read floor", floor), ("handoff", handoff)];
+        marks.dedup_by(|a, b| a.1 == b.1);
+        let mut context = with_marks(
+            make_strip(
+                "Context",
+                &span,
+                cap,
+                vec![ctx, reread],
+                (100.0, false),
+                &pct,
+                &[
+                    "context, % of the window (solid)",
+                    "re-read, % of weighted burn (dashed)",
+                ],
+            ),
+            &marks,
+            &pct,
+        );
+        context.alert = ctx_now.is_some_and(|n| n >= handoff);
+        // A leitura e a do contexto: a releitura tem o proprio "max" no texto.
+        context.readout = peak([context.series[0].as_slice()])
+            .map_or_else(|| DASH.to_string(), |p| format!("max {}", pct(p)));
+
+        let full = f64::from(th.burn_full_pct);
+        let burn_series = h.burn_pct.to_vec();
+        let burn_now = last(&burn_series);
+        let mut burn = with_marks(
+            make_strip(
+                "Burn",
+                &span,
+                cap,
+                vec![burn_series],
+                (2.0 * full, false),
+                &|v: f64| format!("{v:.1}%"),
+                &["burn, % of the session budget"],
+            ),
+            &[("full burn", full)],
+            &pct,
+        );
+        burn.alert = burn_now.is_some_and(|n| n >= full);
+
+        let per_min = |v: f64| format!("{v:.1}/min");
+        let mut tools = make_strip(
+            "Tool calls/min",
+            &span,
+            cap,
+            vec![h.tool_calls_per_min.to_vec()],
+            (TOOL_CALLS_FLOOR, false),
+            &per_min,
+            &["tool calls per minute, last 5 minutes"],
+        );
+        let loops = h.loop_repeats.to_vec();
+        tools.bands = runs_at_least(&loops, LOOP_REPEATS as f32);
+        let loop_now = last(&loops);
+        let signal = match (loops.iter().any(|v| v.is_finite()), loop_now) {
+            (false, _) => "loop signal not read in this window".to_string(),
+            (true, Some(n)) if n >= f64::from(LOOP_REPEATS) => format!(
+                "in a loop now: the same tool call repeated {n:.0} times; \
+                 loop marked under the line in {}",
+                stretches(tools.bands.len())
+            ),
+            (true, _) if tools.bands.is_empty() => "no loop in this window".to_string(),
+            (true, _) => format!(
+                "loop marked under the line in {}, not now",
+                stretches(tools.bands.len())
+            ),
+        };
+        if let Some(n) = loop_now.filter(|n| *n >= f64::from(LOOP_REPEATS)) {
+            tools.readout = format!("LOOP ×{n:.0}");
+            tools.alert = true;
+        }
+        tools.tooltip = format!("{}. {}", tools.tooltip, capitalize(&signal));
+        tools.a11y = format!("{}; {signal}", tools.a11y);
+        [context, burn, tools]
+    }
+}
+
+fn stretches(n: usize) -> String {
+    if n == 1 {
+        "1 stretch".to_string()
+    } else {
+        format!("{n} stretches")
+    }
+}
+
+fn capitalize(s: &str) -> String {
+    let mut c = s.chars();
+    c.next()
+        .map_or_else(String::new, |f| f.to_uppercase().chain(c).collect())
 }
 
 fn set_label(l: &gtk::Label, text: &str) {
@@ -479,15 +633,106 @@ struct Pending {
     interval_ms: u64,
 }
 
-/// Secao "Last 10 minutes": quatro faixas num `AdwWrapBox` (quatro numa linha
-/// no detalhe largo, duas por linha no medio e no estreito). Fora da tela
-/// (detalhe recolhido atras da lista) nada e calculado; ao aparecer, desenha
-/// o ultimo historico guardado.
+/// Uma celula de faixa: legenda e leitura em cima, faixa embaixo, dentro de um
+/// filho do `GtkFlowBox` (focavel: Tab entra no painel, as setas andam pelas
+/// faixas e o leitor de tela le o resumo da celula).
+struct StripCell {
+    child: gtk::FlowBoxChild,
+    readout: gtk::Label,
+    strip: Strip,
+}
+
+/// Painel de faixas: `GtkFlowBox` sem selecao, celulas da mesma largura, ate
+/// `per_line` numa linha. Vao de 8 px mais os 3 px de padding de cada
+/// `flowboxchild` (libadwaita) = 14 px entre faixas, e duas celulas de 150 px
+/// (`.history-cell`) cabem nos 320 px de miolo do detalhe em 360. O anel de
+/// foco e o do libadwaita no `flowboxchild`, com a cor do token de foco
+/// (tokens.css); nada aqui e ativavel.
+fn strip_panel(
+    captions: &[&str],
+    series: &[usize],
+    per_line: u32,
+) -> (gtk::FlowBox, Vec<StripCell>) {
+    let panel = gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .homogeneous(true)
+        .column_spacing(8)
+        .row_spacing(8)
+        .min_children_per_line(1)
+        .max_children_per_line(per_line)
+        .build();
+    panel.add_css_class("detail-history");
+    let cells = captions
+        .iter()
+        .zip(series)
+        .map(|(caption, series)| {
+            let cap = label(&["detail-caption"]);
+            cap.set_label(caption);
+            cap.set_hexpand(true);
+            cap.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            let readout = label(&["history-readout", "numeric"]);
+            readout.set_xalign(1.0);
+            let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+            top.append(&cap);
+            top.append(&readout);
+            let strip = Strip::new(*series);
+            let cell = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            cell.add_css_class("history-cell");
+            cell.append(&top);
+            cell.append(&strip);
+            let child = gtk::FlowBoxChild::new();
+            child.set_child(Some(&cell));
+            panel.append(&child);
+            StripCell {
+                child,
+                readout,
+                strip,
+            }
+        })
+        .collect();
+    (panel, cells)
+}
+
+fn draw_cells(cells: &[StripCell], data: &[StripData]) {
+    for (c, d) in cells.iter().zip(data) {
+        let series: Vec<&[f32]> = d.series.iter().map(Vec::as_slice).collect();
+        c.strip
+            .set_marked(&series, d.max, d.cap, &d.limits, &d.bands);
+        set_label(&c.readout, &d.readout);
+        set_tip(&c.child, &d.tooltip);
+        set_classes(
+            &c.readout,
+            if d.alert {
+                &["history-readout", "numeric", "alert"]
+            } else {
+                &["history-readout", "numeric"]
+            },
+        );
+        set_classes(&c.strip, if d.alert { &["alert"] } else { &[] });
+        c.strip
+            .update_property(&[gtk::accessible::Property::Label(&d.a11y)]);
+        c.child
+            .update_property(&[gtk::accessible::Property::Label(&d.a11y)]);
+    }
+}
+
+/// Secao "Last 10 minutes": quatro faixas do kernel (duas por linha) e, abaixo dos fatos
+/// do transcript, tres faixas do cockpit (CC9). Fora da tela (detalhe
+/// recolhido atras da lista) nada e calculado; ao aparecer, desenha o ultimo
+/// historico guardado.
 struct HistoryView {
     head: gtk::Label,
     note: gtk::Label,
-    panel: adw::WrapBox,
-    cells: Vec<(gtk::Box, gtk::Label, Strip)>,
+    panel: gtk::FlowBox,
+    cells: Vec<StripCell>,
+    /// Faixas do transcript: ficam sob os fatos do transcript e somem com ele
+    /// (multiplexador).
+    cockpit_note: gtk::Label,
+    cockpit_panel: gtk::FlowBox,
+    cockpit_cells: Vec<StripCell>,
+    /// Os limiares do ambiente, os mesmos que o overlay do sampler le
+    /// (`Thresholds::from_process_env`).
+    thresholds: Thresholds,
     pending: RefCell<Option<Pending>>,
 }
 
@@ -498,55 +743,48 @@ impl HistoryView {
         let note = label(&["detail-note"]);
         note.set_wrap(true);
         note.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-        let panel = adw::WrapBox::builder()
-            .child_spacing(16)
-            .line_spacing(10)
-            .justify(adw::JustifyMode::Fill)
-            .build();
-        panel.add_css_class("detail-history");
-        let cells = HISTORY_STRIPS
-            .iter()
-            .zip(HISTORY_SERIES)
-            .map(|(caption, series)| {
-                let cap = label(&["detail-caption"]);
-                cap.set_label(caption);
-                cap.set_hexpand(true);
-                cap.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                let readout = label(&["history-readout", "numeric"]);
-                readout.set_xalign(1.0);
-                let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-                top.append(&cap);
-                top.append(&readout);
-                let strip = Strip::new(series);
-                let cell = gtk::Box::new(gtk::Orientation::Vertical, 4);
-                cell.add_css_class("history-cell");
-                cell.append(&top);
-                cell.append(&strip);
-                panel.append(&cell);
-                (cell, readout, strip)
-            })
-            .collect();
+        // Duas por linha em toda largura: 2x2, sem a quarta faixa sozinha
+        // (o detalhe a 1280 nao cabe quatro de 150 px).
+        let (panel, cells) = strip_panel(&HISTORY_STRIPS, &HISTORY_SERIES, 2);
+        let cockpit_note = label(&["detail-note"]);
+        // Separa a nota dos fatos do transcript logo acima.
+        cockpit_note.set_margin_top(8);
+        cockpit_note.set_wrap(true);
+        cockpit_note.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        let (cockpit_panel, cockpit_cells) = strip_panel(&COCKPIT_STRIPS, &COCKPIT_SERIES, 3);
         let view = Rc::new(Self {
             head,
             note,
             panel,
             cells,
+            cockpit_note,
+            cockpit_panel,
+            cockpit_cells,
+            thresholds: Thresholds::from_process_env(),
             pending: RefCell::default(),
         });
-        let v = Rc::downgrade(&view);
-        view.panel.connect_map(move |_| {
-            if let Some(v) = v.upgrade() {
-                v.draw();
-            }
-        });
+        for p in [&view.panel, &view.cockpit_panel] {
+            let v = Rc::downgrade(&view);
+            p.connect_map(move |_| {
+                if let Some(v) = v.upgrade() {
+                    v.draw();
+                }
+            });
+        }
         view
     }
 
     fn set(&self, p: Pending) {
         self.pending.replace(Some(p));
-        if self.panel.is_mapped() {
+        if self.panel.is_mapped() || self.cockpit_panel.is_mapped() {
             self.draw();
         }
+    }
+
+    /// Mostra ou esconde as faixas do transcript (com os fatos dele).
+    fn set_transcript_visible(&self, on: bool) {
+        self.cockpit_note.set_visible(on);
+        self.cockpit_panel.set_visible(on);
     }
 
     fn draw(&self) {
@@ -565,24 +803,20 @@ impl HistoryView {
                  dashed: swap, disk write."
             ),
         );
+        set_label(
+            &self.cockpit_note,
+            &format!(
+                "{span} from the transcript. Solid: context, burn, tool calls; \
+                 dashed: re-read share. Lines across mark the limits; a bar \
+                 under the line marks a loop."
+            ),
+        );
         let h = p.history.as_ref().and_then(|h| h.get(p.pid));
-        let data = StripData::of(h, p.source, &span);
-        for ((cell, readout, strip), d) in self.cells.iter().zip(&data) {
-            let series: Vec<&[f32]> = d.series.iter().map(Vec::as_slice).collect();
-            strip.set(&series, d.max, d.cap, d.limit);
-            set_label(readout, &d.readout);
-            set_tip(cell, &d.tooltip);
-            set_classes(
-                readout,
-                if d.alert {
-                    &["history-readout", "numeric", "alert"]
-                } else {
-                    &["history-readout", "numeric"]
-                },
-            );
-            set_classes(strip, if d.alert { &["alert"] } else { &[] });
-            strip.update_property(&[gtk::accessible::Property::Label(&d.a11y)]);
-        }
+        draw_cells(&self.cells, &StripData::of(h, p.source, &span));
+        draw_cells(
+            &self.cockpit_cells,
+            &StripData::cockpit(h, &self.thresholds, &span),
+        );
     }
 }
 
@@ -781,6 +1015,8 @@ impl Detail {
         body.append(&history.panel);
         body.append(&transcript_head);
         body.append(&transcript.widget);
+        body.append(&history.cockpit_note);
+        body.append(&history.cockpit_panel);
         body.append(&procs_head);
         body.append(&note);
         body.append(&table.widget);
@@ -1044,6 +1280,7 @@ impl Detail {
         self.session.set(&t.session, &SESSION_FACTS);
         self.transcript_head.set_visible(t.transcript.is_some());
         self.transcript.widget.set_visible(t.transcript.is_some());
+        self.history.set_transcript_visible(t.transcript.is_some());
         if let Some(f) = &t.transcript {
             self.transcript.set(f, &TRANSCRIPT_FACTS);
         }
@@ -1338,7 +1575,7 @@ mod tests {
         );
         // Sem leitura de disco: trilho e travessao, nunca 0.
         assert_eq!(disk.readout, DASH);
-        assert_eq!(stall.limit, Some(STALL_LIMIT_PCT));
+        assert_eq!(stall.limits, [STALL_LIMIT_PCT]);
         assert!(stall.alert, "12% is over the 10% limit");
         assert!(stall.a11y.starts_with("Stall, last 10 minutes: "));
 
@@ -1347,8 +1584,8 @@ mod tests {
         let h = history_of(&s, 2);
         let [.., stall] = StripData::of(h.get(42), IoStallSource::DState, "Last 10 minutes");
         assert_eq!(
-            (stall.readout.as_str(), stall.limit, stall.alert),
-            ("max D:3", None, false)
+            (stall.readout.as_str(), stall.limits.is_empty(), stall.alert),
+            ("max D:3", true, false)
         );
     }
 
@@ -1367,5 +1604,255 @@ mod tests {
         s.threads_d = Some(3);
         let t = DetailText::of(&s, IoStallSource::DState, None);
         assert_eq!(t.session[4].value, "D:3");
+    }
+
+    // ---- Faixas do transcript (CC9) ---------------------------------------
+
+    use agentcenter_core::cockpit::{Cockpit, Loops, Tokens};
+
+    fn cockpit(loops: Loops) -> Cockpit {
+        let t = Tokens {
+            input: 1_000_000,
+            cache_write: 200_000,
+            cache_read: 3_000_000,
+            output: 50_000,
+            ctx: 600_000,
+            window: 1_000_000,
+            ..Default::default()
+        };
+        Cockpit::compute_with_loops(&Thresholds::default(), &t, loops, None, None)
+    }
+
+    fn loops(repeats: u32) -> Loops {
+        Loops {
+            max_streak: 1,
+            repeated_max: repeats,
+        }
+    }
+
+    /// Uma sessao com o overlay dado em cada tick; `None` = tick sem overlay.
+    fn cockpit_history(ticks: &[Option<SessionOverlay>]) -> History {
+        let mut h = History::new(HISTORY_LEN);
+        for o in ticks {
+            let mut s = session(AgentRole::Agent);
+            s.overlay = o.clone();
+            h.record(std::slice::from_ref(&s), |_| 1);
+        }
+        h
+    }
+
+    fn reading(ctx: f64, per_min: f64, repeats: u32) -> Option<SessionOverlay> {
+        Some(SessionOverlay {
+            context_pct: Some(ctx),
+            tool_calls_per_min: Some(per_min),
+            cockpit: Some(cockpit(loops(repeats))),
+            ..Default::default()
+        })
+    }
+
+    /// Sessao com loop: tres ticks sem overlay (lacuna), dois sem loop, tres
+    /// em loop, um fora e dois em loop de novo (o agora).
+    fn looping() -> History {
+        let mut ticks = vec![None, None, None];
+        ticks.extend([reading(40.0, 2.0, 1), reading(45.0, 3.0, 2)]);
+        ticks.extend((0..3).map(|_| reading(60.0, 12.0, 5)));
+        ticks.push(reading(62.0, 4.0, 1));
+        ticks.extend((0..2).map(|_| reading(92.0, 14.0, 6)));
+        cockpit_history(&ticks)
+    }
+
+    #[test]
+    fn cockpit_strips_mark_loops_limits_and_gaps() {
+        let h = looping();
+        let th = Thresholds::default();
+        let [ctx, burn, tools] = StripData::cockpit(h.get(42), &th, "Last 10 minutes");
+
+        // Contexto: limites 70 e 90 dos Thresholds, escala 0..100, carmim
+        // acima do handoff; a lacuna do comeco e NaN, nunca 0.
+        assert_eq!(ctx.limits, [70.0, 90.0]);
+        assert_eq!(ctx.max, 100.0);
+        assert!(ctx.alert, "92% >= 90%");
+        assert_eq!(ctx.series.len(), 2, "contexto e releitura");
+        assert!(ctx.series[0][..3].iter().all(|v| v.is_nan()));
+        assert!(ctx.series[1][..3].iter().all(|v| v.is_nan()));
+        let share = cockpit(loops(1)).reread_share as f32 * 100.0;
+        assert_eq!(ctx.series[1][3], share, "releitura em %");
+        assert!(
+            ctx.a11y
+                .contains("marks: re-read floor at 70%, handoff at 90%"),
+            "{}",
+            ctx.a11y
+        );
+        assert!(ctx.a11y.starts_with("Context, last 10 minutes: "));
+
+        // Burn: limite no burn cheio, escala do dobro.
+        assert_eq!(burn.limits, [50.0]);
+        assert_eq!(burn.max, 100.0);
+        assert!(
+            burn.tooltip.contains("full burn at 50%"),
+            "{}",
+            burn.tooltip
+        );
+
+        // Tool calls/min: dois trechos de loop, o ultimo e o agora.
+        assert_eq!(tools.bands, vec![5..8, 9..11]);
+        assert_eq!(tools.readout, "LOOP ×6");
+        assert!(tools.alert);
+        assert_eq!(tools.max, 20.0, "pico 14/min, escala 1-2-5");
+        assert!(
+            tools.a11y.contains("the same tool call repeated 6 times")
+                && tools.a11y.contains("in 2 stretches"),
+            "{}",
+            tools.a11y
+        );
+    }
+
+    #[test]
+    fn cockpit_strips_without_cockpit_say_unavailable_never_zero() {
+        // Overlay com contexto e ritmo, mas sem cockpit (varredura pendente).
+        let pending = SessionOverlay {
+            context_pct: Some(30.0),
+            tool_calls_per_min: Some(1.0),
+            cockpit_pending: true,
+            ..Default::default()
+        };
+        let h = cockpit_history(&[Some(pending.clone()), Some(pending)]);
+        let [ctx, burn, tools] =
+            StripData::cockpit(h.get(42), &Thresholds::default(), "Last 10 minutes");
+        assert_eq!(ctx.readout, "max 30%");
+        let h2 = cockpit_history(&[reading(10.0, 0.0, 1)]);
+        let [c2, ..] = StripData::cockpit(h2.get(42), &Thresholds::default(), "x");
+        assert_eq!(c2.readout, "max 10%", "a releitura (maior) nao e a leitura");
+        assert!(
+            ctx.series[1].iter().all(|v| v.is_nan()),
+            "releitura ausente"
+        );
+        assert!(
+            ctx.tooltip
+                .contains("re-read, % of weighted burn (dashed): max —, now —")
+        );
+        assert_eq!(burn.readout, DASH, "sem cockpit: travessao, nunca 0%");
+        assert!(!burn.alert);
+        assert!(tools.bands.is_empty());
+        assert_eq!(tools.readout, "max 1.0/min");
+        assert!(
+            tools.a11y.ends_with("loop signal not read in this window"),
+            "{}",
+            tools.a11y
+        );
+
+        // Sem historico nenhum: as tres faixas vazias.
+        for d in StripData::cockpit(None, &Thresholds::default(), "Last 10 minutes") {
+            assert_eq!(d.readout, DASH);
+            assert!(d.series.is_empty() && d.bands.is_empty() && d.limits.is_empty());
+        }
+    }
+
+    #[test]
+    fn cockpit_strips_of_a_session_just_opened_start_at_the_right_edge() {
+        let h = cockpit_history(&[reading(10.0, 0.0, 1)]);
+        let [ctx, _, tools] =
+            StripData::cockpit(h.get(42), &Thresholds::default(), "Last 10 minutes");
+        assert_eq!(ctx.series[0], [10.0]);
+        assert_eq!(
+            ctx.cap, HISTORY_LEN,
+            "uma amostra de 600: nada antes do app"
+        );
+        assert_eq!(tools.readout, "max 0.0/min", "0/min lido e 0");
+        assert!(
+            tools.a11y.ends_with("no loop in this window"),
+            "{}",
+            tools.a11y
+        );
+        let p = crate::graph::points(&ctx.series[0], ctx.cap, ctx.max, 599.0, 30.0);
+        assert_eq!(p, vec![vec![(599.0, 27.0)]], "um ponto na borda direita");
+    }
+
+    fn snapshot_of(sessions: Vec<Session>) -> Snapshot {
+        Snapshot {
+            schema_version: agentcenter_core::snapshot::SCHEMA_VERSION,
+            taken_at_ms: 0,
+            interval_ms: 1000,
+            machine: agentcenter_core::Machine {
+                cores: 16,
+                cpu_pct: None,
+                io_stall_source: IoStallSource::Delayacct,
+                processes: 0,
+                session_processes: 0,
+                mem_total_bytes: None,
+                mem_available_bytes: None,
+                swap_total_bytes: None,
+                swap_free_bytes: None,
+                load_avg: None,
+                psi: None,
+            },
+            sessions,
+            summary: Default::default(),
+        }
+    }
+
+    /// Criterio 2 do CC9: o detalhe desenha as faixas do transcript da
+    /// fixture de historico (loop, sem cockpit, recem-aberta), as celulas
+    /// sao focaveis com o resumo como rotulo, e o multiplexador nao as mostra.
+    #[test]
+    fn detail_draws_cockpit_strips_from_a_history_fixture() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let mut s = session(AgentRole::Agent);
+            s.starttime = Some(1);
+            s.overlay = reading(92.0, 14.0, 6);
+            let snap = snapshot_of(vec![s.clone()]);
+            let detail = Detail::new(false);
+            let cells = &detail.history.cockpit_cells;
+
+            // Loop.
+            let h = Arc::new(looping());
+            detail.show(Some(42), Some(&snap), Some(&h), None);
+            detail.history.draw();
+            assert!(detail.history.cockpit_panel.is_visible());
+            assert_eq!(cells.len(), COCKPIT_STRIPS.len());
+            let tools = &cells[2];
+            assert_eq!(tools.readout.label(), "LOOP ×6");
+            assert!(tools.readout.has_css_class("alert"));
+            assert!(tools.strip.has_css_class("alert"));
+            assert!(tools.child.is_focusable(), "o teclado chega a faixa");
+            let tip = tools.child.tooltip_text().unwrap_or_default();
+            assert!(tip.contains("In a loop now"), "{tip}");
+            assert!(cells[0].readout.has_css_class("alert"), "92% no handoff");
+            assert_eq!(
+                detail.history.cockpit_note.label(),
+                "Last 10 minutes from the transcript. Solid: context, burn, tool calls; \
+                 dashed: re-read share. Lines across mark the limits; a bar under the line \
+                 marks a loop."
+            );
+
+            // Sem cockpit (overlay sem nada): travessoes, sem alerta.
+            let mut bare = s.clone();
+            bare.overlay = Some(SessionOverlay::default());
+            let h = Arc::new(cockpit_history(&vec![Some(SessionOverlay::default()); 4]));
+            detail.apply(&snapshot_of(vec![bare]), Some(&h), None);
+            detail.history.draw();
+            for c in cells {
+                assert_eq!(c.readout.label(), DASH);
+                assert!(!c.readout.has_css_class("alert"));
+            }
+
+            // Recem-aberta: uma amostra, sem loop.
+            let h = Arc::new(cockpit_history(&[reading(10.0, 0.0, 1)]));
+            detail.apply(&snap, Some(&h), None);
+            detail.history.draw();
+            assert_eq!(cells[0].readout.label(), "max 10%");
+            assert_eq!(cells[2].readout.label(), "max 0.0/min");
+
+            // Multiplexador: sem transcript, sem faixas do transcript.
+            let mut mux = session(AgentRole::Multiplexer);
+            mux.agent = "herdr".into();
+            mux.pid = 7;
+            mux.starttime = Some(1);
+            let snap = snapshot_of(vec![mux]);
+            detail.show(Some(7), Some(&snap), None, None);
+            assert!(!detail.history.cockpit_panel.is_visible());
+            assert!(!detail.history.cockpit_note.is_visible());
+        });
     }
 }

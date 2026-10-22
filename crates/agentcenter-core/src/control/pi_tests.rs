@@ -21,16 +21,31 @@ fn starttime(pid: u32) -> String {
         .starttime
         .to_string()
 }
+/// Existing base whose every component directory() would accept as an ancestor.
+fn private_base() -> PathBuf {
+    let safe = |base: &PathBuf| {
+        base.is_absolute()
+            && base.ancestors().all(|p| {
+                fs::symlink_metadata(p).is_ok_and(|m| {
+                    m.is_dir() && (m.uid() == uid() || m.uid() == 0) && m.mode() & 0o022 == 0
+                })
+            })
+    };
+    // The worktree's ancestors may be group-writable and HOME may lack .cache or
+    // live under /tmp; do not weaken directory(), pick a base it accepts instead.
+    ["HOME", "XDG_RUNTIME_DIR"]
+        .iter()
+        .filter_map(|key| std::env::var_os(key).map(PathBuf::from))
+        .find(safe)
+        .expect("HOME or XDG_RUNTIME_DIR must have no group/world-writable ancestor")
+}
 impl Fixture {
     fn new() -> Self {
-        // The worktree's ancestors may be group-writable; do not weaken directory().
-        let root = PathBuf::from(std::env::var_os("HOME").unwrap())
-            .join(".cache")
-            .join(format!(
-                "control-test-{}-{}",
-                std::process::id(),
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            ));
+        let root = private_base().join(format!(
+            ".ac-pi-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
         fs::create_dir(&root).unwrap();
         fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
         let dir = root.join("ac-test");
@@ -129,7 +144,19 @@ fn control_so_peercred_rejects_other_live_pid_before_sending() {
     child.kill().unwrap();
     child.wait().unwrap();
     assert!(matches!(result, Err(Error::Identity)), "{result:?}");
-    let (mut stream, _) = f.listener.accept().unwrap();
+    // Bounded accept: a rejection before connect must fail here, not hang the suite.
+    f.listener.set_nonblocking(true).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(1);
+    let mut stream = loop {
+        match f.listener.accept() {
+            Ok((stream, _)) => break stream,
+            Err(e) if e.kind() == io::ErrorKind::WouldBlock && Instant::now() < deadline => {
+                thread::sleep(Duration::from_millis(5))
+            }
+            Err(e) => panic!("exchange never connected before rejecting: {e}"),
+        }
+    };
+    stream.set_nonblocking(false).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(1)))
         .unwrap();

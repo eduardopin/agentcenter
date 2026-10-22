@@ -377,3 +377,59 @@ overlay-ID navigation alone is not protection against kernel PID reuse.
 Still open:
 
 4. A bundled typeface of our own, or the platform's (current choice).
+
+## 9. Board row gauges (CC8)
+
+Each agent row on the board carries the two accounts that produce its
+recommendation (context and burn) as rules, plus CPU, PSS and Swap rules for
+its cost to the machine. Same anatomy as the band (section 4) at row size:
+4 px track (`rule.mini.row`), amber fill (`--ac-mark-agents`, the session's
+own consumption), threshold marks in ink with a track-coloured halo, no
+animation (the value jumps to the new reading).
+
+```
+wide and compact (rack >= 600 sp)
+[icon] name (ellipsis)           [Busy] [HANDOFF]  ctx ▮▮▮|▮| 92%  burn ▮▮| 43%  [⋮]
+       agent · provider · model   ~/cwd   w4:p16   burn · cache · handoff
+       CPU ▮▯ 16%   PSS ▮▯ 728 MiB   Swap ▮▯ 174 MiB   tools 2   sub —   I/O-bound
+
+narrow (rack < 600 sp: the 1280, 840 and 360 px windows with the detail split)
+[icon] name (ellipsis)                         [Busy] [HANDOFF]  [⋮]
+       agent · prov…  …/cwd          ctx ▮|▮| 92%  burn ▮| 43%
+       CPU 16%   728 MiB   I/O-bound
+```
+
+- **Context**: marks at the vigia's reread floor and at the handoff
+  (`SQUAD_REREAD_PISO`, `SQUAD_CTX_PCT`; the floor never above the handoff,
+  floor 0 draws no mark). From the handoff on the fill turns crimson
+  (`--ac-mark-alert`); colour is not the only channel, the HANDOFF pill sits
+  beside it and the fill passes the mark.
+- **Burn**: % of the session budget, one mark where the floor reaches its
+  minimum (`SQUAD_BURN_CHEIO`). No reading: track only and "—", never 0.
+- **CPU / PSS / Swap**: CPU of one core; PSS and SwapPss as a share of the
+  RAM and swap of the same tick (`Scale::of(&snap.machine)` in
+  `session_list.rs`). Unknown capacity leaves the track only; a machine
+  without swap shows "no swap" with no caption or track.
+- **Sizes**: 40 px for context and burn, 28 px for CPU, PSS and Swap in the
+  wide densities. Values have fixed character widths so the rules line up
+  in columns from row to row.
+- **Narrow density** (owner decision, 2026-10-22: gauges must show at the
+  common widths). Context and burn move to the end of line 2 as 28 px rules
+  with the same marks and 4 px inner spacing. Line 1 cannot hold them next
+  to the pills at 360 px; on line 2 the identity and the cwd ellipsize and
+  give way (full text in their tooltips and in the detail pane). CPU, PSS
+  and Swap stay as text on line 3. Measured widest row: 565 px wide,
+  518 px compact, 251 px narrow, against 696, 576 and 336 px available.
+- **Accessibility**: each rule has an accessible label ("Context window",
+  "Session budget burned", ...); the row reads as one sentence with
+  recommendation, context and burn, or "unavailable". Measured contrast:
+  amber fill on track 4.30:1, crimson 5.27:1 (>= 3.0 for non-text); token
+  check 134 pairs, 0 failed.
+
+Verification (2026-10-22): `session_row` density test (40 + long names +
+cockpit fixtures; every drawn context and burn rule has the size and the
+vigia marks of its density, narrow draws no CPU/PSS/Swap rule), 18
+`session_list` tests including the tick scale, 19 `format` tests. Captures
+of `cockpit`, `tipico-40` and `nomes-longos` at 1280×800 (Wayland), 840×700
+and 360×640 (private Broadway) in both themes, 18 PNG, 0 overflow, in
+`target/cc8-captures`.

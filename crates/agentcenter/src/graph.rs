@@ -9,7 +9,12 @@
 //! - Segunda serie (`line.secondary`): tracejada, ardosia
 //!   (`--ac-mark-machine`). O traco e o canal, nao so a cor.
 //! - Limite (`mark`): filete horizontal carmim (`--ac-mark-alert`), como a
-//!   marca de 10 % da regua de pressao.
+//!   marca de 10 % da regua de pressao. Uma faixa pode ter mais de um (CC9:
+//!   contexto com 70 % e 90 %).
+//! - Trecho marcado (`mark`, CC9): barra carmim de [`BAND_PX`] no rodape, sob
+//!   as amostras de um trecho (o sinal de loop nas tool calls/min). Forma e
+//!   posicao distinguem do limite (filete de 1 px na altura do valor), entao
+//!   a cor nao e o unico canal.
 //!
 //! O desenho e GtkSnapshot do proprio widget (caminho GSK, nada de cairo) com a
 //! cor CSS do no (`color` em sessions.css, que le so tokens). Cada serie e um
@@ -17,13 +22,15 @@
 //! repinta quando os valores ou a escala mudam ([`Line::set`]): com o ring
 //! cheio e o valor parado, um tick nao desenha nada.
 //!
-//! A parte sem GTK ([`nice_max`], [`points`], [`peak`]) e testavel sem display.
+//! A parte sem GTK ([`nice_max`], [`points`], [`peak`], [`runs_at_least`],
+//! [`band_spans`], [`mark_y`]) e testavel sem display.
 
 use agentcenter_core::HISTORY_LEN;
 use gtk::glib;
 use gtk::prelude::*;
 use gtk::subclass::prelude::*;
 use std::cell::{Cell, RefCell};
+use std::ops::Range;
 
 /// Opacidade da area sob a serie principal, sobre a cor do token: a linha
 /// carrega o dado, a area so da peso a forma.
@@ -32,6 +39,11 @@ pub const AREA_ALPHA: f32 = 0.22;
 pub const LINE_PX: f32 = 1.5;
 /// Traco e vao da segunda serie, em px.
 pub const DASH_PX: [f32; 2] = [4.0, 3.0];
+/// Altura da barra de trecho marcado, em px: mais grossa que o filete de
+/// limite (1 px) e sempre no rodape.
+pub const BAND_PX: i32 = 3;
+/// Largura minima da barra: uma amostra so ainda se ve.
+pub const BAND_MIN_PX: f32 = 2.0;
 
 /// Teto "redondo" da escala: o menor 1, 2 ou 5 x 10^k (ou, com `binary`, a
 /// menor potencia de 2) que cobre `max`, nunca abaixo de `floor`. Sem leitura
@@ -94,6 +106,58 @@ pub fn points(values: &[f32], cap: usize, max: f64, w: f32, h: f32) -> Vec<Vec<(
         runs.push(run);
     }
     runs
+}
+
+/// Trechos de indices consecutivos em que `values` fica `>= at`. `NaN` (sem
+/// leitura) e valor abaixo fecham o trecho: lacuna nunca vira trecho.
+pub fn runs_at_least(values: &[f32], at: f32) -> Vec<Range<usize>> {
+    let mut runs = Vec::new();
+    let mut start = None;
+    for (i, v) in values.iter().enumerate() {
+        match (v.is_finite() && *v >= at, start) {
+            (true, None) => start = Some(i),
+            (false, Some(a)) => {
+                runs.push(a..i);
+                start = None;
+            }
+            _ => {}
+        }
+    }
+    if let Some(a) = start {
+        runs.push(a..values.len());
+    }
+    runs
+}
+
+/// Faixas horizontais `(x0, x1)` em px de trechos de amostras, na mesma
+/// posicao de [`points`] (`len` amostras encostadas a direita de `cap`): meia
+/// amostra para cada lado, no minimo [`BAND_MIN_PX`], sempre dentro de `[0, w]`.
+pub fn band_spans(runs: &[Range<usize>], len: usize, cap: usize, w: f32) -> Vec<(f32, f32)> {
+    let cap = cap.max(len).max(2);
+    let step = w / (cap - 1) as f32;
+    let first = cap - len;
+    runs.iter()
+        .filter(|r| r.start < r.end && r.end <= len)
+        .map(|r| {
+            let x0 = (first + r.start) as f32 * step - step / 2.0;
+            let x1 = (first + r.end - 1) as f32 * step + step / 2.0;
+            let (mut x0, mut x1) = (x0.max(0.0), x1.min(w));
+            if x1 - x0 < BAND_MIN_PX {
+                let mid = (x0 + x1) / 2.0;
+                x0 = (mid - BAND_MIN_PX / 2.0).clamp(0.0, (w - BAND_MIN_PX).max(0.0));
+                x1 = (x0 + BAND_MIN_PX).min(w);
+            }
+            (x0, x1)
+        })
+        .collect()
+}
+
+/// Linha (px, de cima) do filete de um limite em `at` (fracao da escala)
+/// numa faixa de `height` px, com a mesma folga de [`LINE_PX`] da serie.
+pub fn mark_y(at: f64, height: i32) -> i32 {
+    let usable = height as f32 - LINE_PX;
+    let y = (usable - at.clamp(0.0, 1.0) as f32 * usable).round() as i32;
+    y.clamp(0, (height - 1).max(0))
 }
 
 /// Iguais bit a bit: `NaN == NaN` aqui (amostra ausente igual a ausente).
@@ -225,9 +289,16 @@ mod strip {
     #[derive(Default)]
     pub struct Strip {
         pub lines: RefCell<Vec<super::Line>>,
-        /// Fracao da escala onde fica o limite; `None` sem limite.
-        pub limit: Cell<Option<f64>>,
-        pub mark: RefCell<Option<gtk::Widget>>,
+        /// Fracao da escala de cada limite; vazio sem limite.
+        pub limits: RefCell<Vec<f64>>,
+        /// Um filete por limite; o primeiro nasce com a faixa, os outros so
+        /// quando uma faixa pede mais limites (nunca por tick).
+        pub marks: RefCell<Vec<gtk::Widget>>,
+        /// Trechos marcados (indices de amostra) e o comprimento e a
+        /// capacidade da serie a que se referem.
+        pub bands: RefCell<(Vec<Range<usize>>, usize, usize)>,
+        /// Uma barra por trecho, reaproveitadas; crescem so com mais trechos.
+        pub band_boxes: RefCell<Vec<gtk::Widget>>,
     }
 
     #[glib::object_subclass]
@@ -249,20 +320,20 @@ mod strip {
             obj.set_overflow(gtk::Overflow::Hidden);
             obj.set_focusable(false);
             obj.set_hexpand(true);
-            let m = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-            m.add_css_class("mark");
-            m.set_can_target(false);
-            m.set_visible(false);
+            let m = super::mark_box();
             m.set_parent(&*obj);
-            self.mark.replace(Some(m.upcast()));
+            self.marks.replace(vec![m]);
         }
 
         fn dispose(&self) {
             for l in self.lines.take() {
                 l.unparent();
             }
-            if let Some(m) = self.mark.take() {
+            for m in self.marks.take() {
                 m.unparent();
+            }
+            for b in self.band_boxes.take() {
+                b.unparent();
             }
         }
     }
@@ -279,21 +350,37 @@ mod strip {
             for l in self.lines.borrow().iter() {
                 l.size_allocate(&all, -1);
             }
-            if let (Some(m), Some(at)) = (self.mark.borrow().as_ref(), self.limit.get()) {
-                let usable = height as f32 - LINE_PX;
-                let y = (usable - at.clamp(0.0, 1.0) as f32 * usable).round() as i32;
+            for (m, at) in self.marks.borrow().iter().zip(self.limits.borrow().iter()) {
                 m.size_allocate(
-                    &gtk::Allocation::new(0, y.clamp(0, height - 1), width, 1),
+                    &gtk::Allocation::new(0, super::mark_y(*at, height), width, 1),
                     -1,
                 );
+            }
+            let (runs, len, cap) = &*self.bands.borrow();
+            let spans = super::band_spans(runs, *len, *cap, width as f32);
+            let y = (height - BAND_PX).max(0);
+            for (b, (x0, x1)) in self.band_boxes.borrow().iter().zip(spans) {
+                let x = x0.floor() as i32;
+                let w = (x1.ceil() as i32 - x).max(1);
+                b.size_allocate(&gtk::Allocation::new(x, y, w, BAND_PX.min(height)), -1);
             }
         }
     }
 }
 
+/// Filete de limite ou barra de trecho: `strip > box.mark`, carmim.
+fn mark_box() -> gtk::Widget {
+    let m = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    m.add_css_class("mark");
+    m.set_can_target(false);
+    m.set_visible(false);
+    m.upcast()
+}
+
 glib::wrapper! {
-    /// Trilho com ate duas series e um limite. CSS: `strip`, `strip > line`,
-    /// `strip > box.mark`; `strip.alert` quando a ultima leitura passa do limite.
+    /// Trilho com ate duas series, limites e trechos marcados. CSS: `strip`,
+    /// `strip > line`, `strip > box.mark` (limite e trecho); `strip.alert`
+    /// quando a ultima leitura passa do limite.
     pub struct Strip(ObjectSubclass<strip::Strip>)
         @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
@@ -308,7 +395,7 @@ impl Strip {
         for class in ["primary", "secondary"].iter().take(series) {
             let l = Line::new(class);
             // Antes da marca na ordem dos filhos: a marca de limite fica por cima.
-            l.insert_before(&s, imp.mark.borrow().as_ref());
+            l.insert_before(&s, imp.marks.borrow().first());
             lines.push(l);
         }
         imp.lines.replace(lines);
@@ -318,17 +405,63 @@ impl Strip {
     /// Valores de cada serie (na ordem do `new`), topo da escala e limite
     /// (valor na escala, ou `None`). Devolve se alguma serie repintou.
     pub fn set(&self, series: &[&[f32]], max: f64, cap: usize, limit: Option<f64>) -> bool {
+        self.set_marked(series, max, cap, limit.as_slice(), &[])
+    }
+
+    /// [`Strip::set`] com varios limites (valores na escala; acima de `max`
+    /// ficam de fora) e trechos marcados no rodape (`bands`: indices das
+    /// amostras de `series[0]`, ver [`runs_at_least`]). Filetes e barras so
+    /// nascem quando uma faixa pede mais do que ja tem; com o mesmo desenho,
+    /// nada e realocado. Devolve se alguma serie repintou.
+    pub fn set_marked(
+        &self,
+        series: &[&[f32]],
+        max: f64,
+        cap: usize,
+        limits: &[f64],
+        bands: &[Range<usize>],
+    ) -> bool {
         let imp = self.imp();
         let mut changed = false;
         for (l, v) in imp.lines.borrow().iter().zip(series) {
             changed |= l.set(v, max, cap);
         }
-        let at = limit.filter(|l| *l <= max).map(|l| l / max);
-        if imp.limit.get() != at {
-            imp.limit.set(at);
-            if let Some(m) = imp.mark.borrow().as_ref() {
-                m.set_visible(at.is_some());
+        let mut relayout = false;
+        let at: Vec<f64> = limits
+            .iter()
+            .filter(|l| **l <= max && max > 0.0)
+            .map(|l| l / max)
+            .collect();
+        if *imp.limits.borrow() != at {
+            let mut marks = imp.marks.borrow_mut();
+            while marks.len() < at.len() {
+                let m = mark_box();
+                m.insert_before(self, None::<&gtk::Widget>);
+                marks.push(m);
             }
+            for (i, m) in marks.iter().enumerate() {
+                m.set_visible(i < at.len());
+            }
+            imp.limits.replace(at);
+            relayout = true;
+        }
+        let len = series.first().map_or(0, |s| s.len());
+        let next = (bands.to_vec(), len, cap);
+        if *imp.bands.borrow() != next {
+            let mut boxes = imp.band_boxes.borrow_mut();
+            while boxes.len() < bands.len() {
+                let b = mark_box();
+                b.add_css_class("band");
+                b.insert_before(self, None::<&gtk::Widget>);
+                boxes.push(b);
+            }
+            for (i, b) in boxes.iter().enumerate() {
+                b.set_visible(i < bands.len());
+            }
+            imp.bands.replace(next);
+            relayout = true;
+        }
+        if relayout {
             self.queue_allocate();
         }
         changed
@@ -432,5 +565,56 @@ mod tests {
         assert!(same(&[1.0, f32::NAN], &[1.0, f32::NAN]));
         assert!(!same(&[1.0, f32::NAN], &[1.0, 0.0]));
         assert!(!same(&[1.0], &[1.0, 1.0]));
+    }
+
+    #[test]
+    fn runs_at_least_breaks_on_gaps_and_values_below() {
+        let v = [0.0, 3.0, 5.0, f32::NAN, 4.0, 2.0, 3.0, 3.0];
+        assert_eq!(runs_at_least(&v, 3.0), vec![1..3, 4..5, 6..8]);
+        assert!(
+            runs_at_least(&[f32::NAN; 3], 0.0).is_empty(),
+            "lacuna nao e trecho"
+        );
+        assert!(runs_at_least(&[], 3.0).is_empty());
+    }
+
+    /// As barras ficam sob os mesmos x de [`points`]: meia amostra para cada
+    /// lado, encostadas a direita com o ring incompleto, presas em `[0, w]`.
+    // Um trecho so e o caso testado: a lista de um `Range`, nao uma faixa de 0 a 2.
+    #[allow(clippy::single_range_in_vec_init)]
+    #[test]
+    fn band_spans_follow_the_points_and_stay_inside() {
+        // 5 amostras de 5 num trilho de 100 px: passo 25.
+        let v = [0.0, 3.0, 3.0, 0.0, 3.0];
+        let runs = runs_at_least(&v, 3.0);
+        let p = points(&v, 5, 3.0, 100.0, 10.0);
+        let xs: Vec<f32> = p[0].iter().map(|(x, _)| *x).collect();
+        let spans = band_spans(&runs, 5, 5, 100.0);
+        assert_eq!(spans, vec![(12.5, 62.5), (87.5, 100.0)]);
+        assert!(spans[0].0 < xs[1] && xs[2] < spans[0].1);
+        // Incompleto: 2 de 5 encostadas a direita (x 75 e 100).
+        let spans = band_spans(&[0..2], 2, 5, 100.0);
+        assert_eq!(spans, vec![(62.5, 100.0)]);
+        // Uma amostra num ring de 600 em 300 px: ainda BAND_MIN_PX de largura.
+        let spans = band_spans(&[10..11], HISTORY_LEN, HISTORY_LEN, 300.0);
+        assert!(
+            (spans[0].1 - spans[0].0 - BAND_MIN_PX).abs() < 1e-4,
+            "{spans:?}"
+        );
+        // Trecho fora da serie e ignorado, nunca desenhado fora.
+        assert!(band_spans(&[3..9], 4, 4, 100.0).is_empty());
+        assert!(band_spans(&[0..0], 4, 4, 100.0).is_empty());
+    }
+
+    #[test]
+    fn mark_y_places_limits_on_the_scale() {
+        // 33 px de altura, 1,5 de folga: 31,5 uteis.
+        assert_eq!(mark_y(0.0, 33), 32, "zero no fundo");
+        assert_eq!(mark_y(1.0, 33), 0, "topo");
+        assert_eq!(mark_y(0.7, 33), 9);
+        assert_eq!(mark_y(0.9, 33), 3);
+        assert!(mark_y(0.9, 33) < mark_y(0.7, 33), "90 % acima de 70 %");
+        assert_eq!(mark_y(2.0, 33), 0, "acima da escala fica no topo");
+        assert_eq!(mark_y(0.5, 0), 0, "sem altura nao sai do trilho");
     }
 }

@@ -154,6 +154,24 @@ rule > box.mark {
   box-shadow: 0 0 0 1px var(--ac-track);
 }
 
+/* Barras da linha de sessao (CC8, docs/DESIGN.md secao 9): a mesma regua em
+ * tamanho de linha. Trilho de 4 px, o preenchimento em ambar (o consumo da
+ * propria sessao, segmento "agents"), marcas de limite em tinta como acima.
+ * Largura no codigo (session_row.rs: 40 px contexto e burn, 28 px CPU, PSS e
+ * swap; na densidade estreita contexto e burn descem para a linha 2 com
+ * 28 px). Sem animacao: o valor salta para a leitura nova. */
+rule.mini.row {
+  min-width: 0;
+  min-height: 4px;
+}
+
+/* Contexto a partir do handoff do vigia (SQUAD_CTX_PCT): carmim, "precisa de
+ * voce". A cor nao e o unico canal: a marca do handoff fica para tras do
+ * preenchimento e a pilula ao lado diz HANDOFF. */
+rule.mini.row.alert > box.segment.agents {
+  background-color: var(--ac-mark-alert);
+}
+
 /* Janela estreita (breakpoint de machine_header.rs, ate ~600 sp): a faixa
  * empilha os grupos e aperta o ar para nao comer a lista. Nada some. */
 .machine-header.narrow {

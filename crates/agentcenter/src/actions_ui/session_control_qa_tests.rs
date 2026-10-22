@@ -165,3 +165,109 @@ fn gtk_duplicate_confirmation_and_old_ack_leave_new_operation_untouched() {
         assert!(p.buttons.iter().all(|(_, b)| !b.is_sensitive()));
     });
 }
+
+/// Owner rule (22/10): no dead controls. Without a controllable session the
+/// panel shows only the reason; query/cancel appear only for an open operation.
+#[test]
+fn gtk_unsupported_selection_hides_every_control() {
+    gtk::test_synced(|| {
+        adw::init().unwrap();
+        let controls = SessionControls::new(true);
+        let p = &controls.panel;
+        controls.set_session(None);
+        assert!(p.buttons.iter().all(|(_, b)| !b.is_visible()));
+        assert!(!p.refresh_button.is_visible());
+        assert!(!p.query.is_visible());
+        assert!(!p.cancel.is_visible());
+        assert!(p.reason.is_visible());
+
+        let running = running_panel();
+        assert!(running.buttons.iter().all(|(_, b)| b.is_visible()));
+        assert!(running.query.is_visible());
+        assert!(running.cancel.is_visible());
+        // Moving to an unsupported selection keeps the open operation reachable.
+        running.controller.borrow_mut().select(None);
+        running.render();
+        assert!(running.buttons.iter().all(|(_, b)| !b.is_visible()));
+        assert!(running.query.is_visible());
+    });
+}
+
+static AUTHENTICATIONS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Counts discovery + authentication without touching a real runtime directory.
+fn counting_authenticate(
+    _: &agentcenter_core::Session,
+) -> Result<(agentcenter_core::control::pi::Endpoint, Session), &'static str> {
+    AUTHENTICATIONS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    Err("synthetic: no extension")
+}
+
+fn authentications() -> usize {
+    AUTHENTICATIONS.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// A sampled Pi session from the typical fixture; `tick` changes only metrics.
+fn sampled_pi(session_id: &str, tick: u32) -> agentcenter_core::Session {
+    let snap: serde_json::Value = serde_json::from_str(include_str!(
+        "../../tests/fixtures/snapshots/tipico-40.json"
+    ))
+    .unwrap();
+    let mut s = snap["sessions"][0].clone();
+    s["agent"] = "pi".into();
+    s["starttime"] = 4242.into();
+    s["overlay"]["agent_session_id"] = session_id.into();
+    s["cpu_pct"] = (f64::from(tick) / 10.0).into();
+    s["procs"] = (tick + 1).into();
+    serde_json::from_value(s).unwrap()
+}
+
+/// Runs queued futures until the panel has no discovery in flight.
+fn settle(p: &Panel) {
+    let context = glib::MainContext::default();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while (p.busy.get() || context.pending()) && std::time::Instant::now() < deadline {
+        context.iteration(false);
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    assert!(!p.busy.get(), "discovery did not settle");
+}
+
+/// Detail calls `set_session` on every 1 Hz tick. A stable selection must not
+/// rediscover or authenticate again, and nothing may poll without an operation.
+#[test]
+fn gtk_stable_selection_ticks_do_not_rediscover_or_poll() {
+    gtk::test_synced(|| {
+        adw::init().unwrap();
+        let controls = SessionControls::new(true);
+        let p = &controls.panel;
+        p.authenticate.set(counting_authenticate);
+        let before = authentications();
+        controls.set_session(Some(&sampled_pi("native-a", 0)));
+        settle(p);
+        assert_eq!(authentications() - before, 1, "selection discovers once");
+        let epoch = p.epoch.get();
+        for tick in 1..=60 {
+            controls.set_session(Some(&sampled_pi("native-a", tick)));
+            settle(p);
+        }
+        assert_eq!(authentications() - before, 1, "ticks rediscovered");
+        assert_eq!(p.epoch.get(), epoch);
+        assert!(p.operation.borrow().is_none());
+        assert!(!p.refresh_pending.get());
+
+        // A different native identity is a new selection: exactly one more.
+        controls.set_session(Some(&sampled_pi("native-b", 61)));
+        settle(p);
+        assert_eq!(authentications() - before, 2);
+
+        // Recorded snapshot (fixture mode): never discovers, on any tick.
+        let recorded = SessionControls::new(false);
+        recorded.panel.authenticate.set(counting_authenticate);
+        for tick in 0..60 {
+            recorded.set_session(Some(&sampled_pi("native-a", tick)));
+            settle(&recorded.panel);
+        }
+        assert_eq!(authentications() - before, 2, "fixture mode discovered");
+    });
+}

@@ -53,6 +53,19 @@ installs the toolchain and calls it. It runs, in order:
 5. `cargo bench -p agentcenter-core --bench tick -- tick_fixture_500`,
    then `scripts/bench-gate.sh`
 
+Claude Code control (CC4) is exercised against a fake Herdr server on a
+private socket under `$HOME` (`/tmp` ancestors are refused as world-writable)
+and transcripts written by the test, never a real Herdr or Claude session:
+
+```sh
+cargo test -p agentcenter-core --test control_claude
+cargo test -p agentcenter-core --lib control::
+```
+
+An end-to-end run with the real `claude` binary in an isolated Herdr (temporary
+socket and `HOME`, `ANTHROPIC_BASE_URL` pointing at a local stub) is not part
+of the suite yet.
+
 To install your build for daily use, see [Install](README.md#install):
 `bash install.sh` from the checkout.
 

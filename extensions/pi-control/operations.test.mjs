@@ -229,3 +229,20 @@ test('cancel aborts only generation and never creates completed; busy/pending re
   finally { await f.close(); }
   for (const condition of ['busy', 'pending']) { const g = await fixture(); try { g[condition](); assert.equal(g.manager.dispatch(g.request).code, 'busy'); assert.equal(g.calls(), 0); } finally { await g.close(); } }
 });
+test('well-formed wrong nonce is unauthorized for every action without model call or record', async () => {
+  const f = await fixture();
+  try {
+    const real = f.request.instance_nonce;
+    const wrong = real.slice(0, -1) + (real.at(-1) === '0' ? '1' : '0');
+    assert.match(wrong, /^[0-9a-f]{64}$/);
+    assert.notEqual(wrong, real);
+    for (const action of ['handoff', 'compact', 'status', 'cancel']) {
+      const result = f.manager.dispatch({ ...f.request, action, instance_nonce: wrong });
+      assert.deepEqual([result.state, result.code], ['rejected', 'unauthorized'], action);
+    }
+    await tick();
+    assert.equal(f.calls(), 0);
+    assert.deepEqual(await readdir(f.root), []);
+    assert.equal(f.manager.dispatch({ ...f.request, action: 'status' }).code, 'unknown_operation');
+  } finally { await f.close(); }
+});
