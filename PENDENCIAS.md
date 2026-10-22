@@ -62,8 +62,15 @@ via Herdr (CC4), gauges por linha (CC8) e gráficos de cockpit no detalhe (CC9).
     evento de agente do Pi; e um segundo arme depois do prazo do `newSession`
     pode criar duas sessões novas se a troca antiga destravar. A identidade
     do Pi no Herdr por arquivo de sessão (`kind=path`) entrou sem revisão
-    independente; o E2E com Pi real e o teste cruzado Node→Rust não foram
-    feitos.
+    independente; o teste cruzado Node→Rust não foi feito. O E2E com Pi real
+    em Herdr isolado (feito depois do corte, fora deste snapshot) chegou a
+    `pickup_loaded` e confirmou o caminho `kind=path` byte a byte, mas achou
+    dois defeitos de segurança, BLOQUEADORES para ligar o pickup do Pi na GUI:
+    com texto digitado no editor do Pi, `agent.prompt` do Herdr junta o
+    rascunho ao comando e envia ao modelo; com o autocomplete de `/` aberto,
+    sai `//agentcenter-pickup` para o modelo. Nos dois casos o rascunho do
+    dono vai ao provedor sem pedido e o arme não é consumido. O botão segue
+    escondido no app (`pickup_not_integrated`).
   - CC7/CC7b (seção de controle): FIX_FIRST na rodada 1 corrigido (motivo
     sumindo, redescoberta escondendo a seção e o foco), rodada 2 sem
     veredito no corte. "Handoff + nova sessão" segue escondido no app
