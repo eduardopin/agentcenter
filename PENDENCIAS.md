@@ -63,7 +63,8 @@ via Herdr (CC4), gauges por linha (CC8) e gráficos de cockpit no detalhe (CC9).
     pode criar duas sessões novas se a troca antiga destravar. A identidade
     do Pi no Herdr por arquivo de sessão (`kind=path`) entrou sem revisão
     independente; o teste cruzado Node→Rust não foi feito. O E2E com Pi real
-    em Herdr isolado (feito depois do corte, fora deste snapshot) chegou a
+    em Herdr isolado (`scripts/e2e-pi-herdr.sh`, feito depois do corte; 1 de 4
+    testes passa, os outros 3 falham de propósito pelos defeitos abaixo) chegou a
     `pickup_loaded` e confirmou o caminho `kind=path` byte a byte, mas achou
     dois defeitos de segurança, BLOQUEADORES para ligar o pickup do Pi na GUI:
     com texto digitado no editor do Pi, `agent.prompt` do Herdr junta o
@@ -72,8 +73,13 @@ via Herdr (CC4), gauges por linha (CC8) e gráficos de cockpit no detalhe (CC9).
     dono vai ao provedor sem pedido e o arme não é consumido. O botão segue
     escondido no app (`pickup_not_integrated`).
   - CC7/CC7b (seção de controle): FIX_FIRST na rodada 1 corrigido (motivo
-    sumindo, redescoberta escondendo a seção e o foco), rodada 2 sem
-    veredito no corte. "Handoff + nova sessão" segue escondido no app
+    sumindo, redescoberta escondendo a seção e o foco); a rodada 2 deu
+    FIX_FIRST com duas regressões presentes no corte: trocar para uma sessão
+    sem controle enquanto a leitura de um Pi está em voo deixa a linha presa
+    em "Checking what this session supports…" (`refresh()` sem `render()`
+    no ramo de época trocada); e, depois de uma operação concluída, uma
+    confirmação rejeitada ("Session changed", "review a new confirmation")
+    some sem aviso porque o status visível tem precedência sobre o aviso. "Handoff + nova sessão" segue escondido no app
     (`pickup_not_integrated`) até ligar os adaptadores reais do CC5/CC6; o
     E2E GUI → adaptador real não existe. Abertos: `herdr_server` e o
     construtor de `Session` sem teste, `CLAUDE_CONFIG_DIR` ignorado pela GUI,
