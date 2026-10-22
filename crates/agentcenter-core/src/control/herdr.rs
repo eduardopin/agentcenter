@@ -18,7 +18,7 @@ use std::{
             net::UnixStream,
         },
     },
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{Duration, Instant},
 };
 
@@ -48,6 +48,48 @@ impl Target {
             tab_id: h.tab_id.clone()?,
             pane_id: h.pane_id.clone()?,
         })
+    }
+}
+/// Agent session a pane must report. Herdr 0.9 reports Claude Code by session
+/// ID (`kind:"id"`) and Pi by session file (`kind:"path"`); one kind never
+/// matches the other, and paths compare byte for byte (no canonicalization).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AgentSession<'a> {
+    Id(&'a str),
+    Path(&'a Path),
+}
+impl<'a> From<&'a str> for AgentSession<'a> {
+    fn from(id: &'a str) -> Self {
+        Self::Id(id)
+    }
+}
+impl<'a> From<&'a String> for AgentSession<'a> {
+    fn from(id: &'a String) -> Self {
+        Self::Id(id)
+    }
+}
+impl AgentSession<'_> {
+    /// Empty IDs and relative or empty paths are never an identity.
+    fn valid(self) -> bool {
+        match self {
+            Self::Id(id) => !id.is_empty(),
+            Self::Path(p) => p.is_absolute(),
+        }
+    }
+}
+/// What `agent.get` reported as the pane's agent session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ReportedSession {
+    Id(String),
+    Path(PathBuf),
+}
+impl ReportedSession {
+    fn is(&self, expected: AgentSession<'_>) -> bool {
+        match (self, expected) {
+            (Self::Id(a), AgentSession::Id(b)) => a == b,
+            (Self::Path(a), AgentSession::Path(b)) => a == b,
+            _ => false,
+        }
     }
 }
 #[derive(Debug, PartialEq, Eq)]
@@ -290,7 +332,7 @@ impl Endpoint {
         }
         Ok(())
     }
-    /// `agent.get` of one pane: only identity, status and session ID are read.
+    /// `agent.get` of one pane: only identity, status and agent session are read.
     fn agent_get(&self, pane_id: &str, end: Instant) -> Result<AgentInfo, Error> {
         let line = self.request("agent.get", json!({"target": pane_id}), end, false)?;
         let v: Value = serde_json::from_slice(&line).map_err(|_| Error::Invalid)?;
@@ -303,9 +345,13 @@ impl Endpoint {
         Ok(AgentInfo {
             agent: text("agent"),
             status: text("agent_status"),
-            session_id: (session["kind"] == "id")
-                .then(|| session["value"].as_str().map(str::to_string))
-                .flatten(),
+            session: session["value"]
+                .as_str()
+                .and_then(|v| match session["kind"].as_str() {
+                    Some("id") => Some(ReportedSession::Id(v.to_string())),
+                    Some("path") => Some(ReportedSession::Path(PathBuf::from(v))),
+                    _ => None,
+                }),
             pane_id: text("pane_id"),
             workspace_id: text("workspace_id"),
             tab_id: text("tab_id"),
@@ -313,8 +359,19 @@ impl Endpoint {
     }
     /// Fresh reads only: /proc identity, a single pane holding the pid
     /// (`agent.list` + `pane.process_info`), then `agent.get` of that pane for
-    /// agent type, explicit location, session ID and `idle`.
-    fn agent_checks(&self, t: &Target, session_id: &str, end: Instant) -> Result<(), Error> {
+    /// agent type, explicit location, agent session and `idle`.
+    fn agent_checks(&self, t: &Target, session: AgentSession, end: Instant) -> Result<(), Error> {
+        let a = self.pane_agent(t, end)?;
+        if !a.session.as_ref().is_some_and(|s| s.is(session)) {
+            return Err(Error::Session);
+        }
+        if a.status.as_deref() != Some("idle") {
+            return Err(Error::Busy);
+        }
+        process(t.pid, t.starttime)
+    }
+    /// The pane's agent after `validate`: same pane, location and adapter.
+    fn pane_agent(&self, t: &Target, end: Instant) -> Result<AgentInfo, Error> {
         self.validate(t, end)?;
         let a = self.agent_get(&t.pane_id, end)?;
         if a.pane_id.as_deref() != Some(t.pane_id.as_str())
@@ -324,16 +381,41 @@ impl Endpoint {
         {
             return Err(Error::Stale);
         }
-        if a.session_id.as_deref() != Some(session_id) {
-            return Err(Error::Session);
-        }
-        if a.status.as_deref() != Some("idle") {
-            return Err(Error::Busy);
-        }
-        process(t.pid, t.starttime)
+        Ok(a)
     }
-    /// Read-only capability probe for an agent pane bound to `session_id`.
-    pub fn check_agent(
+    /// Session ID and status the pane reports for the process in `t`, with the
+    /// same identity checks as a prompt (pid+starttime before and after, one
+    /// pane holding the pid at the same location, same adapter) but no
+    /// expected session: used to see a session change after `/clear`.
+    pub(crate) fn pane_session(
+        &self,
+        t: &Target,
+        timeout: Duration,
+    ) -> Result<(Option<String>, Option<String>), Error> {
+        let (session, status) = self.pane_reported(t, timeout)?;
+        let id = match session {
+            Some(ReportedSession::Id(id)) => Some(id),
+            _ => None,
+        };
+        Ok((id, status))
+    }
+    /// As [`Self::pane_session`], with the session of either kind; `None`
+    /// when the pane reports none (an agent without Herdr's integration).
+    pub(crate) fn pane_reported(
+        &self,
+        t: &Target,
+        timeout: Duration,
+    ) -> Result<(Option<ReportedSession>, Option<String>), Error> {
+        let end = inputs(t, timeout)?;
+        let a = self.pane_agent(t, end)?;
+        process(t.pid, t.starttime)?;
+        Ok((a.session, a.status))
+    }
+    /// One Escape to the pane, only while it still hosts `session_id` and the
+    /// agent is not `working` (an open dialog is dismissed, a turn is never
+    /// interrupted). Revalidated like a prompt; failure after the write begins
+    /// is [`Error::Unknown`].
+    pub(crate) fn escape(
         &self,
         t: &Target,
         session_id: &str,
@@ -343,24 +425,57 @@ impl Endpoint {
         if session_id.is_empty() {
             return Err(Error::Invalid);
         }
-        self.agent_checks(t, session_id, end)
+        let a = self.pane_agent(t, end)?;
+        if !a
+            .session
+            .as_ref()
+            .is_some_and(|s| s.is(AgentSession::Id(session_id)))
+        {
+            return Err(Error::Session);
+        }
+        if a.status.as_deref() == Some("working") {
+            return Err(Error::Busy);
+        }
+        process(t.pid, t.starttime)?;
+        self.request(
+            "agent.send_keys",
+            json!({"target": t.pane_id, "keys": ["esc"]}),
+            end,
+            true,
+        )?;
+        Ok(())
+    }
+    /// Read-only capability probe for an agent pane bound to `session`.
+    pub fn check_agent<'a>(
+        &self,
+        t: &Target,
+        session: impl Into<AgentSession<'a>>,
+        timeout: Duration,
+    ) -> Result<(), Error> {
+        let end = inputs(t, timeout)?;
+        let session = session.into();
+        if !session.valid() {
+            return Err(Error::Invalid);
+        }
+        self.agent_checks(t, session, end)
     }
     /// Revalidates everything immediately before one `agent.prompt`; any
     /// divergence returns before the effect. Crate-private: the text is closed
     /// by the adapter, never taken from a client. Failure after the write
     /// begins is [`Error::Unknown`]; there is no retry.
-    pub(crate) fn prompt(
+    pub(crate) fn prompt<'a>(
         &self,
         t: &Target,
-        session_id: &str,
+        session: impl Into<AgentSession<'a>>,
         text: &str,
         timeout: Duration,
     ) -> Result<(), Error> {
         let end = inputs(t, timeout)?;
-        if session_id.is_empty() || text.is_empty() || text.chars().any(char::is_control) {
+        let session = session.into();
+        if !session.valid() || text.is_empty() || text.chars().any(char::is_control) {
             return Err(Error::Invalid);
         }
-        self.agent_checks(t, session_id, end)?;
+        self.agent_checks(t, session, end)?;
         let line = self.request(
             "agent.prompt",
             json!({"target": t.pane_id, "text": text}),
@@ -377,7 +492,7 @@ impl Endpoint {
 struct AgentInfo {
     agent: Option<String>,
     status: Option<String>,
-    session_id: Option<String>,
+    session: Option<ReportedSession>,
     pane_id: Option<String>,
     workspace_id: Option<String>,
     tab_id: Option<String>,

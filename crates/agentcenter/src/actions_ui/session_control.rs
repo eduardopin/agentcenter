@@ -11,18 +11,38 @@ use std::{
 pub enum Action {
     Handoff,
     Compact,
+    /// Composite handoff, new session in the same pane, pickup (CC5/CC6).
+    Pickup,
 }
 impl Action {
     pub fn label(self) -> &'static str {
         match self {
             Self::Handoff => "Handoff",
             Self::Compact => "Compact",
+            Self::Pickup => "Handoff + new session",
         }
     }
 }
 
+/// Which native adapter owns the session. Decides evidence and resume route.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Agent {
+    Pi,
+    Claude,
+}
+
+/// Closed reason codes the panel turns into its single line of text.
+pub mod reason {
+    /// Pi runs outside herdr: Pi only allows a new session inside a command,
+    /// which CC5 sends through the herdr pane (owner, 22/10).
+    pub const PI_OUTSIDE_HERDR: &str = "pi_outside_herdr";
+    /// The composite pickup adapter (CC5 Pi, CC6 Claude) is not in this build.
+    pub const PICKUP_NOT_INTEGRATED: &str = "pickup_not_integrated";
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Session {
+    pub agent: Agent,
     /// Opaque native session identity, never a PID or display name alone.
     pub identity: String,
     pub revision: String,
@@ -33,6 +53,7 @@ pub struct Session {
     /// None means supported; otherwise show this reason inline, not only a tooltip.
     pub handoff_disabled: Option<String>,
     pub compact_disabled: Option<String>,
+    pub pickup_disabled: Option<String>,
     pub cancel_supported: bool,
 }
 impl Session {
@@ -77,6 +98,7 @@ impl Session {
             })
         };
         Some(Self {
+            agent: Agent::Pi,
             identity: serde_json::json!([manager, id, file]).to_string(),
             revision: revision.to_owned(),
             name,
@@ -84,6 +106,7 @@ impl Session {
             expected: expected.clone(),
             handoff_disabled: reason("handoff")?,
             compact_disabled: reason("compact")?,
+            pickup_disabled: Some(reason::PICKUP_NOT_INTEGRATED.into()),
             cancel_supported: ["handoff", "compact"].iter().all(|action| {
                 metadata["capabilities"][action]["cancel_supported"].as_bool() == Some(true)
             }),
@@ -93,12 +116,16 @@ impl Session {
         if self.identity.is_empty() || self.revision.is_empty() {
             return Some("Session identity or revision is unavailable");
         }
-        if action == Action::Handoff && self.handoff_destination.is_empty() {
+        if self.agent == Agent::Pi
+            && action == Action::Handoff
+            && self.handoff_destination.is_empty()
+        {
             return Some("Private handoff destination is unavailable");
         }
         match action {
             Action::Handoff => self.handoff_disabled.as_deref(),
             Action::Compact => self.compact_disabled.as_deref(),
+            Action::Pickup => self.pickup_disabled.as_deref(),
         }
     }
 }
@@ -109,20 +136,45 @@ pub struct Confirmation {
     action: Action,
     generation: u64,
 }
+impl Session {
+    /// How the owner resumes the old session by hand if a pickup stops.
+    pub fn resume_route(&self) -> String {
+        let id = self.expected["sessionId"].as_str().unwrap_or("");
+        match self.agent {
+            Agent::Pi => format!(
+                "open the old session file {} in Pi",
+                self.expected["sessionFile"].as_str().unwrap_or("")
+            ),
+            Agent::Claude => format!("run claude --resume {id}"),
+        }
+    }
+}
 impl Confirmation {
     pub fn body(&self) -> String {
-        let effect = match self.action {
-            Action::Handoff => format!(
+        let s = &self.session;
+        let effect = match (self.action, s.agent) {
+            (Action::Handoff, Agent::Pi) => format!(
                 "Sends projected session text to the provider currently selected in Pi to generate a handoff. Saves it in the private directory {}. The producer chooses the filename; the GUI does not read its content.",
-                self.session.handoff_destination
+                s.handoff_destination
             ),
-            Action::Compact => {
+            (Action::Handoff, Agent::Claude) => "Types /clear-pickup handoff into this Claude Code pane in herdr. Claude writes the handoff file; the GUI records its path, size and sha256, never its content.".into(),
+            (Action::Compact, Agent::Pi) => {
                 "Compacts native context. The raw native history remains available.".into()
             }
+            (Action::Compact, Agent::Claude) => "Types /compact into this Claude Code pane in herdr. The transcript keeps the raw history.".into(),
+            (Action::Pickup, _) => format!(
+                "1. Writes a handoff and waits for it to be saved.\n2. Starts a new session in the same pane.\n3. Loads the handoff into the new session.\nThe old session's history stays on disk. If a step fails or its result is unknown, the old session is kept: {}.",
+                s.resume_route()
+            ),
+        };
+        let scope = if self.action == Action::Pickup {
+            "Clears this pane into a new session only after the handoff is saved."
+        } else {
+            "Does not clear, create, close, shut down or resume a session."
         };
         format!(
-            "Session: {}\nIdentity: {}\nRevision: {}\n\n{effect}\nThis may consume tokens with the current model. Does not clear, create, close, shut down or resume a session.",
-            self.session.name, self.session.identity, self.session.revision
+            "Session: {}\nIdentity: {}\nRevision: {}\n\n{effect}\nThis may consume tokens with the current model. {scope}",
+            s.name, s.identity, s.revision
         )
     }
 }
@@ -146,6 +198,20 @@ pub enum Evidence {
         previous_leaf_id: serde_json::Value,
         entry_id: String,
     },
+    /// Claude handoff file verified by the core: identity and digest only.
+    Persisted {
+        path: String,
+        size: u64,
+        sha256: String,
+    },
+    /// Claude manual `compact_boundary`, epoch ms.
+    Compacted { boundary_ms: u64 },
+    /// Pickup reached pickup_loaded: the new session and the handoff it read.
+    Picked {
+        new_session_id: String,
+        handoff_path: String,
+        sha256: String,
+    },
 }
 // Lexical validation only: filesystem authentication remains the core's job.
 fn canonical_absolute(value: &str) -> bool {
@@ -159,6 +225,31 @@ fn canonical_absolute(value: &str) -> bool {
 impl Evidence {
     fn valid_for(&self, request: &Request) -> bool {
         let s = &request.session;
+        if let Self::Picked {
+            new_session_id,
+            handoff_path,
+            sha256,
+        } = self
+        {
+            return request.action == Action::Pickup
+                && !new_session_id.is_empty()
+                && s.expected["sessionId"].as_str() != Some(new_session_id.as_str())
+                && canonical_absolute(handoff_path)
+                && sha256.len() == 64
+                && sha256.bytes().all(|b| b.is_ascii_hexdigit());
+        }
+        if request.action == Action::Pickup {
+            return false;
+        }
+        if s.agent == Agent::Claude {
+            return match (request.action, self) {
+                (Action::Handoff, Self::Persisted { path, sha256, .. }) => {
+                    canonical_absolute(path) && sha256.len() == 64
+                }
+                (Action::Compact, Self::Compacted { boundary_ms }) => *boundary_ms > 0,
+                _ => false,
+            };
+        }
         match (request.action, self) {
             (Action::Handoff, Self::Handoff { path, expected }) => {
                 let p = std::path::Path::new(path);
@@ -245,6 +336,8 @@ pub fn status_from_reply(request: &Request, reply: &serde_json::Value) -> Status
 pub enum Status {
     Requested,
     Accepted,
+    /// Typed into the pane; waiting for transcript evidence (Claude).
+    Sent,
     Running,
     Completed(Evidence),
     Refused(String),
@@ -264,6 +357,18 @@ impl Status {
             Self::Requested => "Requested — completion not confirmed".into(),
             Self::Accepted => "Accepted — completion not confirmed".into(),
             Self::Running => "Running — completion not confirmed".into(),
+            Self::Sent => {
+                "Sent to the pane — waiting for evidence, completion not confirmed".into()
+            }
+            Self::Completed(Evidence::Persisted { path, size, .. }) => {
+                format!("Saved: {path} ({size} bytes)")
+            }
+            Self::Completed(Evidence::Compacted { .. }) => "Native compact persisted".into(),
+            Self::Completed(Evidence::Picked {
+                new_session_id,
+                handoff_path,
+                ..
+            }) => format!("New session {new_session_id} loaded the handoff {handoff_path}"),
             Self::Completed(Evidence::Handoff { path, .. }) => format!("Saved: {path}"),
             Self::Completed(Evidence::Compact { entry_id, .. }) => {
                 format!("Native compact persisted: {entry_id}")
@@ -355,7 +460,10 @@ impl Controller {
         if matches!(status, Status::Requested)
             || matches!(
                 (&*previous, &status),
-                (Status::Running | Status::Unknown, Status::Accepted)
+                (
+                    Status::Running | Status::Sent | Status::Unknown,
+                    Status::Accepted
+                ) | (Status::Unknown, Status::Sent)
             )
         {
             return false;
@@ -402,9 +510,105 @@ impl Controller {
 
 /// Off-thread discovery + authentication of one sampled session.
 /// A seam so tests count calls without touching a real runtime directory.
-type Authenticate = fn(
-    &agentcenter_core::Session,
-) -> Result<(agentcenter_core::control::pi::Endpoint, Session), &'static str>;
+pub type Authenticate = fn(&agentcenter_core::Session) -> Result<(Backend, Session), &'static str>;
+
+/// Authenticated channel to one native session. Used only off the GTK thread.
+#[derive(Debug, Clone)]
+pub enum Backend {
+    Pi(Box<agentcenter_core::control::pi::Endpoint>),
+    /// Claude Code in a herdr pane: the pinned herdr server (CC4).
+    Claude(agentcenter_core::control::herdr::Endpoint),
+}
+
+pub use agentcenter_core::control::pickup::{Progress, Stage};
+
+/// Composite handoff-pickup adapter: CC5 (Pi inside a herdr pane) and CC6
+/// (Claude Code in herdr) implement it. Called only inside the serialized
+/// blocking worker, never on the GTK thread. `start` sends the effect once;
+/// `status` reads the SAME operation ID and never sends again. Stages advance
+/// strictly in order; a failed or unknown pickup reports where it stopped and
+/// the old session (control/pickup.rs).
+pub trait PickupPort: Send {
+    fn start(&mut self, operation_id: &str) -> Result<Progress, &'static str>;
+    fn status(&mut self, operation_id: &str) -> Result<Progress, &'static str>;
+}
+
+/// Builds the adapter for one confirmed pickup request. Build only, no I/O:
+/// it runs on the GTK thread; sockets and transcripts belong in start/status.
+///
+/// Integration point for CC5/CC6: replace [`pickup_not_integrated`] in
+/// `SessionControls::new` with the real adapters and stop setting
+/// [`reason::PICKUP_NOT_INTEGRATED`] in `authenticated_session`/`claude_session`.
+pub type PickupConnect =
+    fn(&Backend, &agentcenter_core::Session, &Request) -> Result<Box<dyn PickupPort>, &'static str>;
+
+/// Production default until CC5/CC6 are integrated: never reached, because
+/// discovery hides the pickup button with `pickup_not_integrated`.
+pub fn pickup_not_integrated(
+    _: &Backend,
+    _: &agentcenter_core::Session,
+    _: &Request,
+) -> Result<Box<dyn PickupPort>, &'static str> {
+    Err("Pickup adapter is not integrated")
+}
+
+/// The six stages in their only order.
+pub const STAGES: [Stage; 6] = [
+    Stage::HandoffRunning,
+    Stage::HandoffPersisted,
+    Stage::Clearing,
+    Stage::NewSessionConfirmed,
+    Stage::PickupSent,
+    Stage::PickupLoaded,
+];
+fn stage_index(stage: Stage) -> usize {
+    STAGES.iter().position(|s| *s == stage).unwrap_or(0)
+}
+pub fn stage_name(stage: Stage) -> &'static str {
+    match stage {
+        Stage::HandoffRunning => "Writing the handoff",
+        Stage::HandoffPersisted => "Handoff saved",
+        Stage::Clearing => "Clearing the pane",
+        Stage::NewSessionConfirmed => "New session confirmed",
+        Stage::PickupSent => "Pickup sent",
+        Stage::PickupLoaded => "Handoff loaded",
+    }
+}
+
+/// Common pickup progress as UI status. Success needs pickup_loaded with a
+/// new session ID and a persisted handoff; anything else is not completion.
+pub fn status_from_progress(request: &Request, p: &Progress) -> Status {
+    use agentcenter_core::control::State;
+    if request.action != Action::Pickup
+        || p.operation_id != request.operation_id
+        || request.session.expected["sessionId"].as_str() != Some(p.old_session.session_id.as_str())
+    {
+        return Status::Unknown;
+    }
+    match p.state {
+        State::Accepted => Status::Accepted,
+        State::Running => Status::Running,
+        State::Rejected => Status::Refused(p.code.into()),
+        State::Failed => Status::Failed(p.code.into()),
+        State::Cancelled => Status::Cancelled,
+        State::Unknown => Status::Unknown,
+        State::Completed => match (&p.handoff, &p.new_session_id) {
+            (Some(a), Some(id)) if p.stage == Stage::PickupLoaded => {
+                let e = Evidence::Picked {
+                    new_session_id: id.clone(),
+                    handoff_path: a.path.to_string_lossy().into_owned(),
+                    sha256: a.sha256.clone(),
+                };
+                if e.valid_for(request) {
+                    Status::Completed(e)
+                } else {
+                    Status::Unknown
+                }
+            }
+            _ => Status::Unknown,
+        },
+    }
+}
 
 /// GTK owns presentation only; all discovery and socket work runs off-thread.
 pub struct SessionControls {
@@ -418,7 +622,12 @@ struct Panel {
     buttons: Vec<(Action, gtk::Button)>,
     query: gtk::Button,
     cancel: gtk::Button,
-    refresh_button: gtk::Button,
+    /// Last herdr pane status seen for the selection; a change rediscovers.
+    activity: RefCell<Option<String>>,
+    /// The one line that explains a failed discovery or dispatch for this
+    /// selection. Only `render` writes the status line; callers set this.
+    notice: RefCell<Option<String>>,
+    query_pending: Cell<bool>,
     completed_at: RefCell<Option<String>>,
     refresh_pending: Cell<bool>,
     cancel_pending: Cell<bool>,
@@ -426,14 +635,169 @@ struct Panel {
     native: RefCell<Option<agentcenter_core::Session>>,
     operation: RefCell<Option<TransportOperation>>,
     busy: Cell<bool>,
+    /// The window whose activation rediscovers, with its handler: one at a
+    /// time, dropped on unrealize (re-parenting must not stack handlers).
+    active: RefCell<Option<(glib::WeakRef<gtk::Window>, glib::SignalHandlerId)>>,
+    /// `busy` is a capability read (refresh), not an effect in flight.
+    discovering: Cell<bool>,
+    /// A confirmation accepted while a rediscovery was in flight; it is
+    /// dispatched (and revalidated) as soon as that read returns.
+    parked: RefCell<Option<Confirmation>>,
     epoch: Cell<u64>,
     endpoint_key: RefCell<Option<String>>,
     authenticate: Cell<Authenticate>,
+    /// Polling cadence while an operation is accepted/running/sent.
+    poll: Cell<std::time::Duration>,
+    pickup_connect: Cell<PickupConnect>,
+    /// Last pickup progress, for its own operation ID only.
+    progress: RefCell<Option<Progress>>,
+    stages: StageList,
+    /// What was last announced to the screen reader (op, stage, status).
+    announced: RefCell<Option<String>>,
+    /// Announcements in order (bounded), read by the GTK tests.
+    announcements: RefCell<Vec<String>>,
+}
+/// The six pickup stages, one row each: number, name, state in words.
+struct StageList {
+    widget: gtk::Box,
+    title: gtk::Label,
+    rows: Vec<StageRow>,
+}
+struct StageRow {
+    widget: gtk::Box,
+    state: gtk::Label,
+    check: gtk::Image,
+}
+impl StageList {
+    fn new() -> Self {
+        let widget = gtk::Box::builder()
+            .orientation(gtk::Orientation::Vertical)
+            .spacing(4)
+            .accessible_role(gtk::AccessibleRole::List)
+            .visible(false)
+            .build();
+        let title = gtk::Label::new(None);
+        title.set_xalign(0.0);
+        title.set_wrap(true);
+        title.add_css_class("detail-caption");
+        title.add_css_class("numeric");
+        widget.append(&title);
+        widget.update_relation(&[gtk::accessible::Relation::LabelledBy(&[title.upcast_ref()])]);
+        let rows = STAGES
+            .iter()
+            .enumerate()
+            .map(|(i, stage)| {
+                let row = gtk::Box::builder()
+                    .orientation(gtk::Orientation::Horizontal)
+                    .spacing(8)
+                    .accessible_role(gtk::AccessibleRole::ListItem)
+                    .build();
+                let number = gtk::Label::new(Some(&(i + 1).to_string()));
+                number.set_width_chars(2);
+                number.set_xalign(1.0);
+                number.add_css_class("numeric");
+                number.add_css_class("dim-label");
+                let name = gtk::Label::new(Some(stage_name(*stage)));
+                name.set_xalign(0.0);
+                name.set_hexpand(true);
+                name.set_wrap(true);
+                name.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+                let check = gtk::Image::from_icon_name("object-select-symbolic");
+                check.set_accessible_role(gtk::AccessibleRole::Presentation);
+                check.set_visible(false);
+                let state = gtk::Label::new(None);
+                state.set_valign(gtk::Align::Center);
+                for w in [
+                    number.upcast_ref::<gtk::Widget>(),
+                    name.upcast_ref(),
+                    check.upcast_ref(),
+                    state.upcast_ref(),
+                ] {
+                    row.append(w);
+                }
+                widget.append(&row);
+                StageRow {
+                    widget: row,
+                    state,
+                    check,
+                }
+            })
+            .collect();
+        Self {
+            widget,
+            title,
+            rows,
+        }
+    }
+}
+/// What a stage row says, in words (colour only repeats it).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StageMark {
+    Done,
+    /// The current stage of an operation still in flight: amber.
+    Now,
+    /// Where a failed, refused or cancelled pickup stopped: crimson.
+    Stopped,
+    /// Where an unknown pickup was last seen: crimson.
+    Unknown,
+    /// pickup_loaded with evidence: the only success mark (check icon).
+    Loaded,
+    Pending,
+    NotReached,
+}
+impl StageMark {
+    fn text(self) -> &'static str {
+        match self {
+            Self::Done => "done",
+            Self::Now => "NOW",
+            Self::Stopped => "STOPPED",
+            Self::Unknown => "UNKNOWN",
+            Self::Loaded => "loaded",
+            Self::Pending => "pending",
+            Self::NotReached => "not reached",
+        }
+    }
+}
+/// The mark of every stage for one progress report and its UI status.
+pub fn stage_marks(progress: &Progress, status: &Status) -> [StageMark; 6] {
+    let at = stage_index(progress.stage);
+    let loaded = matches!(status, Status::Completed(Evidence::Picked { .. }))
+        && progress.stage == Stage::PickupLoaded
+        && progress
+            .new_session_id
+            .as_deref()
+            .is_some_and(|s| !s.is_empty());
+    let stopped = match status {
+        Status::Unknown => Some(StageMark::Unknown),
+        Status::Failed(_) | Status::Refused(_) | Status::Cancelled => Some(StageMark::Stopped),
+        // Completed without pickup evidence is never success.
+        Status::Completed(_) if !loaded => Some(StageMark::Unknown),
+        _ => None,
+    };
+    std::array::from_fn(|i| match i.cmp(&at) {
+        std::cmp::Ordering::Less => StageMark::Done,
+        std::cmp::Ordering::Equal if loaded => StageMark::Loaded,
+        std::cmp::Ordering::Equal => stopped.unwrap_or(StageMark::Now),
+        std::cmp::Ordering::Greater if stopped.is_some() => StageMark::NotReached,
+        std::cmp::Ordering::Greater => StageMark::Pending,
+    })
 }
 impl SessionControls {
     pub fn new(live: bool) -> Self {
         let widget = gtk::Box::new(gtk::Orientation::Vertical, 8);
-        let buttons = [Action::Handoff, Action::Compact]
+        // The section holds focus only when nothing in it can (keep_focus);
+        // once focus moves on it is no Tab stop again.
+        widget.update_property(&[gtk::accessible::Property::Label("Session controls")]);
+        let held = gtk::EventControllerFocus::new();
+        held.connect_is_focus_notify(|c| {
+            if !c.is_focus()
+                && let Some(w) = c.widget()
+            {
+                w.set_focusable(false);
+            }
+        });
+        widget.add_controller(held);
+        let buttons = [Action::Handoff, Action::Compact, Action::Pickup]
             .into_iter()
             .map(|a| {
                 let b = gtk::Button::with_label(&format!("{}…", a.label()));
@@ -442,12 +806,22 @@ impl SessionControls {
                 (a, b)
             })
             .collect();
+        let stages = StageList::new();
+        widget.append(&stages.widget);
         let reason = text("Select a session");
+        // Tab into the selectable status line selects it all (copy the path);
+        // the highlight leaves with the focus instead of lingering.
+        let read = gtk::EventControllerFocus::new();
+        read.connect_leave(|c| {
+            if let Some(l) = c.widget().and_downcast::<gtk::Label>() {
+                l.select_region(0, 0);
+            }
+        });
+        reason.add_controller(read);
         widget.append(&reason);
         let query = gtk::Button::with_label("Query operation");
         let cancel = gtk::Button::with_label("Request cancellation");
-        let refresh_button = gtk::Button::with_label("Refresh capabilities");
-        for b in [&query, &cancel, &refresh_button] {
+        for b in [&query, &cancel] {
             b.set_height_request(44);
             widget.append(b);
         }
@@ -458,7 +832,9 @@ impl SessionControls {
             buttons,
             query,
             cancel,
-            refresh_button,
+            activity: RefCell::new(None),
+            notice: RefCell::new(None),
+            query_pending: Cell::new(false),
             completed_at: RefCell::new(None),
             refresh_pending: Cell::new(false),
             cancel_pending: Cell::new(false),
@@ -466,9 +842,18 @@ impl SessionControls {
             native: RefCell::new(None),
             operation: RefCell::new(None),
             busy: Cell::new(false),
+            active: RefCell::new(None),
+            discovering: Cell::new(false),
+            parked: RefCell::new(None),
             epoch: Cell::new(0),
             endpoint_key: RefCell::new(None),
             authenticate: Cell::new(authenticated_session),
+            poll: Cell::new(std::time::Duration::from_millis(300)),
+            pickup_connect: Cell::new(pickup_not_integrated),
+            progress: RefCell::new(None),
+            stages,
+            announced: RefCell::new(None),
+            announcements: RefCell::new(Vec::new()),
         });
         for (action, b) in &panel.buttons {
             let weak = Rc::downgrade(&panel);
@@ -488,16 +873,38 @@ impl SessionControls {
                 if let Some(p) = weak.upgrade() {
                     if action == agentcenter_core::control::pi::Action::Cancel {
                         p.request_cancellation();
+                    } else if p.busy.get() {
+                        // Never a dead click: run right after the read in flight.
+                        p.query_pending.set(true);
                     } else {
                         p.reconcile(action);
                     }
                 }
             });
         }
+        // No refresh button: capabilities are rediscovered off-thread when the
+        // window regains focus (and on selection, see set_session).
         let weak = Rc::downgrade(&panel);
-        panel.refresh_button.connect_clicked(move |_| {
+        widget.connect_realize(move |w| {
+            let Some(p) = weak.upgrade() else { return };
+            p.forget_window();
+            let Some(window) = w.root().and_downcast::<gtk::Window>() else {
+                return;
+            };
+            let weak = weak.clone();
+            let id = window.connect_is_active_notify(move |window| {
+                if window.is_active()
+                    && let Some(p) = weak.upgrade()
+                {
+                    p.rediscover();
+                }
+            });
+            p.active.replace(Some((window.downgrade(), id)));
+        });
+        let weak = Rc::downgrade(&panel);
+        widget.connect_unrealize(move |_| {
             if let Some(p) = weak.upgrade() {
-                p.refresh();
+                p.forget_window();
             }
         });
         panel.render();
@@ -513,45 +920,185 @@ impl SessionControls {
                 s.overlay.as_ref().and_then(|o| o.agent_session_id.clone()),
             )
         };
+        let activity = session.and_then(|s| s.overlay.as_ref()?.herdr.as_ref()?.status.clone());
         if p.native.borrow().as_ref().map(key) == session.map(key) {
+            // Same session: only a herdr status change (busy -> idle) may
+            // change capability. One rediscovery per change, never per tick;
+            // it reads this sample, not the one from the first selection.
+            if p.activity.replace(activity.clone()) != activity {
+                *p.native.borrow_mut() = session.cloned();
+                p.rediscover();
+            }
             return;
         }
+        p.activity.replace(activity);
         *p.native.borrow_mut() = session.cloned();
         p.epoch.set(p.epoch.get().wrapping_add(1));
         p.controller.borrow_mut().select(None);
         *p.endpoint_key.borrow_mut() = None;
-        let why = selection_blocker(p.live, session);
-        p.refresh_pending.set(why.is_empty());
+        p.notice.replace(None);
+        p.parked.replace(None);
+        let controllable = selection_blocker(p.live, session).is_empty();
+        p.refresh_pending.set(controllable);
+        // Render shows the blocker itself: the line and its visibility are
+        // decided together, never written after render (verifier B1).
         p.render();
-        p.reason.set_text(why);
-        if why.is_empty() {
+        if controllable {
             p.refresh();
         }
     }
+    /// Fixture/test seam: replaces discovery (synthetic sessions only).
+    #[allow(dead_code)] // used by examples/pi_controls_fixture.rs and tests
+    pub fn set_discovery(&self, discover: Authenticate) {
+        self.panel.authenticate.set(discover);
+    }
+    /// Pickup adapter seam: fakes in tests/fixtures, CC5/CC6 when integrated.
+    #[allow(dead_code)] // used by examples/pi_controls_fixture.rs and tests
+    pub fn set_pickup(&self, connect: PickupConnect) {
+        self.panel.pickup_connect.set(connect);
+    }
+    /// Polling cadence while an operation is in flight (fixtures/tests).
+    #[allow(dead_code)]
+    pub fn set_poll(&self, every: std::time::Duration) {
+        self.panel.poll.set(every);
+    }
+    /// Screen-reader announcements made so far, oldest first (bounded).
+    #[allow(dead_code)]
+    pub fn announcements(&self) -> Vec<String> {
+        self.panel.announcements.borrow().clone()
+    }
+    /// The stage marks currently rendered, if the pickup list is shown.
+    #[allow(dead_code)]
+    pub fn stage_marks(&self) -> Option<[StageMark; 6]> {
+        let p = &self.panel;
+        p.stages.widget.is_visible().then(|| {
+            let (progress, status, _) = p.visible_pickup()?;
+            Some(stage_marks(&progress, &status))
+        })?
+    }
 }
 impl Panel {
-    fn render(&self) {
-        let c = self.controller.borrow();
-        // Owner rule (22/10): a control the session cannot run is not shown.
-        // An unresolved operation stays reachable after the selection moves.
-        let supported = c.selection.is_some()
-            || selection_blocker(self.live, self.native.borrow().as_ref()).is_empty();
-        for (a, b) in &self.buttons {
-            b.set_visible(supported);
-            b.set_sensitive(!self.busy.get() && c.disabled_reason(*a).is_none());
+    fn forget_window(&self) {
+        if let Some((window, id)) = self.active.take()
+            && let Some(window) = window.upgrade()
+        {
+            window.disconnect(id);
         }
-        self.refresh_button.set_visible(supported);
-        self.query.set_visible(c.query().is_some());
-        self.cancel
-            .set_visible(c.query().is_some_and(|r| r.session.cancel_supported));
-        self.query
-            .set_sensitive(!self.busy.get() && c.query().is_some());
-        // A supported cancel may queue behind the one bounded read in flight.
-        // Polling must not make cancellation permanently inaccessible.
-        self.cancel.set_sensitive(
-            !c.cancel_requested && c.query().is_some_and(|r| r.session.cancel_supported),
-        );
-        if let Some(request) = c.query() {
+    }
+    /// Rediscovery outside a selection change (focus regained, pane status
+    /// changed). Skipped while an operation is unresolved: it keeps its own
+    /// request and the panel shows its state instead of the actions.
+    fn rediscover(self: &Rc<Self>) {
+        if self.controller.borrow().query().is_none()
+            && selection_blocker(self.live, self.native.borrow().as_ref()).is_empty()
+        {
+            self.refresh();
+        }
+    }
+    fn render(&self) {
+        if self.focus().as_ref() != Some(self.widget.upcast_ref()) {
+            self.widget.set_focusable(false);
+        }
+        let held = self.focus().is_some();
+        self.render_controls();
+        // Whatever leaves while focused (an action, Query/Cancel, the status
+        // line) must not take the focus with it: GTK leaves it on a hidden
+        // label, and drops it (None) when a button turns insensitive. The
+        // section itself only holds focus until a control comes back.
+        let lost = match self.window_focus() {
+            None => held,
+            Some(f) => {
+                self.contains(&f)
+                    && (!self.shows(&f) || f == *self.widget.upcast_ref::<gtk::Widget>())
+            }
+        };
+        if lost {
+            self.keep_focus();
+        }
+    }
+    fn window_focus(&self) -> Option<gtk::Widget> {
+        let window = self.widget.root().and_downcast::<gtk::Window>()?;
+        gtk::prelude::GtkWindowExt::focus(&window)
+    }
+    fn contains(&self, w: &gtk::Widget) -> bool {
+        w == self.widget.upcast_ref::<gtk::Widget>() || w.is_ancestor(&self.widget)
+    }
+    /// The window's focus widget, when it is in this section.
+    fn focus(&self) -> Option<gtk::Widget> {
+        self.window_focus().filter(|f| self.contains(f))
+    }
+    /// `w` and every parent up to the section are visible.
+    fn shows(&self, w: &gtk::Widget) -> bool {
+        let top: &gtk::Widget = self.widget.upcast_ref();
+        let mut at = Some(w.clone());
+        while let Some(x) = at {
+            if !x.is_visible() {
+                return false;
+            }
+            if &x == top {
+                return true;
+            }
+            at = x.parent();
+        }
+        false
+    }
+    /// Moves focus to the first control still shown, else to the status
+    /// line, else to the section itself (a Tab stop only while it holds it).
+    fn keep_focus(&self) {
+        let target = [&self.query, &self.cancel]
+            .into_iter()
+            .chain(self.buttons.iter().map(|(_, b)| b))
+            .map(|b| b.upcast_ref::<gtk::Widget>())
+            .chain([self.reason.upcast_ref()])
+            .find(|w| self.shows(w) && w.is_sensitive() && w.is_focusable())
+            .cloned();
+        match target {
+            Some(w) => {
+                w.grab_focus();
+                // A selectable label selects all its text on focus; the
+                // status line is read, not highlighted.
+                if w == *self.reason.upcast_ref::<gtk::Widget>() {
+                    self.reason.select_region(0, 0);
+                }
+            }
+            None => {
+                self.widget.set_focusable(true);
+                self.widget.grab_focus();
+            }
+        }
+    }
+    fn render_controls(&self) {
+        let c = self.controller.borrow();
+        // Rediscovering what is already on screen (window focus back, herdr
+        // status change) keeps it in place: no layout jump, focus stays on
+        // its control. Only the first read of a selection says "Checking".
+        let settled = c.selection.is_some() || self.notice.borrow().is_some();
+        let busy = self.busy.get() && !(self.discovering.get() && settled);
+        // Owner rule (22/10): a control the session cannot run is not shown,
+        // not even disabled. While an operation is open, the actions give way
+        // to its state; Query/Cancel only while they can do something.
+        let mut shown = 0;
+        for (a, b) in &self.buttons {
+            let visible = !busy && c.disabled_reason(*a).is_none();
+            b.set_visible(visible);
+            b.set_sensitive(visible);
+            shown += usize::from(visible);
+        }
+        let open = c.query();
+        let status = c.operation.as_ref().map(|(_, s)| s);
+        let queryable = open.is_some()
+            && matches!(
+                status,
+                Some(Status::Unknown | Status::Accepted | Status::Sent)
+            );
+        self.query.set_visible(queryable);
+        self.query.set_sensitive(queryable);
+        // The pickup contract has no cancel: never offer one.
+        let cancellable = !c.cancel_requested
+            && open.is_some_and(|r| r.session.cancel_supported && r.action != Action::Pickup);
+        self.cancel.set_visible(cancellable);
+        self.cancel.set_sensitive(cancellable);
+        if let Some(request) = open {
             self.query
                 .set_label(&format!("Query operation for {}", request.session.name));
             self.cancel.set_label(&format!(
@@ -559,40 +1106,187 @@ impl Panel {
                 request.session.name
             ));
         }
-        self.refresh_button.set_sensitive(
-            !self.busy.get()
-                && selection_blocker(self.live, self.native.borrow().as_ref()).is_empty(),
-        );
-        let availability = c.selection.as_ref().map(|_| {
-            let mut message = format!(
-                "Handoff: {}\nCompact: {}",
-                c.disabled_reason(Action::Handoff).unwrap_or("Available"),
-                c.disabled_reason(Action::Compact).unwrap_or("Available")
-            );
-            if let Some(request) = c.query() {
-                message.push_str(&format!(
-                    "\nUnresolved operation for {}. Query or cancel that operation before starting another.",
-                    request.session.name
-                ));
-            }
-            message
-        });
-        if let Some(s) = c.visible_status() {
-            let mut message = s.text();
+        let mut lines = Vec::new();
+        let pickup = self.visible_pickup();
+        self.render_stages(pickup.as_ref());
+        if let Some((progress, status, session)) = &pickup {
+            lines.extend(pickup_lines(progress, status, session));
+        } else if let Some(s) = c.visible_status() {
+            lines.push(s.text());
             if matches!(s, Status::Completed(_))
                 && let Some(date) = self.completed_at.borrow().as_ref()
             {
-                message.push_str(&format!("\nPersisted at: {date}"));
+                lines.push(format!("Persisted at: {date}"));
             }
-            if c.cancel_requested && c.query().is_some() {
-                message.push_str("\nCancellation requested; waiting for acknowledgement.");
+            if c.cancel_requested && open.is_some() {
+                lines.push("Cancellation requested; waiting for acknowledgement.".into());
             }
-            if let Some(availability) = availability {
-                message.push_str(&format!("\n{availability}"));
+        } else if let Some(request) = open {
+            lines.push(format!(
+                "Unresolved operation for {}. Query it before starting another.",
+                request.session.name
+            ));
+        } else if busy {
+            lines.push("Checking what this session supports…".into());
+        } else if let Some(notice) = self.notice.borrow().as_ref() {
+            lines.push(notice.clone());
+        } else if let Some(sel) = &c.selection {
+            // At most ONE line of reason, never a tooltip-only explanation.
+            if let Some(line) = reason_line(sel, shown) {
+                lines.push(line);
             }
-            self.reason.set_text(&message);
-        } else if let Some(availability) = availability {
-            self.reason.set_text(&availability);
+        } else {
+            let why = selection_blocker(self.live, self.native.borrow().as_ref());
+            if !why.is_empty() {
+                lines.push(why.into());
+            }
+        }
+        self.reason.set_text(&lines.join("\n"));
+        self.reason.set_visible(!lines.is_empty());
+        // Handoff and Compact are announced like the pickup: once per status
+        // of the operation shown on this selection (Requested is the click).
+        let plain = c
+            .operation
+            .as_ref()
+            .filter(|(r, s)| {
+                r.action != Action::Pickup
+                    && *s != Status::Requested
+                    && c.visible_status().is_some()
+            })
+            .map(|(r, s)| (r.operation_id.clone(), r.action, s.clone()));
+        drop(c);
+        if let Some((progress, status, _)) = &pickup {
+            self.announce_stage(progress, status, lines.first().map_or("", String::as_str));
+        } else if let Some((id, action, status)) = plain {
+            self.announce(
+                format!("{id}|-|{}", status.text()),
+                format!("{}: {}", action.label(), status.text()),
+                &status,
+            );
+        }
+    }
+    /// The pickup this selection may see: its own request, or the new session
+    /// it produced (same pane, new native ID after pickup_loaded).
+    fn visible_pickup(&self) -> Option<(Progress, Status, Session)> {
+        let c = self.controller.borrow();
+        let (request, status) = c.operation.as_ref()?;
+        let progress = self.progress.borrow().clone()?;
+        if request.action != Action::Pickup || progress.operation_id != request.operation_id {
+            return None;
+        }
+        let own = c
+            .selection
+            .as_ref()
+            .is_some_and(|s| s.identity == request.session.identity);
+        let successor = matches!(status, Status::Completed(Evidence::Picked { .. }))
+            && progress.new_session_id.is_some()
+            && self
+                .native
+                .borrow()
+                .as_ref()
+                .and_then(|n| n.overlay.as_ref()?.agent_session_id.clone())
+                == progress.new_session_id;
+        (own || successor).then(|| (progress, status.clone(), request.session.clone()))
+    }
+    fn render_stages(&self, pickup: Option<&(Progress, Status, Session)>) {
+        let list = &self.stages;
+        let Some((progress, status, _)) = pickup else {
+            list.widget.set_visible(false);
+            return;
+        };
+        list.widget.set_visible(true);
+        let at = stage_index(progress.stage);
+        list.title.set_text(&format!(
+            "{} · stage {} of {}",
+            Action::Pickup.label(),
+            at + 1,
+            STAGES.len()
+        ));
+        for ((row, mark), stage) in list
+            .rows
+            .iter()
+            .zip(stage_marks(progress, status))
+            .zip(STAGES)
+        {
+            row.state.set_text(mark.text());
+            for class in ["ac-pill", "busy", "blocked", "dim-label"] {
+                row.state.remove_css_class(class);
+            }
+            match mark {
+                StageMark::Now => {
+                    row.state.add_css_class("ac-pill");
+                    row.state.add_css_class("busy");
+                }
+                StageMark::Stopped | StageMark::Unknown => {
+                    row.state.add_css_class("ac-pill");
+                    row.state.add_css_class("blocked");
+                }
+                StageMark::Loaded => {}
+                _ => row.state.add_css_class("dim-label"),
+            }
+            row.check.set_visible(mark == StageMark::Loaded);
+            row.widget
+                .update_property(&[gtk::accessible::Property::Label(&format!(
+                    "Stage {} of {}, {}: {}",
+                    stage_index(stage) + 1,
+                    STAGES.len(),
+                    stage_name(stage),
+                    mark.text().to_lowercase()
+                ))]);
+        }
+    }
+    /// One announcement per stage or status change, never per render.
+    fn announce_stage(&self, progress: &Progress, status: &Status, line: &str) {
+        let key = format!(
+            "{}|{:?}|{}",
+            progress.operation_id,
+            progress.stage,
+            status.text()
+        );
+        self.announce(key, format!("{}: {line}", Action::Pickup.label()), status);
+    }
+    /// Announces `message` unless `key` was the last announcement.
+    fn announce(&self, key: String, message: String, status: &Status) {
+        if self.announced.borrow().as_deref() == Some(key.as_str()) {
+            return;
+        }
+        self.announced.replace(Some(key));
+        let priority = if matches!(
+            status,
+            Status::Completed(_) | Status::Accepted | Status::Running
+        ) {
+            gtk::AccessibleAnnouncementPriority::Medium
+        } else {
+            gtk::AccessibleAnnouncementPriority::High
+        };
+        // GtkTestATContext (no a11y bus: Broadway, GTK tests) has no announce
+        // vfunc and GTK 4.22 calls it anyway (SIGSEGV at address 0). Only the
+        // backends that implement it get the call; the log keeps every line.
+        let ctx = self.widget.at_context().type_().name();
+        if matches!(ctx, "GtkAtSpiContext" | "GtkAccessKitContext") {
+            self.widget.announce(&message, priority);
+        }
+        let mut log = self.announcements.borrow_mut();
+        if log.len() >= 32 {
+            log.remove(0);
+        }
+        log.push(message);
+    }
+    /// Records a progress report for the open pickup. A stage never goes
+    /// back; a report for another operation is ignored.
+    fn apply_progress(&self, request: &Request, progress: Option<Progress>) {
+        let Some(progress) = progress else {
+            return;
+        };
+        if request.action != Action::Pickup || progress.operation_id != request.operation_id {
+            return;
+        }
+        let mut slot = self.progress.borrow_mut();
+        let regress = slot.as_ref().is_some_and(|old| {
+            old.operation_id == progress.operation_id && progress.stage < old.stage
+        });
+        if !regress {
+            *slot = Some(progress);
         }
     }
     fn refresh(self: &Rc<Self>) {
@@ -608,16 +1302,19 @@ impl Panel {
             self.busy.set(false);
             return;
         };
+        self.discovering.set(true);
         self.render();
         let epoch = self.epoch.get();
         let authenticate = self.authenticate.get();
         let weak = Rc::downgrade(self);
+        let claude = native.agent == "claude";
         glib::spawn_future_local(async move {
             let result = gio::spawn_blocking(move || authenticate(&native)).await;
             let Some(p) = weak.upgrade() else {
                 return;
             };
             p.busy.set(false);
+            p.discovering.set(false);
             if epoch != p.epoch.get() {
                 p.refresh();
                 return;
@@ -625,19 +1322,33 @@ impl Panel {
             match result {
                 Ok(Ok((endpoint, s))) => {
                     *p.endpoint_key.borrow_mut() = endpoint_key(&endpoint);
+                    p.notice.replace(None);
                     p.controller.borrow_mut().select(Some(s));
                     p.render();
                 }
-                _ => {
+                failure => {
                     p.controller.borrow_mut().select(None);
+                    // One line; capabilities are checked again on focus.
+                    p.notice.replace(Some(match failure {
+                        Ok(Err(code)) if claude => humanize(Agent::Claude, code),
+                        _ if claude => "Claude Code identity could not be checked in herdr.".into(),
+                        _ => "AgentCenter extension not found in this Pi session; enable it in Pi."
+                            .into(),
+                    }));
                     p.render();
-                    p.reason.set_text("Private extension unavailable, incompatible or ambiguous. Enable the AgentCenter extension manually in Pi, then use Refresh capabilities.");
                 }
+            }
+            if let Some(prompt) = p.parked.take() {
+                p.dispatch(prompt);
+            } else if p.refresh_pending.get() {
+                p.refresh();
             }
         });
     }
     fn prepare(self: &Rc<Self>, action: Action) {
-        if self.busy.get() {
+        // A rediscovery keeps the controls on screen, so they stay live: the
+        // confirmation is revalidated at dispatch anyway.
+        if self.busy.get() && !self.discovering.get() {
             return;
         }
         let Ok(prompt) = self.controller.borrow().prepare(action) else {
@@ -656,12 +1367,37 @@ impl Panel {
                 p.dispatch(prompt);
             }
         });
+        // The dialog returns focus to the button that opened it, which may be
+        // gone by then (the operation started): keep it in the section, or
+        // the next dialog in this window is presented without content.
+        let weak = Rc::downgrade(self);
+        d.connect_closed(move |_| {
+            let weak = weak.clone();
+            glib::idle_add_local_once(move || {
+                let Some(p) = weak.upgrade() else { return };
+                let lost = p
+                    .widget
+                    .root()
+                    .and_downcast::<gtk::Window>()
+                    .is_none_or(|w| {
+                        gtk::prelude::GtkWindowExt::focus(&w)
+                            .is_none_or(|f| !f.is_visible() || !f.is_drawable())
+                    });
+                if lost {
+                    p.keep_focus();
+                }
+            });
+        });
         d.present(Some(&self.widget));
     }
     fn dispatch(self: &Rc<Self>, prompt: Confirmation) {
-        if self.busy.replace(true) {
+        if self.busy.get() {
+            if self.discovering.get() {
+                self.parked.replace(Some(prompt));
+            }
             return;
         }
+        self.busy.set(true);
         let Some(native) = self.native.borrow().clone() else {
             self.busy.set(false);
             return;
@@ -669,7 +1405,9 @@ impl Panel {
         let epoch = self.epoch.get();
         let authenticate = self.authenticate.get();
         let weak = Rc::downgrade(self);
+        self.notice.replace(None);
         self.render();
+        let sampled = native.clone();
         glib::spawn_future_local(async move {
             let result = gio::spawn_blocking(move || authenticate(&native)).await;
             let Some(p) = weak.upgrade() else {
@@ -683,18 +1421,19 @@ impl Panel {
             }
             let Ok(Ok((endpoint, current))) = result else {
                 p.controller.borrow_mut().select(None);
+                p.notice.replace(Some(
+                    "Identity could not be revalidated; nothing was sent.".into(),
+                ));
                 p.render();
-                p.reason.set_text(
-                    "Identity could not be revalidated; nothing dispatched. Use Refresh capabilities.",
-                );
                 return;
             };
             if endpoint_key(&endpoint).as_ref() != p.endpoint_key.borrow().as_ref() {
                 *p.endpoint_key.borrow_mut() = endpoint_key(&endpoint);
                 p.controller.borrow_mut().select(Some(current));
+                p.notice.replace(Some(
+                    "Endpoint or metadata changed; review a new confirmation.".into(),
+                ));
                 p.render();
-                p.reason
-                    .set_text("Endpoint or metadata changed; review a new confirmation.");
                 return;
             }
             let request = p.controller.borrow_mut().confirm(
@@ -705,14 +1444,15 @@ impl Panel {
             match request {
                 Ok(r) => {
                     p.completed_at.replace(None);
-                    match TransportOperation::new(endpoint, r) {
+                    let connect = p.pickup_connect.get();
+                    match TransportOperation::new(endpoint, &sampled, r, connect) {
                         Ok(op) => {
                             *p.operation.borrow_mut() = Some(op);
                             p.reconcile_dispatch();
                         }
                         Err(why) => {
                             p.controller.borrow_mut().timeout_after_send();
-                            p.reason.set_text(why);
+                            p.notice.replace(Some(why.into()));
                             p.render();
                         }
                     }
@@ -720,8 +1460,8 @@ impl Panel {
                 Err(why) => {
                     // Updated metadata requires a fresh confirmation, not reselecting.
                     p.controller.borrow_mut().select(Some(current));
+                    p.notice.replace(Some(why.into()));
                     p.render();
-                    p.reason.set_text(why);
                 }
             }
         });
@@ -737,7 +1477,11 @@ impl Panel {
         }
     }
     fn reconcile_dispatch(self: &Rc<Self>) {
-        let action = self.operation.borrow().as_ref().map(|o| o.original.action);
+        let action = self
+            .operation
+            .borrow()
+            .as_ref()
+            .map(TransportOperation::action);
         if let Some(a) = action {
             self.reconcile(a);
         }
@@ -767,40 +1511,52 @@ impl Panel {
                 return;
             };
             match result {
-                Ok((op, status, date)) => {
-                    let poll = matches!(status, Status::Accepted | Status::Running);
+                Ok((mut op, status, date)) => {
+                    let poll = matches!(status, Status::Accepted | Status::Running | Status::Sent);
                     let completed = matches!(status, Status::Completed(_));
-                    if status.terminal() {
+                    let terminal = status.terminal();
+                    if terminal {
                         p.cancel_pending.set(false);
                     }
+                    // Claude evidence is a transcript read: a slower cadence.
+                    let delay = if op.is_claude() {
+                        std::time::Duration::from_secs(2)
+                    } else {
+                        p.poll.get()
+                    };
                     let updated = p.controller.borrow_mut().update(
                         &op.ui_request.operation_id,
                         &op.ui_request.session.identity,
                         status,
                     );
+                    p.apply_progress(&op.ui_request, op.progress.take());
                     if updated && completed {
                         p.completed_at.replace(date);
+                    }
+                    // A finished operation changes revision/capability: the
+                    // panel rediscovers by itself (no Refresh button).
+                    if updated && terminal {
+                        p.refresh_pending.set(true);
                     }
                     *p.operation.borrow_mut() = Some(op);
                     p.busy.set(poll);
                     p.render();
                     if poll {
                         let weak = Rc::downgrade(&p);
-                        glib::timeout_add_local_once(
-                            std::time::Duration::from_millis(300),
-                            move || {
-                                if let Some(p) = weak.upgrade() {
-                                    p.busy.set(false);
-                                    p.reconcile(if p.cancel_pending.get() {
-                                        pi::Action::Cancel
-                                    } else {
-                                        pi::Action::Status
-                                    });
-                                }
-                            },
-                        );
+                        glib::timeout_add_local_once(delay, move || {
+                            if let Some(p) = weak.upgrade() {
+                                p.busy.set(false);
+                                p.reconcile(if p.cancel_pending.get() {
+                                    pi::Action::Cancel
+                                } else {
+                                    pi::Action::Status
+                                });
+                            }
+                        });
                     } else if p.cancel_pending.get() {
                         p.reconcile(pi::Action::Cancel);
+                    } else if p.query_pending.replace(false) {
+                        p.reconcile(pi::Action::Status);
                     } else if p.refresh_pending.get() {
                         p.refresh();
                     }
@@ -814,6 +1570,77 @@ impl Panel {
         });
     }
 }
+/// The pickup's text under the stage list: where it is and, when it stopped
+/// or is unknown, where it stopped and how to resume the old session.
+fn pickup_lines(progress: &Progress, status: &Status, old: &Session) -> Vec<String> {
+    let at = format!(
+        "stage {} of {} ({})",
+        stage_index(progress.stage) + 1,
+        STAGES.len(),
+        stage_name(progress.stage)
+    );
+    let keep = format!(
+        "The old session is kept; to resume it, {}.",
+        old.resume_route()
+    );
+    match status {
+        Status::Completed(Evidence::Picked { .. }) if progress.stage == Stage::PickupLoaded => {
+            vec![status.text()]
+        }
+        Status::Requested | Status::Accepted | Status::Running | Status::Sent => {
+            vec![format!("Now at {at}; completion not confirmed.")]
+        }
+        Status::Unknown | Status::Completed(_) => vec![
+            format!("Result unknown at {at}. Query this operation; do not send it again."),
+            keep,
+        ],
+        Status::Failed(code) | Status::Refused(code) => {
+            vec![
+                format!("Stopped at {at}: {}.", code.replace('_', " ")),
+                keep,
+            ]
+        }
+        Status::Cancelled => vec![format!("Cancelled at {at}."), keep],
+    }
+}
+fn agent_name(agent: Agent) -> &'static str {
+    match agent {
+        Agent::Pi => "Pi",
+        Agent::Claude => "Claude Code",
+    }
+}
+/// A closed capability code as one sentence. Unknown codes are shown as-is.
+fn humanize(agent: Agent, code: &str) -> String {
+    let who = agent_name(agent);
+    match code {
+        "busy" => format!("{who} is busy; controls return when it is idle."),
+        "pending" => format!("{who} has an operation pending."),
+        "vigia_swap" => format!("squad-vigia is swapping this {who} session."),
+        "no_transcript" => format!("{who} transcript not found."),
+        "model_auth_required" => format!("{who} model needs authentication."),
+        reason::PI_OUTSIDE_HERDR => "Handoff + new session needs Pi inside a herdr pane.".into(),
+        other => format!("{who} controls unavailable: {}.", other.replace('_', " ")),
+    }
+}
+/// The panel's single reason line for what the selection cannot do.
+fn reason_line(s: &Session, shown: usize) -> Option<String> {
+    let first = [Action::Handoff, Action::Compact]
+        .into_iter()
+        .find_map(|a| s.disabled_reason(a).map(|why| (a, why)));
+    match (shown, first) {
+        (0, Some((_, why))) => Some(humanize(s.agent, why)),
+        (_, Some((a, why))) => Some(format!(
+            "{} unavailable: {}",
+            a.label(),
+            humanize(s.agent, why)
+        )),
+        (_, None) => s
+            .disabled_reason(Action::Pickup)
+            .filter(|why| *why != reason::PICKUP_NOT_INTEGRATED)
+            .map(|why| humanize(s.agent, why)),
+    }
+}
+/// Synchronous, sample-only gate: no /proc, socket or transcript access.
 fn selection_blocker(live: bool, session: Option<&agentcenter_core::Session>) -> &'static str {
     if !live {
         return "Actions are off: recorded snapshot. Use the native agent manually.";
@@ -821,8 +1648,15 @@ fn selection_blocker(live: bool, session: Option<&agentcenter_core::Session>) ->
     let Some(session) = session else {
         return "Select a session";
     };
+    if session.agent == "claude" {
+        let pane = agentcenter_core::control::claude::Subject::from_session(session);
+        if session.starttime.is_none() || pane.is_err() {
+            return "Claude Code runs outside herdr; control it in its own terminal.";
+        }
+        return "";
+    }
     if session.agent != "pi" {
-        return "Handoff and Compact are not available for this agent yet.";
+        return "This agent has no control channel in AgentCenter.";
     }
     if session.starttime.is_none()
         || session
@@ -836,83 +1670,370 @@ fn selection_blocker(live: bool, session: Option<&agentcenter_core::Session>) ->
     ""
 }
 
-/// Keep the authenticated endpoint and ORIGINAL request across every read.
+/// Keep the authenticated channel and ORIGINAL request across every read.
 struct TransportOperation {
-    endpoint: agentcenter_core::control::pi::Endpoint,
-    original: agentcenter_core::control::pi::Request,
     ui_request: Request,
+    channel: Channel,
     sent: bool,
+    /// Last pickup progress read by `exchange`, handed to the panel.
+    progress: Option<Progress>,
+}
+enum Channel {
+    Pi {
+        endpoint: Box<agentcenter_core::control::pi::Endpoint>,
+        original: Box<agentcenter_core::control::pi::Request>,
+    },
+    /// The same core controller answers start and every status of this ID.
+    Claude {
+        controller: Box<agentcenter_core::control::claude::Controller>,
+        subject: agentcenter_core::control::claude::Subject,
+    },
+    /// Composite handoff-pickup (CC5/CC6) through [`PickupPort`].
+    Pickup {
+        port: Box<dyn PickupPort>,
+        claude: bool,
+    },
 }
 impl TransportOperation {
     fn new(
-        endpoint: agentcenter_core::control::pi::Endpoint,
+        backend: Backend,
+        native: &agentcenter_core::Session,
         ui_request: Request,
+        connect: PickupConnect,
     ) -> Result<Self, &'static str> {
-        use agentcenter_core::control::pi;
-        let action = match ui_request.action {
-            Action::Handoff => pi::Action::Handoff,
-            Action::Compact => pi::Action::Compact,
+        use agentcenter_core::control::{claude, pi};
+        if ui_request.action == Action::Pickup {
+            let port = connect(&backend, native, &ui_request)?;
+            return Ok(Self {
+                channel: Channel::Pickup {
+                    port,
+                    claude: ui_request.session.agent == Agent::Claude,
+                },
+                ui_request,
+                sent: false,
+                progress: None,
+            });
+        }
+        let channel = match backend {
+            Backend::Pi(endpoint) => {
+                let action = match ui_request.action {
+                    Action::Handoff => pi::Action::Handoff,
+                    Action::Compact => pi::Action::Compact,
+                    Action::Pickup => return Err("Pickup adapter is not integrated"),
+                };
+                if endpoint.handoff_directory.as_ref().and_then(|p| p.to_str())
+                    != Some(ui_request.session.handoff_destination.as_str())
+                {
+                    return Err("Private handoff destination changed; review a new confirmation");
+                }
+                let original = endpoint
+                    .request(ui_request.operation_id.clone(), action)
+                    .map_err(|_| "Invalid endpoint")?;
+                if serde_json::to_value(&original.expected).ok().as_ref()
+                    != Some(&ui_request.session.expected)
+                {
+                    return Err("Session changed; review a new confirmation");
+                }
+                Channel::Pi {
+                    endpoint,
+                    original: Box::new(original),
+                }
+            }
+            Backend::Claude(endpoint) => {
+                if ui_request.action == Action::Pickup {
+                    return Err("Pickup adapter is not integrated");
+                }
+                let subject = claude::Subject::from_session(native)
+                    .map_err(|_| "Session changed; review a new confirmation")?;
+                let home = std::env::var_os("HOME").ok_or("Home directory unavailable")?;
+                Channel::Claude {
+                    controller: Box::new(claude::Controller::new(
+                        endpoint,
+                        claude::Env::new(home.into()),
+                    )),
+                    subject,
+                }
+            }
         };
-        if endpoint.handoff_directory.as_ref().and_then(|p| p.to_str())
-            != Some(ui_request.session.handoff_destination.as_str())
-        {
-            return Err("Private handoff destination changed; review a new confirmation");
-        }
-        let original = endpoint
-            .request(ui_request.operation_id.clone(), action)
-            .map_err(|_| "Invalid endpoint")?;
-        if serde_json::to_value(&original.expected).ok().as_ref()
-            != Some(&ui_request.session.expected)
-        {
-            return Err("Session changed; review a new confirmation");
-        }
         Ok(Self {
-            endpoint,
-            original,
             ui_request,
+            channel,
             sent: false,
+            progress: None,
         })
+    }
+    /// The call that sends the effect for this request.
+    fn action(&self) -> agentcenter_core::control::pi::Action {
+        use agentcenter_core::control::pi;
+        match self.ui_request.action {
+            Action::Handoff => pi::Action::Handoff,
+            // Pickup's start shares the compact slot: any non-status action.
+            Action::Compact | Action::Pickup => pi::Action::Compact,
+        }
+    }
+    fn is_claude(&self) -> bool {
+        matches!(
+            self.channel,
+            Channel::Claude { .. } | Channel::Pickup { claude: true, .. }
+        )
     }
     /// Call only inside the serialized blocking worker. No retry after write.
     fn exchange(
         &mut self,
         action: agentcenter_core::control::pi::Action,
     ) -> (Status, Option<String>) {
-        use agentcenter_core::control::pi;
-        let request = match action {
-            pi::Action::Status => self.original.status(),
-            pi::Action::Cancel => self.original.cancel(),
-            _ if action == self.original.action && !self.sent => {
-                self.sent = true;
-                self.original.clone()
-            }
-            _ => return (Status::Unknown, None),
-        };
-        match pi::exchange(&self.endpoint, &request, std::time::Duration::from_secs(2)) {
-            Ok(reply) => {
-                let status = status_from_core_reply(&self.ui_request, &reply);
-                let completed_at = if matches!(status, Status::Completed(_)) {
-                    reply.completed_at
-                } else {
-                    None
+        use agentcenter_core::control::{self as core, pi};
+        let start = !matches!(action, pi::Action::Status | pi::Action::Cancel);
+        if start && (action != self.action() || self.sent) {
+            return (Status::Unknown, None);
+        }
+        let id = self.ui_request.operation_id.clone();
+        match &mut self.channel {
+            Channel::Pi { endpoint, original } => {
+                let request = match action {
+                    pi::Action::Status => original.status(),
+                    pi::Action::Cancel => original.cancel(),
+                    _ => {
+                        self.sent = true;
+                        (**original).clone()
+                    }
                 };
-                (status, completed_at)
+                match pi::exchange(endpoint, &request, std::time::Duration::from_secs(2)) {
+                    Ok(reply) => {
+                        let status = status_from_core_reply(&self.ui_request, &reply);
+                        let completed_at = if matches!(status, Status::Completed(_)) {
+                            reply.completed_at
+                        } else {
+                            None
+                        };
+                        (status, completed_at)
+                    }
+                    Err(_) => (Status::Unknown, None),
+                }
             }
-            Err(_) => (Status::Unknown, None),
+            Channel::Claude {
+                controller,
+                subject,
+            } => {
+                let kind = match self.ui_request.action {
+                    Action::Handoff => core::Action::Handoff,
+                    _ => core::Action::Compact,
+                };
+                let outcome = if start {
+                    self.sent = true;
+                    Ok(controller.start(&id, kind, subject))
+                } else {
+                    // No cancel in the Claude adapter: a cancel call only reads.
+                    controller.status(&id)
+                };
+                match outcome {
+                    Ok(o) => status_from_outcome(&self.ui_request, &o),
+                    Err(_) => (Status::Unknown, None),
+                }
+            }
+            Channel::Pickup { port, .. } => {
+                // No cancel in the pickup contract: a cancel call only reads.
+                let outcome = if start {
+                    self.sent = true;
+                    port.start(&id)
+                } else {
+                    port.status(&id)
+                };
+                match outcome {
+                    Ok(progress) if progress.operation_id == id => {
+                        let status = status_from_progress(&self.ui_request, &progress);
+                        let at = progress.handoff.as_ref().map(|a| a.modified_ms);
+                        self.progress = Some(progress);
+                        let local = at
+                            .filter(|_| matches!(status, Status::Completed(_)))
+                            .and_then(|ms| glib::DateTime::from_unix_local((ms / 1000) as i64).ok())
+                            .and_then(|d| d.format("%Y-%m-%d %H:%M:%S").ok())
+                            .map(String::from);
+                        (status, local)
+                    }
+                    _ => (Status::Unknown, None),
+                }
+            }
+        }
+    }
+}
+/// Common contract outcome (CC4) as UI status. Completion needs evidence.
+fn status_from_outcome(
+    request: &Request,
+    o: &agentcenter_core::control::Outcome,
+) -> (Status, Option<String>) {
+    use agentcenter_core::control::{Evidence as E, State};
+    if o.operation_id != request.operation_id {
+        return (Status::Unknown, None);
+    }
+    let local = |ms: u64| {
+        glib::DateTime::from_unix_local((ms / 1000) as i64)
+            .ok()
+            .and_then(|d| d.format("%Y-%m-%d %H:%M:%S").ok())
+            .map(String::from)
+    };
+    match o.state {
+        State::Accepted => (Status::Accepted, None),
+        State::Running => (Status::Sent, None),
+        State::Rejected => (Status::Refused(o.code.into()), None),
+        State::Failed => (Status::Failed(o.code.into()), None),
+        State::Cancelled => (Status::Cancelled, None),
+        State::Unknown => (Status::Unknown, None),
+        State::Completed => {
+            let (evidence, at) = match &o.evidence {
+                Some(E::Persisted(a)) => (
+                    Evidence::Persisted {
+                        path: a.path.to_string_lossy().into_owned(),
+                        size: a.size,
+                        sha256: a.sha256.clone(),
+                    },
+                    local(a.modified_ms),
+                ),
+                Some(E::Compacted { boundary_ms }) => (
+                    Evidence::Compacted {
+                        boundary_ms: *boundary_ms,
+                    },
+                    local(*boundary_ms),
+                ),
+                None => return (Status::Unknown, None),
+            };
+            if evidence.valid_for(request) {
+                (Status::Completed(evidence), at)
+            } else {
+                (Status::Unknown, None)
+            }
         }
     }
 }
 // Never render this key: it contains the private instance nonce.
-fn endpoint_key(endpoint: &agentcenter_core::control::pi::Endpoint) -> Option<String> {
-    let request = endpoint
-        .request(
-            "00000000-0000-4000-8000-000000000000".into(),
-            agentcenter_core::control::pi::Action::Status,
-        )
-        .ok()?;
-    Some(serde_json::json!([endpoint.socket, request]).to_string())
+fn endpoint_key(backend: &Backend) -> Option<String> {
+    match backend {
+        Backend::Pi(endpoint) => {
+            let request = endpoint
+                .request(
+                    "00000000-0000-4000-8000-000000000000".into(),
+                    agentcenter_core::control::pi::Action::Status,
+                )
+                .ok()?;
+            Some(serde_json::json!([endpoint.socket, request]).to_string())
+        }
+        Backend::Claude(e) => Some(
+            serde_json::json!(["herdr", e.socket, e.server_pid, e.server_starttime]).to_string(),
+        ),
+    }
 }
+/// Production discovery, run only by `gio::spawn_blocking`.
 fn authenticated_session(
+    native: &agentcenter_core::Session,
+) -> Result<(Backend, Session), &'static str> {
+    if native.agent == "claude" {
+        return claude_session(native);
+    }
+    let (endpoint, mut session) = pi_session(native)?;
+    // Owner (22/10): Pi's pickup exists only inside herdr (CC5 sends the
+    // extension command through the pane); outside it, Handoff and Compact.
+    let in_herdr =
+        agentcenter_core::control::herdr::Target::from_session(native).is_some_and(|t| {
+            [&t.workspace_id, &t.tab_id, &t.pane_id]
+                .iter()
+                .all(|v| !v.is_empty() && !matches!(v.as_str(), "current" | "default"))
+        });
+    session.pickup_disabled = Some(
+        if in_herdr {
+            reason::PICKUP_NOT_INTEGRATED
+        } else {
+            reason::PI_OUTSIDE_HERDR
+        }
+        .into(),
+    );
+    Ok((Backend::Pi(Box::new(endpoint)), session))
+}
+/// Claude Code through the pinned herdr server (CC4 capability).
+fn claude_session(native: &agentcenter_core::Session) -> Result<(Backend, Session), &'static str> {
+    use agentcenter_core::control::{Capability, claude};
+    let subject = claude::Subject::from_session(native)?;
+    let endpoint = herdr_server()?;
+    let home = std::env::var_os("HOME").ok_or("no_home")?;
+    let controller = claude::Controller::new(endpoint.clone(), claude::Env::new(home.into()));
+    let caps = controller.capabilities(&subject);
+    let why = |c: &Capability| {
+        (!c.enabled).then(|| {
+            c.disabled_reason
+                .clone()
+                .unwrap_or_else(|| "unavailable".into())
+        })
+    };
+    let start = native.starttime.ok_or(claude::code::IDENTITY)?;
+    let session = Session {
+        agent: Agent::Claude,
+        identity: serde_json::json!([
+            "claude",
+            subject.session_id,
+            native.pid,
+            start,
+            subject.target.pane_id
+        ])
+        .to_string(),
+        revision: start.to_string(),
+        name: format!("Claude Code (pid {})", native.pid),
+        handoff_destination: String::new(),
+        expected: serde_json::json!({"sessionId": subject.session_id}),
+        handoff_disabled: why(&caps.handoff),
+        compact_disabled: why(&caps.compact),
+        // CC6 (Claude pickup) is not in this build yet.
+        pickup_disabled: Some(reason::PICKUP_NOT_INTEGRATED.into()),
+        cancel_supported: caps.handoff.cancel_supported && caps.compact.cancel_supported,
+    };
+    Ok((Backend::Claude(endpoint), session))
+}
+/// The one herdr server of this user, by /proc (off the GTK thread only).
+/// None or several: no target, never the first.
+fn herdr_server() -> Result<agentcenter_core::control::herdr::Endpoint, &'static str> {
+    use std::os::unix::fs::MetadataExt;
+    let socket = agentcenter_core::overlay::herdr::socket_path(|k| std::env::var_os(k))
+        .ok_or("no_herdr_pane")?;
+    let uid = std::fs::metadata("/proc/self")
+        .map_err(|_| "identity")?
+        .uid();
+    let mut found = Vec::new();
+    for entry in std::fs::read_dir("/proc")
+        .map_err(|_| "identity")?
+        .flatten()
+    {
+        let Some(pid) = entry
+            .file_name()
+            .to_str()
+            .and_then(|n| n.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let dir = entry.path();
+        if std::fs::read_to_string(dir.join("comm")).map_or(true, |c| c.trim() != "herdr")
+            || entry.metadata().map_or(true, |m| m.uid() != uid)
+        {
+            continue;
+        }
+        let server = std::fs::read(dir.join("cmdline"))
+            .is_ok_and(|c| c.split(|b| *b == 0).any(|a| a == b"server"));
+        let start = std::fs::read_to_string(dir.join("stat"))
+            .ok()
+            .and_then(|t| agentcenter_core::procfs::stat::parse_stat(&t).ok())
+            .map(|s| s.starttime);
+        if let (true, Some(server_starttime)) = (server, start) {
+            found.push((pid, server_starttime));
+        }
+    }
+    match found.as_slice() {
+        [(server_pid, server_starttime)] => Ok(agentcenter_core::control::herdr::Endpoint {
+            socket,
+            server_pid: *server_pid,
+            server_starttime: *server_starttime,
+        }),
+        [] => Err("no_herdr_pane"),
+        _ => Err("ambiguous"),
+    }
+}
+fn pi_session(
     native: &agentcenter_core::Session,
 ) -> Result<(agentcenter_core::control::pi::Endpoint, Session), &'static str> {
     use agentcenter_core::control::pi;
@@ -1003,10 +2124,11 @@ fn text(value: &str) -> gtk::Label {
     label
 }
 pub fn confirmation_dialog(prompt: &Confirmation) -> adw::AlertDialog {
-    let dialog = adw::AlertDialog::new(
-        Some(&format!("{} session?", prompt.action.label())),
-        Some(&prompt.body()),
-    );
+    let heading = match prompt.action {
+        Action::Pickup => "Handoff and start a new session?".to_owned(),
+        a => format!("{} session?", a.label()),
+    };
+    let dialog = adw::AlertDialog::new(Some(&heading), Some(&prompt.body()));
     dialog.add_response("cancel", "Cancel");
     dialog.add_response("confirm", prompt.action.label());
     dialog.set_default_response(Some("cancel"));
@@ -1023,6 +2145,7 @@ mod tests {
     use super::*;
     fn session() -> Session {
         Session {
+            agent: Agent::Pi,
             identity: "native-a".into(),
             revision: "r1".into(),
             name: "Pi".into(),
@@ -1030,6 +2153,7 @@ mod tests {
             expected: serde_json::json!({"managerId":"m", "revision":"1", "sessionId":"s", "sessionFile":"/session.jsonl", "leafId":"old"}),
             handoff_disabled: None,
             compact_disabled: None,
+            pickup_disabled: None,
             cancel_supported: false,
         }
     }
@@ -1193,7 +2317,7 @@ mod tests {
             assert_eq!(c.visible_status(), Some(&Status::Unknown));
             let evidence = match action {
                 Action::Handoff => handoff(),
-                Action::Compact => compact(),
+                _ => compact(),
             };
             assert!(c.update("op1", "native-a", Status::Completed(evidence)));
             assert!(c.visible_status().unwrap().terminal());

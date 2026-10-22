@@ -1,0 +1,3 @@
+{"type":"user","sessionId":"@SID@","timestamp":"@TS0@","message":{"role":"user","content":"<command-message>clear-pickup</command-message>\n<command-name>/clear-pickup</command-name>\n<command-args>handoff agentcenter-op:@OP@</command-args>"}}
+{"type":"assistant","sessionId":"@SID@","timestamp":"@TS1@","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_w_@ID@","name":"Write","input":{"file_path":"@PATH@","content":"AGENTCENTER-CANARY-cc6 handoff body"}}]}}
+{"type":"user","sessionId":"@SID@","timestamp":"@TS2@","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_w_@ID@","content":"File created successfully at: @PATH@"}]},"toolUseResult":{"type":"create","filePath":"@PATH@","content":"AGENTCENTER-CANARY-cc6 handoff body"}}

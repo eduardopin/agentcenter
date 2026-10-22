@@ -286,3 +286,161 @@ fn subject_requires_claude_explicit_pane_and_session() {
     s.agent = "pi".into();
     assert_eq!(Subject::from_session(&s), Err(code::NOT_CLAUDE));
 }
+
+#[test]
+fn seal_copy_takes_only_the_acknowledged_bytes() {
+    let d = tmp();
+    let mut env = Env::new(d.clone());
+    env.handoffs = d.join("state/handoffs");
+    let original = d.join("handoffs/h.md");
+    fs::write(&original, b"acknowledged").unwrap();
+    let ack = artifact(&original, &[d.join("handoffs")], 0, env.uid).unwrap();
+    // Same size, other bytes: only the sha256 of the ack refuses it, before
+    // anything is written.
+    fs::write(&original, b"ACKNOWLEDGED").unwrap();
+    assert_eq!(seal_copy(&ack, &env, SID, OP), Err(code::COPY_MISMATCH));
+    assert!(!env.handoffs.exists(), "nothing written for refused bytes");
+    // Changed after the ack: no copy.
+    fs::write(&original, b"changed later").unwrap();
+    assert_eq!(seal_copy(&ack, &env, SID, OP), Err(code::COPY_MISMATCH));
+    // A symlink to identical bytes is not the file that was acknowledged.
+    let real = d.join("real.md");
+    fs::write(&real, b"acknowledged").unwrap();
+    fs::remove_file(&original).unwrap();
+    symlink(&real, &original).unwrap();
+    assert_eq!(seal_copy(&ack, &env, SID, OP), Err(code::COPY_MISMATCH));
+    fs::remove_file(&original).unwrap();
+    fs::write(&original, b"acknowledged").unwrap();
+    let copy = seal_copy(&ack, &env, SID, OP).unwrap();
+    assert_eq!((copy.size, &copy.sha256), (ack.size, &ack.sha256));
+    assert_eq!(fs::metadata(&copy.path).unwrap().mode() & 0o777, 0o400);
+    assert!(copy_intact(&copy, env.uid));
+    // Never over an existing copy.
+    assert_eq!(seal_copy(&ack, &env, SID, OP), Err(code::COPY_FAILED));
+    // The copy edited in place to other bytes of the same size.
+    fs::set_permissions(&copy.path, fs::Permissions::from_mode(0o600)).unwrap();
+    fs::write(&copy.path, b"ACKNOWLEDGED").unwrap();
+    assert!(!copy_intact(&copy, env.uid));
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn pickup_loaded_needs_own_session_prompt_then_successful_read() {
+    let d = tmp();
+    let copy = d.join("handoffs/s-copy.md");
+    let new = "22222222-2222-4333-8444-555555555555";
+    let prompt = |sid: &str, ts| {
+        user(
+            ts,
+            sid,
+            &format!(
+                "<command-name>/clear-pickup</command-name>\n<command-args>pickup {}</command-args>",
+                copy.display()
+            ),
+        )
+    };
+    let read_of = |ts: u64, sid: &str, error: bool, called: &Path, result: &Path| {
+        [
+            serde_json::json!({"type":"assistant","sessionId":sid,"timestamp":iso(ts),"message":{"content":[
+                {"type":"tool_use","id":"toolu_r","name":"Read","input":{"file_path":called}}]}})
+            .to_string(),
+            serde_json::json!({"type":"user","sessionId":sid,"timestamp":iso(ts + 1),"message":{"content":[
+                {"type":"tool_result","tool_use_id":"toolu_r","is_error":error,"content":"x"}]},
+                "toolUseResult":{"type":"text","file":{"filePath":result}}})
+            .to_string(),
+        ]
+    };
+    let read = |ts: u64, sid: &str, error: bool| read_of(ts, sid, error, &copy, &copy);
+    let check = |lines: Vec<String>| {
+        let t = transcript(&d, &lines);
+        pickup_loaded(&t, 1_000, new, &copy).unwrap()
+    };
+    let ok = [vec![prompt(new, 2_000)], read(2_001, new, false).to_vec()].concat();
+    assert!(check(ok));
+    // Read before the prompt, failed Read, other session, before the send.
+    assert!(!check(
+        [read(1_500, new, false).to_vec(), vec![prompt(new, 2_000)]].concat()
+    ));
+    assert!(!check(
+        [vec![prompt(new, 2_000)], read(2_001, new, true).to_vec()].concat()
+    ));
+    assert!(!check(
+        [vec![prompt(SID, 2_000)], read(2_001, SID, false).to_vec()].concat()
+    ));
+    assert!(!check(
+        [vec![prompt(new, 500)], read(501, new, false).to_vec()].concat()
+    ));
+    // Each path is checked on its own: the call's input and the result's file.
+    let other = d.join("handoffs/other.md");
+    assert!(!check(
+        [
+            vec![prompt(new, 2_000)],
+            read_of(2_001, new, false, &other, &copy).to_vec()
+        ]
+        .concat()
+    ));
+    assert!(!check(
+        [
+            vec![prompt(new, 2_000)],
+            read_of(2_001, new, false, &copy, &other).to_vec()
+        ]
+        .concat()
+    ));
+    let _ = fs::remove_dir_all(&d);
+}
+
+#[test]
+fn pickup_arg_safe_takes_only_one_plain_argument() {
+    use std::{ffi::OsStr, os::unix::ffi::OsStrExt};
+    assert!(pickup_arg_safe(Path::new(
+        "/home/u/.local/state/agentcenter/handoffs/s31-aaaa.md"
+    )));
+    for bad in [
+        "",
+        "/a b.md",
+        "/a<b.md",
+        "/a>b.md",
+        "/a\tb.md",
+        "/a\nb.md",
+        "/a\u{a0}b.md",
+        "/a\u{1b}b.md",
+    ] {
+        assert!(!pickup_arg_safe(Path::new(bad)), "{bad:?}");
+    }
+    assert!(!pickup_arg_safe(Path::new(OsStr::from_bytes(
+        b"/a\xffb.md"
+    ))));
+}
+
+#[test]
+fn copies_go_under_xdg_state_home_only_when_absolute() {
+    let home = PathBuf::from("/h");
+    let at =
+        |state: Option<&str>| Env::with_state_home(home.clone(), state.map(Into::into)).handoffs;
+    assert_eq!(at(Some("/s")), Path::new("/s/agentcenter/handoffs"));
+    for state in [None, Some(""), Some("rel/state")] {
+        assert_eq!(
+            at(state),
+            Path::new("/h/.local/state/agentcenter/handoffs"),
+            "{state:?}"
+        );
+    }
+}
+
+#[test]
+fn copy_directory_behind_a_symlink_is_a_failed_copy() {
+    let d = tmp();
+    let original = d.join("handoffs/h.md");
+    fs::write(&original, b"acknowledged").unwrap();
+    fs::create_dir(d.join("real")).unwrap();
+    symlink(d.join("real"), d.join("link")).unwrap();
+    let mut env = Env::with_state_home(d.clone(), None);
+    env.handoffs = d.join("link/state/handoffs");
+    let ack = artifact(&original, &[d.join("handoffs")], 0, env.uid).unwrap();
+    assert_eq!(seal_copy(&ack, &env, SID, OP), Err(code::COPY_FAILED));
+    assert!(
+        !d.join("real/state").exists(),
+        "nothing created through the link"
+    );
+    let _ = fs::remove_dir_all(&d);
+}

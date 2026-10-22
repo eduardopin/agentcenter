@@ -360,6 +360,47 @@ SO_PEERCRED do not isolate hostile processes running as the same UID or root.
 The linked contract documents bounds, activation, test inputs and cancellation.
 No extension is installed or attached to an existing session automatically.
 
+## Pi handoff-pickup, protocol 3 (CC5)
+
+One click persists a handoff and resumes it in a child session of the same Pi
+process. Pi exposes `newSession` only to command handlers, so the socket never
+starts it: the protocol 3 `handoff_pickup` request only **arms** an operation
+(`accepted`/`armed`, short TTL), and the extension's `/agentcenter-pickup
+<operation UUID>` command, typed into the pane, runs it: handoff persisted,
+`newSession` with the old file as parent, pickup message, loaded entry. The
+session ID and instance nonce rotate; the old nonce is then refused
+(`unauthorized`) and status is read from whichever endpoint the same
+pid + starttime publishes now (`pi::pickup_status`). Completion comes only from
+that status record (`pickup_loaded` with handoff path/sha256/size, new session,
+parent and loaded entry), never from the prompt reply.
+
+The command is typed through Herdr `agent.prompt` (protocol 22), revalidated
+immediately before the write like CC4: pid + starttime, exactly one pane holding
+the pid at the expected workspace/tab/pane, adapter `pi`, status `idle`, and the
+pane's agent session. Herdr 0.9 reports a Pi pane as
+`agent_session: {kind: "path", value: <session .jsonl>}`, never the session ID,
+so the expected identity is `herdr::AgentSession::Path(session_file)` compared
+byte for byte; Claude Code keeps `AgentSession::Id`. A kind never matches the
+other kind.
+
+`pi::handoff_pickup` order and outcomes:
+
+| Step | Result | Arm |
+|---|---|---|
+| no Herdr pane, other process, handoff capability disabled | `Unavailable(no_herdr_pane / identity / reason)` | none |
+| pane read before arming reports no agent session (Herdr's Pi integration absent) | `Unavailable(no_herdr_session)` | none |
+| protocol 2 (CC1) extension refuses the v3 request | `Unavailable(unsupported_protocol)` | none |
+| extension refuses the arm (busy, stale, unauthorized...) | `Refused(reply)` | none |
+| Herdr refuses before the write (stale, other session file, busy...) | `Herdr { error, cancelled }` | cancelled |
+| failure once `agent.prompt` was written (no reply, Herdr error object) | `Unknown(request)` | kept: reconcile by status, never resend |
+
+A Herdr error after the write is not a refusal: the command may have been
+typed, so the arm is never cancelled there. Tests: `control::herdr` and
+`control::pi` unit tests, and `tests/control_pi_pickup.rs` (fake Pi protocol 3
+with rotation plus a fake Herdr reporting `kind:"path"`). A Node-to-Rust run of
+the real extension through `examples/pi_pickup_probe.rs` and an end-to-end run
+with a real Pi in an isolated Herdr are not part of the suite yet.
+
 ## Claude Code control through Herdr (CC4)
 
 The common contract lives in `control/mod.rs`: the CC1 states
@@ -415,6 +456,72 @@ last read and the prompt being typed. The window is a few milliseconds; a
 prompt that lands in another session cannot complete this operation, because
 evidence is matched by session ID and operation mark. A `herdr` reply to
 `agent.prompt` only means the text was typed.
+
+## Claude handoff-pickup via Herdr (CC6)
+
+`Controller::pickup_start` / `pickup_status` in `control/claude.rs` run the
+squad clear-pickup swap in Rust (reference: `squad-troca.py`, never called)
+and return `pickup::Progress`; pickup is not a `control::Action`. Each status
+call advances as far as it can without sleeping (every Herdr call bounded by
+`io_timeout`); the caller polls.
+
+1. `handoff_running`: the CC4 Handoff under the same operation ID, until
+   `persisted` (path + size + sha256 from the transcript `Write`).
+2. `handoff_persisted`: the original is opened once (`O_NOFOLLOW`, regular,
+   owned by the UID, no symlink on the path), those very bytes must match the
+   ack's size and sha256, and are written `0400` as
+   `<state>/agentcenter/handoffs/s<hex(session)>-<operation>.md` (`<state>` is
+   `XDG_STATE_HOME` when absolute, else `~/.local/state`, as the cockpit's
+   handoff index; directory `0700`, no symlink on its path, else `copy_failed`;
+   a hard link, so an existing name is never replaced), then re-read and
+   checked (`copy_mismatch`). Never "the newest file" nor the original.
+3. Wait for `idle` (`idle_timeout`); immediately before, the vigia claim of
+   the old session (`vigia_swap`), the copy's path (`unsafe_copy_path` if it
+   holds whitespace, `<`, `>`, a control character or is not UTF-8, since it
+   must travel as one argument inside `<command-args>`), the copy's sha256 and
+   (in `agent.prompt`) pid+starttime,
+   the single pane holding the pid, location, adapter and `agent_session_id`
+   are rechecked; then `/clear`. Stage `clearing`.
+4. `new_session_confirmed` only when `agent.get` of the same pane reports a
+   different session ID while `/proc` and `pane.process_info` still give the
+   same pid+starttime and the adapter is still `claude`. If the old session is
+   still there at `clear_timeout`, one `agent.send_keys ["esc"]` (revalidated,
+   never while `working` and never into a session the vigia has claimed) and
+   `failed` in `clearing` with `not_cleared`; `not_cleared_working` when the
+   agent was working (no Escape), `vigia_swap` when claimed (no Escape),
+   `escape_failed` when the Escape was refused or its reply never came (it may
+   have been typed). The old session stays active.
+5. Claims (old and new session) and the copy rechecked, then
+   `/clear-pickup pickup <copy>` to the new session (`pickup_sent`).
+   `pickup_loaded` only when the new transcript has, at or after the send, the
+   `/clear-pickup` user entry with argument `pickup <copy>` and then a `Read`
+   of exactly that path whose result succeeded for that file.
+
+A timeout at any stage is `unknown` at that stage, and nothing is sent after
+`unknown`; only a late `pickup_loaded` of the same operation can still complete
+it. Failures before `/clear` change nothing. After it, the result names the old
+session ID and transcript (`resume_command`: `claude --resume <id>`); nothing
+deletes a transcript, the original handoff or the copy. A running or held
+pickup blocks other operations on both the old and the new session. Progress
+and telemetry carry IDs, stage, codes, path, size and sha256, never handoff
+or transcript content.
+
+Residual risks: Herdr has no compare-and-swap, so the pane can change between
+the last read and a typed `/clear` (window of milliseconds, as in CC4). The
+vigia claim is read-only: if the vigia claims between our last check and the
+send, both may act; AgentCenter writes no claim of its own. `/clear` landing
+in a dialog the Escape does not close is reported, not resolved. The `Read`
+evidence relies on Claude Code's transcript shape (`toolUseResult.file`).
+
+Permission dialog in a real session (seen in the E2E with Claude Code
+2.1.308): `<repo>/.claude/` is a protected path, so the skill's `Write` of
+`<repo>/.claude/handoffs/…` asks for confirmation even under `acceptEdits`, and
+no `allow` rule lifts it; the E2E grants it once for the session during setup.
+In the owner's session without that grant, the Handoff stops at the dialog:
+no `Write` reaches the transcript, the stage stays `handoff_running` until
+`evidence_timeout` and ends `unknown`/`timeout`; nothing is cleared. The
+dialog is the owner's to answer; AgentCenter neither answers it nor sends
+Escape at that stage.
 
 ## Performance budget (measured, gated in CI where possible)
 

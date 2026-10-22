@@ -21,7 +21,9 @@ export async function privateDirectory(path) {
   return absolute;
 }
 
-export async function listenPrivate(runtimeDirectory, identity, dispatcher) {
+// pickupCapability (protocol 3) is reported only in v3 reply metadata, never in
+// the v2-shaped manifest.
+export async function listenPrivate(runtimeDirectory, identity, dispatcher, pickupCapability) {
   const getMetadata = typeof identity === 'function' ? identity : () => identity;
   identity = getMetadata();
   const root = await privateDirectory(runtimeDirectory);
@@ -43,7 +45,9 @@ export async function listenPrivate(runtimeDirectory, identity, dispatcher) {
     metadata.capabilities = current.capabilities ?? metadata.capabilities;
     const keys = ['protocol_version', 'operation_id', 'action', 'session_id', 'session_file',
       'pid', 'process_starttime', 'instance_nonce', 'expected'];
-    const reply = (state, code) => client.end(JSON.stringify({ protocol_version: 2,
+    // Protocol 3 (pickup) replies echo 3; everything else stays protocol 2.
+    const version = dispatcher && request?.protocol_version === 3 ? 3 : 2;
+    const reply = (state, code) => client.end(JSON.stringify({ protocol_version: version,
       operation_id: typeof request?.operation_id === 'string' ? request.operation_id : null,
       state, code }) + '\n');
     if (!request || Array.isArray(request) || Object.keys(request).length !== keys.length ||
@@ -53,15 +57,17 @@ export async function listenPrivate(runtimeDirectory, identity, dispatcher) {
         !Number.isSafeInteger(request.pid) || request.pid <= 0 ||
         ['session_id', 'session_file', 'process_starttime', 'instance_nonce'].some(key => typeof request[key] !== 'string') ||
         (!request.expected || typeof request.expected !== 'object' || Array.isArray(request.expected)) ||
-        !['status', 'cancel', 'handoff', 'compact'].includes(request.action)) return reply('rejected', 'invalid_request');
-    if (request.protocol_version !== 2) return reply('rejected', 'incompatible');
+        !['status', 'cancel', 'handoff', 'compact', ...(dispatcher ? ['handoff_pickup'] : [])].includes(request.action)) return reply('rejected', 'invalid_request');
+    if (request.protocol_version !== 2 && version !== 3) return reply('rejected', 'incompatible');
     if (!/^[0-9a-f]{64}$/.test(request.instance_nonce) ||
         !timingSafeEqual(Buffer.from(request.instance_nonce), Buffer.from(nonce))) return reply('rejected', 'unauthorized');
     if (['session_id', 'session_file', 'pid', 'process_starttime'].some(key => request[key] !== identity[key])) return reply('rejected', 'stale_instance');
     if (!dispatcher && JSON.stringify(request.expected) !== JSON.stringify(identity.expected)) return reply('rejected', 'stale_revision');
     if (dispatcher) {
       const result = dispatcher(request);
-      return client.end(JSON.stringify({ ...result, metadata: { expected: metadata.expected, capabilities: metadata.capabilities, handoff_directory: current.handoff_directory, model_auth: current.model_auth } }) + '\n');
+      const capabilities = version === 3 && pickupCapability
+        ? { ...metadata.capabilities, handoff_pickup: pickupCapability() } : metadata.capabilities;
+      return client.end(JSON.stringify({ ...result, metadata: { expected: metadata.expected, capabilities, handoff_directory: current.handoff_directory, model_auth: current.model_auth } }) + '\n');
     }
     // No effects exist in this foundation slice: unknown is never fabricated completion.
     if (request.action === 'status' || request.action === 'cancel') return reply('unknown', 'unknown_operation');

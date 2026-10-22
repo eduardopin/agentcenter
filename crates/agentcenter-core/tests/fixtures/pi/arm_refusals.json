@@ -1,0 +1,241 @@
+{
+  "busy": {
+    "protocol_version": 3,
+    "operation_id": "12345678-1234-1234-1234-123456789abc",
+    "state": "rejected",
+    "code": "busy",
+    "metadata": {
+      "expected": {
+        "managerId": "manager",
+        "revision": "1",
+        "sessionId": "test",
+        "sessionFile": "/private/session.jsonl",
+        "leafId": "leaf"
+      },
+      "capabilities": {
+        "handoff": {
+          "enabled": false,
+          "disabled_reason": "busy",
+          "cancel_supported": true
+        },
+        "compact": {
+          "enabled": false,
+          "disabled_reason": "busy",
+          "cancel_supported": true
+        },
+        "handoff_pickup": {
+          "enabled": false,
+          "disabled_reason": "busy",
+          "cancel_supported": true,
+          "protocol_version": 3
+        }
+      },
+      "handoff_directory": "/private/handoffs",
+      "model_auth": "configured"
+    }
+  },
+  "stale_revision": {
+    "protocol_version": 3,
+    "operation_id": "12345678-1234-1234-1234-123456789abc",
+    "state": "rejected",
+    "code": "stale_revision",
+    "metadata": {
+      "expected": {
+        "managerId": "manager",
+        "revision": "1",
+        "sessionId": "test",
+        "sessionFile": "/private/session.jsonl",
+        "leafId": "leaf"
+      },
+      "capabilities": {
+        "handoff": {
+          "enabled": true,
+          "disabled_reason": null,
+          "cancel_supported": true
+        },
+        "compact": {
+          "enabled": true,
+          "disabled_reason": null,
+          "cancel_supported": true
+        },
+        "handoff_pickup": {
+          "enabled": true,
+          "disabled_reason": null,
+          "cancel_supported": true,
+          "protocol_version": 3
+        }
+      },
+      "handoff_directory": "/private/handoffs",
+      "model_auth": "configured"
+    }
+  },
+  "disabled": {
+    "protocol_version": 3,
+    "operation_id": "12345678-1234-1234-1234-123456789abc",
+    "state": "rejected",
+    "code": "disabled",
+    "metadata": {
+      "expected": {
+        "managerId": "manager",
+        "revision": "1",
+        "sessionId": "test",
+        "sessionFile": "/private/session.jsonl",
+        "leafId": "leaf"
+      },
+      "capabilities": {
+        "handoff": {
+          "enabled": false,
+          "disabled_reason": "no_model",
+          "cancel_supported": true
+        },
+        "compact": {
+          "enabled": false,
+          "disabled_reason": "no_model",
+          "cancel_supported": true
+        },
+        "handoff_pickup": {
+          "enabled": false,
+          "disabled_reason": "no_model",
+          "cancel_supported": true,
+          "protocol_version": 3
+        }
+      },
+      "handoff_directory": "/private/handoffs",
+      "model_auth": "no_model"
+    }
+  },
+  "unsupported_guarded_compaction": {
+    "protocol_version": 3,
+    "operation_id": "12345678-1234-1234-1234-123456789abc",
+    "state": "rejected",
+    "code": "unsupported_guarded_compaction",
+    "metadata": {
+      "expected": null,
+      "capabilities": {
+        "handoff": {
+          "enabled": false,
+          "disabled_reason": "unsupported_guarded_compaction",
+          "cancel_supported": false
+        },
+        "compact": {
+          "enabled": false,
+          "disabled_reason": "unsupported_guarded_compaction",
+          "cancel_supported": false
+        },
+        "handoff_pickup": {
+          "enabled": false,
+          "disabled_reason": "unsupported_guarded_compaction",
+          "cancel_supported": false,
+          "protocol_version": 3
+        }
+      },
+      "handoff_directory": "/private/handoffs",
+      "model_auth": "configured"
+    }
+  },
+  "capacity": {
+    "protocol_version": 3,
+    "operation_id": "12345678-1234-1234-1234-123456789abc",
+    "state": "rejected",
+    "code": "capacity",
+    "metadata": {
+      "expected": {
+        "managerId": "manager",
+        "revision": "1",
+        "sessionId": "test",
+        "sessionFile": "/private/session.jsonl",
+        "leafId": "leaf"
+      },
+      "capabilities": {
+        "handoff": {
+          "enabled": true,
+          "disabled_reason": null,
+          "cancel_supported": true
+        },
+        "compact": {
+          "enabled": true,
+          "disabled_reason": null,
+          "cancel_supported": true
+        },
+        "handoff_pickup": {
+          "enabled": true,
+          "disabled_reason": null,
+          "cancel_supported": true,
+          "protocol_version": 3
+        }
+      },
+      "handoff_directory": "/private/handoffs",
+      "model_auth": "configured"
+    }
+  },
+  "duplicate_mismatch": {
+    "protocol_version": 3,
+    "operation_id": "12345678-1234-1234-1234-123456789abc",
+    "state": "rejected",
+    "code": "duplicate_mismatch",
+    "metadata": {
+      "expected": {
+        "managerId": "manager",
+        "revision": "1",
+        "sessionId": "test",
+        "sessionFile": "/private/session.jsonl",
+        "leafId": "leaf"
+      },
+      "capabilities": {
+        "handoff": {
+          "enabled": false,
+          "disabled_reason": "busy",
+          "cancel_supported": true
+        },
+        "compact": {
+          "enabled": false,
+          "disabled_reason": "busy",
+          "cancel_supported": true
+        },
+        "handoff_pickup": {
+          "enabled": false,
+          "disabled_reason": "busy",
+          "cancel_supported": true,
+          "protocol_version": 3
+        }
+      },
+      "handoff_directory": "/private/handoffs",
+      "model_auth": "configured"
+    }
+  },
+  "expired": {
+    "protocol_version": 3,
+    "operation_id": "12345678-1234-1234-1234-123456789abc",
+    "state": "unknown",
+    "code": "expired",
+    "metadata": {
+      "expected": {
+        "managerId": "manager",
+        "revision": "1",
+        "sessionId": "test",
+        "sessionFile": "/private/session.jsonl",
+        "leafId": "leaf"
+      },
+      "capabilities": {
+        "handoff": {
+          "enabled": true,
+          "disabled_reason": null,
+          "cancel_supported": true
+        },
+        "compact": {
+          "enabled": true,
+          "disabled_reason": null,
+          "cancel_supported": true
+        },
+        "handoff_pickup": {
+          "enabled": true,
+          "disabled_reason": null,
+          "cancel_supported": true,
+          "protocol_version": 3
+        }
+      },
+      "handoff_directory": "/private/handoffs",
+      "model_auth": "configured"
+    }
+  }
+}

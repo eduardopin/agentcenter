@@ -44,8 +44,47 @@ via Herdr (CC4), gauges por linha (CC8) e gráficos de cockpit no detalhe (CC9).
   valor 1 a 19 em vez de 0): cerca de 1 em 4 execuções nas árvores integradas,
   0 em 25 na base de 21/10 e 0 em 10 na base com o mesmo código de GUI de
   22/10. Causa não demonstrada; não há fonte de dados vivos no teste.
-- [ ] Ainda faltam CC5/CC6 (handoff-pickup de um clique) e CC7 (seção de
-  controle por capacidade real para Pi e Claude).
+- [ ] Corte de 22/10 (tarde), integrado por decisão do dono ("faça um corte
+  na aplicação como ela está") com aceites incompletos:
+  - CC6/CC6b (handoff-pickup do Claude Code via Herdr): SHIP na revisão
+    rodada 2, inclusive E2E com Claude Code real em Herdr isolado
+    (`scripts/e2e-claude-herdr.sh`). Avisos abertos: comportamentos sem teste
+    dedicado (unknown por resposta perdida no prompt do pickup, argumento
+    exato do pickup, `Env::new` lendo `XDG_STATE_HOME`), comando do E2E não
+    citado no CONTRIBUTING, `unsafe_copy_path` só recusado depois do turno de
+    Handoff. Em sessão real, o Write do handoff em `<repo>/.claude/handoffs`
+    pede confirmação do Claude Code se a sessão ainda não liberou a pasta
+    `.claude`; o Handoff então termina `unknown` pelo prazo.
+  - CC5/CC5b/CC5c (handoff-pickup do Pi via Herdr, decisão do dono 22/10):
+    FIX_FIRST na rodada 2 e integrado como está por decisão do dono. Defeitos
+    conhecidos, ambos falham para o lado seguro sem perder dado: o manifesto
+    fica `busy` depois de um arme que não virou sessão nova, até o próximo
+    evento de agente do Pi; e um segundo arme depois do prazo do `newSession`
+    pode criar duas sessões novas se a troca antiga destravar. A identidade
+    do Pi no Herdr por arquivo de sessão (`kind=path`) entrou sem revisão
+    independente; o E2E com Pi real e o teste cruzado Node→Rust não foram
+    feitos.
+  - CC7/CC7b (seção de controle): FIX_FIRST na rodada 1 corrigido (motivo
+    sumindo, redescoberta escondendo a seção e o foco), rodada 2 sem
+    veredito no corte. "Handoff + nova sessão" segue escondido no app
+    (`pickup_not_integrated`) até ligar os adaptadores reais do CC5/CC6; o
+    E2E GUI → adaptador real não existe. Abertos: `herdr_server` e o
+    construtor de `Session` sem teste, `CLAUDE_CONFIG_DIR` ignorado pela GUI,
+    capacidade que cai sem mudança de status no Herdr só percebida no foco
+    da janela, critério de Herdr diferente do `detail.rs`, captura real em
+    1280x800 (o Broadway para em 1024x768) e medição da GUI com máquina
+    parada. Em GTK 4.22.4 `gtk_accessible_announce` sem barramento de
+    acessibilidade derruba o processo; o anúncio só é chamado nos contextos
+    AT-SPI/AccessKit.
+  - CC10 (tick d_state): `scripts/ci.sh` do corte passou o bench gate com
+    mediana d_state de 4,014 ms (1,25x de folga; antes 5,036–5,111 ms),
+    claude_40 2,939 ms e delayacct 2,757 ms, com load 3–7 e sem máquina
+    parada; a folga-alvo de 1,3x não foi atingida. FIX_FIRST leve na revisão, não
+    corrigido: `task/` aberto sem `O_DIRECTORY` (uma FIFO numa raiz de fixture
+    trava a varredura; não ocorre em `/proc` real), falta teste de vazamento
+    de fd e de `O_CLOEXEC`, teste de alocação falha com `TMPDIR` maior que
+    ~205 caracteres, comparação de caminho por `Path` e não por bytes, buffer
+    do `getdents64` sem alinhamento explícito. Exige glibc 2.30 ou mais nova.
 - [ ] Fazer o gate integral passar sem afrouxar testes ou orçamentos.
   O último gate local medido falhou: mediana D-state de 5,036 ms, limite <5 ms.
 - [ ] Resolver os gates da GUI. As últimas medições registraram:

@@ -1,0 +1,4 @@
+{"type":"user","sessionId":"@SID@","timestamp":"@TS0@","message":{"role":"user","content":"<command-message>clear-pickup</command-message>\n<command-name>/clear-pickup</command-name>\n<command-args>pickup @PATH@</command-args>"}}
+{"type":"user","sessionId":"@SID@","timestamp":"@TS1@","isMeta":true,"message":{"role":"user","content":[{"type":"text","text":"Base directory for this skill: AGENTCENTER-CANARY-cc6 skill text"}]}}
+{"type":"assistant","sessionId":"@SID@","timestamp":"@TS2@","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_r_@ID@","name":"Read","input":{"file_path":"@READ@"}}]}}
+{"type":"user","sessionId":"@SID@","timestamp":"@TS3@","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_r_@ID@","content":"1\tAGENTCENTER-CANARY-cc6 handoff body"}]},"toolUseResult":{"type":"text","file":{"filePath":"@READ@","content":"AGENTCENTER-CANARY-cc6 handoff body","numLines":1,"startLine":1,"totalLines":1}}}

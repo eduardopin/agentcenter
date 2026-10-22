@@ -22,7 +22,7 @@ async function rustProbe(runtimeDir, action) {
   const cargo = join(process.env.HOME, '.cargo/bin/cargo');
   await execute(cargo, ['build', '--offline', '-p', 'agentcenter-core', '--example', 'pi_control_probe'], { cwd, timeout: 30000 });
   const operationId = randomUUID();
-  const { stdout } = await execute(join(cwd, 'target/debug/examples/pi_control_probe'), [runtimeDir, action, operationId], { cwd, timeout: 12000 });
+  const { stdout } = await execute(join(process.env.CARGO_TARGET_DIR || join(cwd, 'target'), 'debug/examples/pi_control_probe'), [runtimeDir, action, operationId], { cwd, timeout: 12000 });
   const result = JSON.parse(stdout);
   assert.equal(result.operation_id, operationId);
   assert.equal(result.accepted, true);

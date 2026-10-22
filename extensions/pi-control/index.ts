@@ -1,7 +1,7 @@
 import { mkdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { createOperations } from './operations.mjs';
+import { createOperations, PICKUP_COMMAND } from './operations.mjs';
 import { listenPrivate, privateDirectory } from './transport.mjs';
 
 // Explicit opt-in extension. Factory registers handlers only, never touches disk.
@@ -35,10 +35,19 @@ export default function piControl(pi) {
       operations = await createOperations({ getContext: () => context, outputRoot,
         onChange: current => ownedListener?.refresh(current) });
       try {
-        listener = ownedListener = await listenPrivate(process.env.XDG_RUNTIME_DIR, operations.metadata, operations.dispatch);
+        listener = ownedListener = await listenPrivate(process.env.XDG_RUNTIME_DIR, operations.metadata, operations.dispatch, operations.pickupCapability);
       } catch (error) { await close(); throw error; }
     });
     return lifecycle;
+  });
+  // Pi exposes newSession only to command handlers. The client arms a request
+  // over the socket, then types this command through validated Herdr.
+  pi.registerCommand(PICKUP_COMMAND, {
+    description: 'AgentCenter handoff-pickup: runs only a request armed through the opt-in control socket',
+    handler: async (args, ctx) => {
+      await lifecycle.catch(() => {});
+      await operations?.pickup(args, ctx);
+    },
   });
   pi.on('session_shutdown', () => {
     lifecycle = lifecycle.catch(() => {}).then(close);

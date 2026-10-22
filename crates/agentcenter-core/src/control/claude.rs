@@ -32,17 +32,33 @@
 //! its session for `hold`, counted from when it became `unknown`; a later
 //! status with the same operation ID re-reads the evidence of that same
 //! operation and session only.
+//!
+//! Handoff-pickup (CC6) is its own entry point, [`Controller::pickup_start`] /
+//! [`Controller::pickup_status`], returning [`pickup::Progress`]; it is not an
+//! [`Action`]. Sequence: the Handoff above until `persisted`; a private 0400
+//! copy of exactly the acknowledged bytes (sha256 of the ack) in the
+//! AgentCenter handoffs directory; wait for `idle`; `/clear` after full
+//! revalidation; a different `agent_session_id` in the same pane for the same
+//! pid+starttime; `/clear-pickup pickup <copy>` to the new session; loaded
+//! when the new transcript shows that prompt and then a successful `Read` of
+//! the copy. Each stage has a deadline; a timeout is `unknown` at that stage,
+//! and nothing is retried or sent after `unknown`. Nothing deletes a
+//! transcript or a handoff: after `/clear` the old transcript stays on disk and
+//! [`resume_command`] names the old session.
 use super::{
     Action, Artifact, Capability, Evidence, Outcome, State, Telemetry, herdr, hex,
-    operation_id_valid, sha256_reader,
+    operation_id_valid,
+    pickup::{OldSession, Progress, Stage},
+    sha256_reader,
 };
 use crate::overlay::transcript::{claude::find, parse_iso_ms};
 use serde_json::Value;
 use std::{
     collections::{HashMap, VecDeque},
+    ffi::OsString,
     fs::{self, File, OpenOptions},
-    io::{BufRead, BufReader, Read, Seek, SeekFrom},
-    os::unix::fs::{MetadataExt, OpenOptionsExt},
+    io::{BufRead, BufReader, Read, Seek, SeekFrom, Write},
+    os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
     path::{Component, Path, PathBuf},
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -50,6 +66,8 @@ use std::{
 pub const COMPACT_TEXT: &str = "/compact";
 pub const HANDOFF_TEXT: &str = "/clear-pickup handoff";
 pub const MARK: &str = "agentcenter-op:";
+pub const CLEAR_TEXT: &str = "/clear";
+pub const PICKUP_TEXT: &str = "/clear-pickup pickup";
 /// Transcript bytes read per evaluation, and largest line considered.
 const SCAN_LIMIT: u64 = 256 << 20;
 const LINE_LIMIT: u64 = 16 << 20;
@@ -87,6 +105,26 @@ pub mod code {
     pub const COMPACTED: &str = "compacted";
     pub const PERSISTED: &str = "persisted";
     pub const UNKNOWN_OPERATION: &str = "unknown_operation";
+    // Handoff-pickup (CC6). Running codes name the stage just reached.
+    /// Private copy written and verified; waiting for `idle` to `/clear`.
+    pub const COPIED: &str = "copied";
+    pub const CLEAR_SENT: &str = "clear_sent";
+    pub const NEW_SESSION: &str = "new_session";
+    pub const PICKUP_SENT: &str = "pickup_sent";
+    pub const PICKUP_LOADED: &str = "pickup_loaded";
+    /// The handoff or its copy no longer matches the acknowledged sha256.
+    pub const COPY_MISMATCH: &str = "copy_mismatch";
+    /// The copy could not be written (directory unsafe, I/O).
+    pub const COPY_FAILED: &str = "copy_failed";
+    /// `/clear` did not change the session by the deadline; one Escape sent.
+    pub const NOT_CLEARED: &str = "not_cleared";
+    /// As [`NOT_CLEARED`], but the agent was working: no Escape.
+    pub const NOT_CLEARED_WORKING: &str = "not_cleared_working";
+    /// As [`NOT_CLEARED`], but the Escape was refused or not confirmed.
+    pub const ESCAPE_FAILED: &str = "escape_failed";
+    /// The copy's path cannot travel as one `/clear-pickup` argument
+    /// (whitespace, `<`, `>`, control or non-UTF-8): refused before `/clear`.
+    pub const UNSAFE_COPY_PATH: &str = "unsafe_copy_path";
 }
 
 fn herdr_code(e: herdr::Error) -> &'static str {
@@ -141,10 +179,25 @@ pub struct Env {
     pub home: PathBuf,
     /// Expected owner of handoff files; [`super::pi::getuid`] in production.
     pub uid: u32,
+    /// AgentCenter handoffs directory, where pickup copies go:
+    /// `<state>/agentcenter/handoffs`, `<state>` as in [`Env::with_state_home`].
+    pub handoffs: PathBuf,
 }
 impl Env {
+    /// Roots of `home`, `XDG_STATE_HOME` read from the process, as the
+    /// cockpit's handoff index does ([`crate::overlay::transcript::Transcripts::from_env`]).
     pub fn new(home: PathBuf) -> Self {
+        Self::with_state_home(home, std::env::var_os("XDG_STATE_HOME"))
+    }
+    /// As [`Env::new`] with `XDG_STATE_HOME` given: `<state_home>` when
+    /// absolute (so never empty), else `<home>/.local/state`.
+    pub fn with_state_home(home: PathBuf, state_home: Option<OsString>) -> Self {
+        let state = state_home
+            .map(PathBuf::from)
+            .filter(|p| p.is_absolute())
+            .unwrap_or_else(|| home.join(".local/state"));
         Self {
+            handoffs: state.join("agentcenter/handoffs"),
             home,
             uid: super::pi::getuid(),
         }
@@ -224,6 +277,30 @@ pub struct Controller {
     pub hold: Duration,
     ops: HashMap<String, Operation>,
     telemetry: VecDeque<Telemetry>,
+    /// Pickup: after the copy, how long to wait for `idle` before `/clear`.
+    pub idle_timeout: Duration,
+    /// Pickup: after `/clear`, how long the pane may keep the old session.
+    pub clear_timeout: Duration,
+    /// Pickup: from the new session, how long until the copy is read.
+    pub load_timeout: Duration,
+    pickups: HashMap<String, Pickup>,
+}
+
+#[derive(Debug)]
+struct Pickup {
+    subject: Subject,
+    old_file: PathBuf,
+    stage: Stage,
+    state: State,
+    code: &'static str,
+    /// The private copy, from [`Stage::HandoffPersisted`] on.
+    copy: Option<Artifact>,
+    new_session: Option<String>,
+    /// When the current stage began: its deadline counts from here.
+    stage_at: Instant,
+    unknown_at: Option<Instant>,
+    /// Wall clock just before the pickup prompt; earlier entries never count.
+    pickup_ms: u64,
 }
 
 fn now_ms() -> u64 {
@@ -243,6 +320,10 @@ impl Controller {
             hold: Duration::from_secs(600),
             ops: HashMap::new(),
             telemetry: VecDeque::new(),
+            idle_timeout: Duration::from_secs(60),
+            clear_timeout: Duration::from_secs(15),
+            load_timeout: Duration::from_secs(180),
+            pickups: HashMap::new(),
         }
     }
 
@@ -260,14 +341,18 @@ impl Controller {
     }
 
     fn in_flight(&self, session_id: &str) -> bool {
-        self.ops.values().any(|o| {
-            o.subject.session_id == session_id
-                && match o.state {
-                    State::Accepted | State::Running => true,
-                    State::Unknown => o.unknown_at.is_none_or(|t| t.elapsed() < self.hold),
-                    _ => false,
-                }
-        })
+        let held = |state: State, unknown_at: Option<Instant>| match state {
+            State::Accepted | State::Running => true,
+            State::Unknown => unknown_at.is_none_or(|t| t.elapsed() < self.hold),
+            _ => false,
+        };
+        self.ops
+            .values()
+            .any(|o| o.subject.session_id == session_id && held(o.state, o.unknown_at))
+            || self.pickups.values().any(|p| {
+                (p.subject.session_id == session_id || p.new_session.as_deref() == Some(session_id))
+                    && held(p.state, p.unknown_at)
+            })
     }
 
     /// Local checks then a read-only Herdr probe. Returns the transcript.
@@ -448,6 +533,310 @@ impl Controller {
         }
         Ok(out)
     }
+
+    fn progress(id: &str, p: &Pickup) -> Progress {
+        Progress {
+            operation_id: id.to_string(),
+            state: p.state,
+            stage: p.stage,
+            code: p.code,
+            old_session: OldSession {
+                session_id: p.subject.session_id.clone(),
+                session_file: p.old_file.clone(),
+            },
+            handoff: p.copy.clone(),
+            new_session_id: p.new_session.clone(),
+        }
+    }
+
+    /// Starts a handoff-pickup: the Handoff of [`Controller::start`] under the
+    /// same operation ID, then as many later stages as are ready now. A
+    /// repeated ID for the same session returns the current progress and never
+    /// resends; an ID already used by another operation is rejected.
+    pub fn pickup_start(&mut self, operation_id: &str, s: &Subject) -> Progress {
+        let reject = |code| Progress {
+            operation_id: operation_id.to_string(),
+            state: State::Rejected,
+            stage: Stage::HandoffRunning,
+            code,
+            old_session: OldSession {
+                session_id: s.session_id.clone(),
+                session_file: PathBuf::new(),
+            },
+            handoff: None,
+            new_session_id: None,
+        };
+        if !operation_id_valid(operation_id) {
+            return reject(code::INVALID_REQUEST);
+        }
+        if let Some(p) = self.pickups.get(operation_id) {
+            if p.subject == *s {
+                return self.pickup_status(operation_id).unwrap_or_else(reject);
+            }
+            return reject(code::DUPLICATE_MISMATCH);
+        }
+        if self.ops.contains_key(operation_id) {
+            return reject(code::DUPLICATE_MISMATCH);
+        }
+        if self.pickups.len() >= MAX_OPERATIONS {
+            self.pickups.retain(|_, p| !p.state.is_terminal());
+            if self.pickups.len() >= MAX_OPERATIONS {
+                return reject(code::CAPACITY);
+            }
+        }
+        let o = self.start(operation_id, Action::Handoff, s);
+        let old_file = self
+            .ops
+            .get(operation_id)
+            .and_then(|o| o.transcript.clone())
+            .unwrap_or_default();
+        let p = Pickup {
+            subject: s.clone(),
+            old_file,
+            stage: Stage::HandoffRunning,
+            // A handoff completed already still has its copy to make.
+            state: match o.state {
+                State::Completed => State::Running,
+                s => s,
+            },
+            code: o.code,
+            copy: None,
+            new_session: None,
+            stage_at: Instant::now(),
+            unknown_at: (o.state == State::Unknown).then(Instant::now),
+            pickup_ms: 0,
+        };
+        self.pickups.insert(operation_id.to_string(), p);
+        self.pickup_status(operation_id).unwrap_or_else(reject)
+    }
+
+    /// Advances the pickup as far as it can go now (each Herdr call bounded by
+    /// `io_timeout`, no sleeping) and returns where it is.
+    pub fn pickup_status(&mut self, operation_id: &str) -> Result<Progress, &'static str> {
+        if !self.pickups.contains_key(operation_id) {
+            return Err(code::UNKNOWN_OPERATION);
+        }
+        while self.pickup_step(operation_id) {}
+        Ok(Self::progress(operation_id, &self.pickups[operation_id]))
+    }
+
+    /// One stage transition attempt; `true` when it moved and may go on.
+    fn pickup_step(&mut self, id: &str) -> bool {
+        let p = &self.pickups[id];
+        let (state, stage) = (p.state, p.stage);
+        if state.is_terminal() {
+            return false;
+        }
+        if state == State::Unknown {
+            // Nothing is sent after unknown; only the pickup's own load
+            // evidence may still reconcile it.
+            if stage == Stage::PickupSent && self.loaded(id) == Ok(true) {
+                self.pickup_set(
+                    id,
+                    State::Completed,
+                    Stage::PickupLoaded,
+                    code::PICKUP_LOADED,
+                );
+            }
+            return false;
+        }
+        match stage {
+            Stage::HandoffRunning => self.step_handoff(id),
+            Stage::HandoffPersisted => self.step_clear(id),
+            Stage::Clearing => self.step_clearing(id),
+            Stage::NewSessionConfirmed => self.step_pickup(id),
+            Stage::PickupSent => {
+                let deadline = self.load_timeout;
+                match self.loaded(id) {
+                    Ok(true) => self.pickup_set(
+                        id,
+                        State::Completed,
+                        Stage::PickupLoaded,
+                        code::PICKUP_LOADED,
+                    ),
+                    _ if self.pickups[id].stage_at.elapsed() >= deadline => {
+                        self.pickup_set(id, State::Unknown, stage, code::TIMEOUT)
+                    }
+                    _ => false,
+                }
+            }
+            Stage::PickupLoaded => false,
+        }
+    }
+
+    /// Sets state, stage and code; a stage change restarts its deadline and
+    /// entering `unknown` starts the hold. Returns whether it may go on.
+    fn pickup_set(&mut self, id: &str, state: State, stage: Stage, code: &'static str) -> bool {
+        let p = self.pickups.get_mut(id).expect("pickup exists");
+        if p.stage != stage {
+            p.stage_at = Instant::now();
+        }
+        if state == State::Unknown && p.state != State::Unknown {
+            p.unknown_at = Some(Instant::now());
+        }
+        (p.state, p.stage, p.code) = (state, stage, code);
+        state == State::Running
+    }
+
+    fn step_handoff(&mut self, id: &str) -> bool {
+        let Ok(o) = self.status(id) else {
+            return self.pickup_set(id, State::Failed, Stage::HandoffRunning, code::INVALID);
+        };
+        match (o.state, o.evidence) {
+            (State::Completed, Some(Evidence::Persisted(a))) => {
+                let p = &self.pickups[id];
+                match seal_copy(&a, &self.env, &p.subject.session_id, id) {
+                    Ok(copy) => {
+                        self.pickups.get_mut(id).expect("pickup exists").copy = Some(copy);
+                        self.pickup_set(id, State::Running, Stage::HandoffPersisted, code::COPIED)
+                    }
+                    Err(c) => self.pickup_set(id, State::Failed, Stage::HandoffRunning, c),
+                }
+            }
+            (State::Completed, _) => {
+                self.pickup_set(id, State::Failed, Stage::HandoffRunning, code::INVALID)
+            }
+            (state, _) => {
+                self.pickup_set(id, state, Stage::HandoffRunning, o.code);
+                false
+            }
+        }
+    }
+
+    /// Claims (old and new session) and the copy, rechecked before each send.
+    fn pickup_guard(&self, id: &str) -> Result<(), &'static str> {
+        let p = &self.pickups[id];
+        self.env.no_claim(&p.subject.session_id)?;
+        if let Some(new) = &p.new_session {
+            self.env.no_claim(new)?;
+        }
+        let copy = p.copy.as_ref().ok_or(code::COPY_MISMATCH)?;
+        if !pickup_arg_safe(&copy.path) {
+            return Err(code::UNSAFE_COPY_PATH);
+        }
+        if !copy_intact(copy, self.env.uid) {
+            return Err(code::COPY_MISMATCH);
+        }
+        Ok(())
+    }
+
+    fn step_clear(&mut self, id: &str) -> bool {
+        let stage = Stage::HandoffPersisted;
+        if let Err(c) = self.pickup_guard(id) {
+            return self.pickup_set(id, State::Failed, stage, c);
+        }
+        let p = &self.pickups[id];
+        let r = self.endpoint.prompt(
+            &p.subject.target,
+            &p.subject.session_id,
+            CLEAR_TEXT,
+            self.io_timeout,
+        );
+        match r {
+            Ok(()) => self.pickup_set(id, State::Running, Stage::Clearing, code::CLEAR_SENT),
+            Err(herdr::Error::Busy) if p.stage_at.elapsed() >= self.idle_timeout => {
+                self.pickup_set(id, State::Unknown, stage, code::TIMEOUT)
+            }
+            Err(herdr::Error::Busy) => false,
+            Err(herdr::Error::Unknown) => {
+                self.pickup_set(id, State::Unknown, Stage::Clearing, code::UNKNOWN_EFFECT)
+            }
+            Err(e) => self.pickup_set(id, State::Failed, stage, herdr_code(e)),
+        }
+    }
+
+    fn step_clearing(&mut self, id: &str) -> bool {
+        let stage = Stage::Clearing;
+        let p = &self.pickups[id];
+        let (t, old) = (&p.subject.target, p.subject.session_id.as_str());
+        let late = p.stage_at.elapsed() >= self.clear_timeout;
+        match self.endpoint.pane_session(t, self.io_timeout) {
+            Ok((Some(new), _)) if new != old => {
+                if !session_id_valid(&new) {
+                    return self.pickup_set(id, State::Failed, stage, code::SESSION_MISMATCH);
+                }
+                self.pickups.get_mut(id).expect("pickup exists").new_session = Some(new);
+                self.pickup_set(
+                    id,
+                    State::Running,
+                    Stage::NewSessionConfirmed,
+                    code::NEW_SESSION,
+                )
+            }
+            Ok((Some(_), status)) if late => {
+                // Still the old session: a dialog is likely open. One Escape,
+                // never into a running turn nor into a session the vigia
+                // claimed; the old session stays active.
+                let c = if status.as_deref() == Some("working") {
+                    code::NOT_CLEARED_WORKING
+                } else if let Err(c) = self.env.no_claim(old) {
+                    c
+                } else {
+                    match self.endpoint.escape(t, old, self.io_timeout) {
+                        Ok(()) => code::NOT_CLEARED,
+                        Err(herdr::Error::Busy) => code::NOT_CLEARED_WORKING,
+                        Err(_) => code::ESCAPE_FAILED,
+                    }
+                };
+                self.pickup_set(id, State::Failed, stage, c)
+            }
+            Ok(_) | Err(herdr::Error::Transport) if late => {
+                self.pickup_set(id, State::Unknown, stage, code::TIMEOUT)
+            }
+            Ok(_) | Err(herdr::Error::Transport) => false,
+            Err(e) => self.pickup_set(id, State::Failed, stage, herdr_code(e)),
+        }
+    }
+
+    fn step_pickup(&mut self, id: &str) -> bool {
+        let stage = Stage::NewSessionConfirmed;
+        if let Err(c) = self.pickup_guard(id) {
+            return self.pickup_set(id, State::Failed, stage, c);
+        }
+        let p = &self.pickups[id];
+        let (Some(new), Some(copy)) = (p.new_session.clone(), p.copy.as_ref()) else {
+            return self.pickup_set(id, State::Failed, stage, code::INVALID);
+        };
+        let Some(path) = copy.path.to_str() else {
+            return self.pickup_set(id, State::Failed, stage, code::COPY_FAILED);
+        };
+        let text = format!("{PICKUP_TEXT} {path}");
+        let sent_ms = now_ms();
+        let r = self
+            .endpoint
+            .prompt(&p.subject.target, &new, &text, self.io_timeout);
+        let late = p.stage_at.elapsed() >= self.load_timeout;
+        if matches!(r, Ok(()) | Err(herdr::Error::Unknown)) {
+            self.pickups.get_mut(id).expect("pickup exists").pickup_ms = sent_ms;
+        }
+        match r {
+            Ok(()) => self.pickup_set(id, State::Running, Stage::PickupSent, code::PICKUP_SENT),
+            Err(herdr::Error::Busy) if late => {
+                self.pickup_set(id, State::Unknown, stage, code::TIMEOUT)
+            }
+            Err(herdr::Error::Busy) => false,
+            Err(herdr::Error::Unknown) => {
+                self.pickup_set(id, State::Unknown, Stage::PickupSent, code::UNKNOWN_EFFECT)
+            }
+            Err(e) => self.pickup_set(id, State::Failed, stage, herdr_code(e)),
+        }
+    }
+
+    /// Whether the new session's transcript shows this pickup loaded.
+    fn loaded(&self, id: &str) -> Result<bool, &'static str> {
+        let p = &self.pickups[id];
+        let (Some(new), Some(copy)) = (p.new_session.as_deref(), p.copy.as_ref()) else {
+            return Ok(false);
+        };
+        let Some(transcript) = find(
+            &self.env.home.join(".claude/projects"),
+            p.subject.cwd.as_deref(),
+            new,
+        ) else {
+            return Ok(false);
+        };
+        pickup_loaded(&transcript, p.pickup_ms, new, &copy.path)
+    }
 }
 
 /// Text of a message: a string, or the `text` of its text blocks.
@@ -463,19 +852,16 @@ fn texts(message: &Value) -> Vec<&str> {
     }
 }
 
-/// Evidence for one operation, reading the transcript from `offset`.
-/// `Ok(None)`: not (yet) there. Nothing read is kept beyond the result.
-#[allow(clippy::too_many_arguments)]
-pub(crate) fn evidence(
-    action: Action,
+/// Calls `f` with each complete JSON entry of `session_id` timestamped at or
+/// after `since_ms`, reading `transcript` from `offset` (at most
+/// `SCAN_LIMIT` bytes; partial and oversized lines skipped).
+fn entries(
     transcript: &Path,
     offset: u64,
-    sent_ms: u64,
     session_id: &str,
-    operation_id: &str,
-    roots: &[PathBuf],
-    uid: u32,
-) -> Result<Option<Evidence>, &'static str> {
+    since_ms: u64,
+    mut f: impl FnMut(&Value, u64),
+) -> Result<(), &'static str> {
     let mut file = File::open(transcript).map_err(|_| code::TRANSCRIPT_UNREADABLE)?;
     let len = file
         .metadata()
@@ -487,11 +873,6 @@ pub(crate) fn evidence(
     file.seek(SeekFrom::Start(offset))
         .map_err(|_| code::TRANSCRIPT_UNREADABLE)?;
     let mut reader = BufReader::new(file.take(SCAN_LIMIT));
-    let mark = format!("{MARK}{operation_id}");
-    let mut command_ms: Option<u64> = None;
-    let mut boundaries = Vec::new();
-    let mut writes: HashMap<String, String> = HashMap::new();
-    let mut written = Vec::new();
     let mut line = Vec::new();
     loop {
         line.clear();
@@ -500,7 +881,7 @@ pub(crate) fn evidence(
             .read_until(b'\n', &mut line)
             .map_err(|_| code::TRANSCRIPT_UNREADABLE)?;
         if n == 0 {
-            break;
+            return Ok(());
         }
         if line.last() != Some(&b'\n') {
             // Partial last line (still being written) or oversized: skip.
@@ -519,9 +900,31 @@ pub(crate) fn evidence(
         let Some(ts) = v["timestamp"].as_str().and_then(parse_iso_ms) else {
             continue;
         };
-        if ts < sent_ms {
-            continue;
+        if ts >= since_ms {
+            f(&v, ts);
         }
+    }
+}
+
+/// Evidence for one operation, reading the transcript from `offset`.
+/// `Ok(None)`: not (yet) there. Nothing read is kept beyond the result.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evidence(
+    action: Action,
+    transcript: &Path,
+    offset: u64,
+    sent_ms: u64,
+    session_id: &str,
+    operation_id: &str,
+    roots: &[PathBuf],
+    uid: u32,
+) -> Result<Option<Evidence>, &'static str> {
+    let mark = format!("{MARK}{operation_id}");
+    let mut command_ms: Option<u64> = None;
+    let mut boundaries = Vec::new();
+    let mut writes: HashMap<String, String> = HashMap::new();
+    let mut written = Vec::new();
+    entries(transcript, offset, session_id, sent_ms, |v, ts| {
         match (action, v["type"].as_str()) {
             (Action::Compact, Some("user")) => {
                 if texts(&v["message"])
@@ -542,10 +945,10 @@ pub(crate) fn evidence(
                     if texts(&v["message"]).iter().any(|t| t.contains(&mark)) {
                         command_ms = Some(ts);
                     }
-                    continue;
+                    return;
                 }
                 let Some(blocks) = v["message"]["content"].as_array() else {
-                    continue;
+                    return;
                 };
                 for b in blocks {
                     if b["type"] != "tool_result" || b["is_error"] == true {
@@ -561,7 +964,7 @@ pub(crate) fn evidence(
             }
             (Action::Handoff, Some("assistant")) if command_ms.is_some() => {
                 let Some(blocks) = v["message"]["content"].as_array() else {
-                    continue;
+                    return;
                 };
                 for b in blocks {
                     if b["type"] == "tool_use"
@@ -575,7 +978,7 @@ pub(crate) fn evidence(
             }
             _ => {}
         }
-    }
+    })?;
     Ok(match action {
         Action::Compact => command_ms
             .and_then(|c| boundaries.into_iter().filter(|b| *b >= c).min())
@@ -635,6 +1038,184 @@ pub(crate) fn artifact(path: &Path, roots: &[PathBuf], sent_ms: u64, uid: u32) -
         sha256: hex(&digest),
         modified_ms,
     })
+}
+
+/// A regular file of `uid` reached without any symlink, opened without
+/// following one, at most `ARTIFACT_LIMIT` bytes.
+fn open_regular(path: &Path, uid: u32) -> Option<(File, fs::Metadata)> {
+    if !path.is_absolute() {
+        return None;
+    }
+    for p in path.ancestors() {
+        if fs::symlink_metadata(p).ok()?.file_type().is_symlink() {
+            return None;
+        }
+    }
+    // O_NOFOLLOW | O_NONBLOCK, as in [`artifact`].
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(0o400000 | 0o4000)
+        .open(path)
+        .ok()?;
+    let m = file.metadata().ok()?;
+    (m.is_file() && m.uid() == uid && m.len() <= ARTIFACT_LIMIT).then_some((file, m))
+}
+
+/// Whether `copy` still has its recorded size and sha256 (read now).
+pub(crate) fn copy_intact(copy: &Artifact, uid: u32) -> bool {
+    let Some((file, m)) = open_regular(&copy.path, uid) else {
+        return false;
+    };
+    matches!(sha256_reader(file.take(ARTIFACT_LIMIT + 1)),
+        Ok((d, n)) if n == m.len() && n == copy.size && hex(&d) == copy.sha256)
+}
+
+/// Private read-only copy of the acknowledged handoff: the original is read
+/// once, those very bytes are checked against the ack's size and sha256 and
+/// written 0400 under `env.handoffs` (0700, no symlink on its path) as
+/// `s<hex(session_id)>-<operation_id>.md`, never over an existing file; the
+/// copy is then re-read and checked. The bytes are dropped on return.
+pub(crate) fn seal_copy(
+    ack: &Artifact,
+    env: &Env,
+    session_id: &str,
+    operation_id: &str,
+) -> Result<Artifact, &'static str> {
+    if !operation_id_valid(operation_id) || !session_id_valid(session_id) {
+        return Err(code::INVALID);
+    }
+    let (file, m) = open_regular(&ack.path, env.uid).ok_or(code::COPY_MISMATCH)?;
+    let mut bytes = Vec::with_capacity(m.len() as usize);
+    file.take(ARTIFACT_LIMIT + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|_| code::COPY_MISMATCH)?;
+    if bytes.len() as u64 != ack.size || hex(&super::sha256(&bytes)) != ack.sha256 {
+        return Err(code::COPY_MISMATCH);
+    }
+    let dir = &env.handoffs;
+    // A symlink above the directory would send the copy elsewhere.
+    if dir
+        .ancestors()
+        .any(|p| fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_symlink()))
+    {
+        return Err(code::COPY_FAILED);
+    }
+    fs::DirBuilder::new()
+        .recursive(true)
+        .mode(0o700)
+        .create(dir)
+        .map_err(|_| code::COPY_FAILED)?;
+    let d = fs::symlink_metadata(dir).map_err(|_| code::COPY_FAILED)?;
+    if !d.is_dir() || d.uid() != env.uid {
+        return Err(code::COPY_FAILED);
+    }
+    if d.mode() & 0o077 != 0 {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+            .map_err(|_| code::COPY_FAILED)?;
+    }
+    let name = format!("s{}-{operation_id}.md", hex(session_id.as_bytes()));
+    let path = dir.join(&name);
+    let tmp = dir.join(format!(".{name}.tmp"));
+    let mut out = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o400)
+        .custom_flags(0o400000)
+        .open(&tmp)
+        .map_err(|_| code::COPY_FAILED)?;
+    let written = out.write_all(&bytes).and_then(|_| out.sync_all());
+    drop(bytes);
+    // A hard link never replaces an existing name; the temporary name is ours.
+    let linked = written.and_then(|_| fs::hard_link(&tmp, &path));
+    let _ = fs::remove_file(&tmp);
+    linked.map_err(|_| code::COPY_FAILED)?;
+    let (_, m) = open_regular(&path, env.uid).ok_or(code::COPY_MISMATCH)?;
+    let modified_ms = (m.mtime().max(0) as u64)
+        .saturating_mul(1000)
+        .saturating_add(m.mtime_nsec().max(0) as u64 / 1_000_000);
+    let copy = Artifact {
+        path,
+        size: ack.size,
+        sha256: ack.sha256.clone(),
+        modified_ms,
+    };
+    if !copy_intact(&copy, env.uid) {
+        return Err(code::COPY_MISMATCH);
+    }
+    Ok(copy)
+}
+
+/// Whether `path` survives as the single argument of `/clear-pickup pickup`
+/// and inside `<command-args>`: UTF-8, no whitespace, no `<`/`>`, no control
+/// character (the evidence check splits on newline, `<` and `>`).
+pub(crate) fn pickup_arg_safe(path: &Path) -> bool {
+    path.to_str().is_some_and(|s| {
+        !s.is_empty()
+            && !s
+                .chars()
+                .any(|c| c.is_whitespace() || c.is_control() || c == '<' || c == '>')
+    })
+}
+
+/// Pickup evidence in the new session's transcript: a user entry with the
+/// `/clear-pickup` command whose argument is `pickup <copy>`, then a `Read`
+/// of exactly `copy` whose result succeeded for that file. Entries of other
+/// sessions, before `sent_ms`, or of another path never count.
+pub(crate) fn pickup_loaded(
+    transcript: &Path,
+    sent_ms: u64,
+    session_id: &str,
+    copy: &Path,
+) -> Result<bool, &'static str> {
+    let Some(copy) = copy.to_str() else {
+        return Ok(false);
+    };
+    let arg = format!("pickup {copy}");
+    let mut prompted = false;
+    let mut reads: Vec<String> = Vec::new();
+    let mut loaded = false;
+    entries(transcript, 0, session_id, sent_ms, |v, _| {
+        if loaded {
+            return;
+        }
+        let blocks = v["message"]["content"].as_array();
+        match v["type"].as_str() {
+            Some("user") if !prompted => {
+                prompted = texts(&v["message"]).iter().any(|t| {
+                    t.contains("/clear-pickup")
+                        && t.split(['\n', '<', '>']).any(|part| part.trim() == arg)
+                });
+            }
+            Some("assistant") if prompted => {
+                for b in blocks.into_iter().flatten() {
+                    if b["type"] == "tool_use"
+                        && b["name"] == "Read"
+                        && b["input"]["file_path"] == copy
+                        && let Some(id) = b["id"].as_str()
+                    {
+                        reads.push(id.to_string());
+                    }
+                }
+            }
+            Some("user") => {
+                loaded = blocks.into_iter().flatten().any(|b| {
+                    b["type"] == "tool_result"
+                        && b["is_error"] != true
+                        && b["tool_use_id"]
+                            .as_str()
+                            .is_some_and(|id| reads.iter().any(|r| r == id))
+                }) && v["toolUseResult"]["file"]["filePath"] == copy;
+            }
+            _ => {}
+        }
+    })?;
+    Ok(loaded)
+}
+
+/// Manual resume of the session a pickup started from.
+pub fn resume_command(p: &Progress) -> Option<String> {
+    session_id_valid(&p.old_session.session_id)
+        .then(|| format!("claude --resume {}", p.old_session.session_id))
 }
 
 #[cfg(test)]

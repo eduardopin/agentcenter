@@ -1,4 +1,4 @@
-# Pi control protocol 2
+# Pi control protocol 3
 
 Explicit opt-in extension for the private Pi 0.87.0 runtime from CC0. The factory
 registers handlers only; `session_start` opens resources and `session_shutdown`
@@ -66,6 +66,23 @@ explicit unavailable result. Publication uses atomic no-replace linking and
 fsync. The monitor discovers only filename/age by exact session identity; it
 never opens the Markdown. Handoff does not clear, compact, close, fork, create,
 switch or resume a session.
+
+## Handoff-pickup (protocol 3)
+
+Protocol 3 adds `handoff_pickup`, `status` and `cancel` for one-click
+handoff-pickup; protocol 2 requests keep the contract above, and a protocol 2
+request never arms a pickup. Over the socket `handoff_pickup` only arms the
+operation (`accepted`/`armed`, short TTL). Pi exposes `newSession` to command
+handlers only, so the client then types `/agentcenter-pickup <operation UUID>`
+into the pane through Herdr `agent.prompt`, revalidating pid + starttime, pane,
+adapter, `idle` and the pane's agent session first. Herdr reports a Pi pane by
+session file (`agent_session.kind == "path"`), which must equal the endpoint's
+`session_file`. The command persists the handoff, starts a child session whose
+parent is the old file, sends the pickup and records the loaded entry; session
+ID and nonce rotate, so status is read from the endpoint the same process
+publishes afterwards. Records carry paths, hashes, IDs and codes only. A Pi
+outside Herdr, or in a pane without Herdr's Pi integration (no agent session),
+is not offered a pickup.
 
 ## Trust and timing
 

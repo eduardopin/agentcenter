@@ -9,9 +9,12 @@ pub mod status;
 pub mod system;
 pub mod task;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{ErrorKind, Read};
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -89,13 +92,13 @@ impl ProcRoot {
         buf: &mut String,
     ) -> Result<(), ReadError> {
         self.note_read(pid, file);
-        read_file_into(&self.pid_path(pid, file), buf)
+        self.with_pid_path(pid, file, |path| read_file_into(path, buf))
     }
 
     /// Destino do link `<raiz>/<pid>/<file>` (`cwd`), contando a leitura.
     pub fn read_link_pid(&self, pid: u32, file: &'static str) -> Option<PathBuf> {
         self.note_read(pid, file);
-        std::fs::read_link(self.pid_path(pid, file)).ok()
+        self.with_pid_path(pid, file, |path| std::fs::read_link(path).ok())
     }
 
     pub fn path(&self) -> &Path {
@@ -108,6 +111,33 @@ impl ProcRoot {
             p.push(file);
         }
         p
+    }
+
+    /// Chama `f` com o mesmo caminho de [`ProcRoot::pid_path`], montado na pilha:
+    /// o tick le varios arquivos por processo e cada `PathBuf` era uma alocacao
+    /// (mais a do `pid.to_string()`). Raiz longa ou `file` absoluto (que o
+    /// `join` trataria como substituto) caem no `pid_path`.
+    pub(crate) fn with_pid_path<R>(&self, pid: u32, file: &str, f: impl FnOnce(&Path) -> R) -> R {
+        let root = self.path.as_os_str().as_bytes();
+        let mut b = [0u8; PATH_STACK];
+        // raiz + '/' + 10 digitos de u32 + '/' + file
+        if root.len() + file.len() + 12 > b.len() || file.starts_with('/') {
+            return f(&self.pid_path(pid, file));
+        }
+        let mut n = root.len();
+        b[..n].copy_from_slice(root);
+        // `join` so poe separador se a raiz nao termina em '/' (e nao e vazia).
+        if n > 0 && b[n - 1] != b'/' {
+            b[n] = b'/';
+            n += 1;
+        }
+        n += write_u32(pid, &mut b[n..]);
+        if !file.is_empty() {
+            b[n] = b'/';
+            b[n + 1..n + 1 + file.len()].copy_from_slice(file.as_bytes());
+            n += 1 + file.len();
+        }
+        f(Path::new(OsStr::from_bytes(&b[..n])))
     }
 
     /// Lista os diretorios numericos da raiz (processos). Ordem nao garantida.
@@ -136,6 +166,33 @@ impl ProcRoot {
 /// smaps_rollup, io) cabem num bloco; os maiores pedem mais de uma volta.
 const CHUNK: usize = 8192;
 
+/// Caminhos por pid ate este tamanho sao montados na pilha ([`ProcRoot::with_pid_path`]).
+const PATH_STACK: usize = 256;
+
+thread_local! {
+    /// Bloco de leitura zerado uma vez por thread: o `read` precisa de memoria
+    /// inicializada, e zerar 8 KB a cada arquivo (antes, `resize` no `buf`) e
+    /// mais caro que copiar os poucos bytes lidos (~300 num `stat`).
+    static CHUNK_BUF: RefCell<Box<[u8; CHUNK]>> = RefCell::new(Box::new([0; CHUNK]));
+}
+
+/// Escreve `n` em decimal no inicio de `out` e devolve quantos bytes usou.
+fn write_u32(mut n: u32, out: &mut [u8]) -> usize {
+    let mut tmp = [0u8; 10];
+    let mut i = tmp.len();
+    loop {
+        i -= 1;
+        tmp[i] = b'0' + (n % 10) as u8;
+        n /= 10;
+        if n == 0 {
+            break;
+        }
+    }
+    let len = tmp.len() - i;
+    out[..len].copy_from_slice(&tmp[i..]);
+    len
+}
+
 /// Le o arquivo inteiro para `buf`. Em `/proc` (seq_file) e em tmpfs uma leitura
 /// curta so acontece no fim do arquivo, entao paramos nela em vez de gastar mais
 /// um `read` para ver o 0; e nao usamos `read_to_string`, que faz statx + lseek
@@ -143,24 +200,28 @@ const CHUNK: usize = 8192;
 pub(crate) fn read_file_into(path: &Path, buf: &mut String) -> Result<(), ReadError> {
     buf.clear();
     let mut f = File::open(path).map_err(ReadError::from_io)?;
+    read_open_into(&mut f, buf)
+}
+
+/// O mesmo que [`read_file_into`] sobre um arquivo ja aberto: le em blocos de
+/// [`CHUNK`] e para na primeira leitura curta. `buf` e limpo antes.
+pub(crate) fn read_open_into(f: &mut File, buf: &mut String) -> Result<(), ReadError> {
+    buf.clear();
     let mut bytes = std::mem::take(buf).into_bytes();
-    let res = loop {
-        let len = bytes.len();
-        bytes.resize(len + CHUNK, 0);
-        match f.read(&mut bytes[len..]) {
-            Ok(n) => {
-                bytes.truncate(len + n);
-                if n < CHUNK {
-                    break Ok(());
+    let res = CHUNK_BUF.with_borrow_mut(|chunk| {
+        loop {
+            match f.read(&mut chunk[..]) {
+                Ok(n) => {
+                    bytes.extend_from_slice(&chunk[..n]);
+                    if n < CHUNK {
+                        break Ok(());
+                    }
                 }
-            }
-            Err(e) if e.kind() == ErrorKind::Interrupted => bytes.truncate(len),
-            Err(e) => {
-                bytes.truncate(len);
-                break Err(ReadError::from_io(e));
+                Err(e) if e.kind() == ErrorKind::Interrupted => {}
+                Err(e) => break Err(ReadError::from_io(e)),
             }
         }
-    };
+    });
     match String::from_utf8(bytes) {
         Ok(s) => *buf = s,
         Err(e) => {
@@ -237,6 +298,39 @@ mod tests {
             matches!(ReadError::from_io(raw(21)), ReadError::Io(_)),
             "EISDIR"
         );
+    }
+
+    #[test]
+    fn with_pid_path_matches_pid_path() {
+        let long = format!("/{}", "x".repeat(300));
+        for root in ["/proc", "/proc/", "", "rel/dir", "/", long.as_str()] {
+            let r = ProcRoot::new(root);
+            for pid in [0, 7, 40, 4_294_967_295] {
+                for file in ["", "stat", "task", "/abs"] {
+                    let want = r.pid_path(pid, file);
+                    r.with_pid_path(pid, file, |p| {
+                        assert_eq!(p, want, "{root:?} {pid} {file:?}")
+                    });
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn read_file_into_reads_past_one_chunk() {
+        let dir = crate::fixture::TempDir::new("ac-chunk").unwrap();
+        let path = dir.path().join("big");
+        // Bloco cheio, um segundo cheio e o resto: tres reads, nada perdido.
+        let text: String = (0..2 * CHUNK + 123)
+            .map(|i| (b'a' + (i % 26) as u8) as char)
+            .collect();
+        std::fs::write(&path, &text).unwrap();
+        let mut buf = String::from("lixo anterior");
+        read_file_into(&path, &mut buf).unwrap();
+        assert_eq!(buf, text);
+        std::fs::write(&path, "curto\n").unwrap();
+        read_file_into(&path, &mut buf).unwrap();
+        assert_eq!(buf, "curto\n", "buf limpo antes da leitura");
     }
 
     #[test]
