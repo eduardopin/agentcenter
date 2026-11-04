@@ -1893,6 +1893,19 @@ impl Drop for DesktopLook {
     }
 }
 
+/// Waits for the paned to lay its top out at the position it was given. A
+/// breakpoint that flips the maps to strips lands inside a layout pass, so the
+/// top and the labels take their final size one frame later, which Broadway
+/// (no browser acknowledging frames) delays by about a second.
+fn settle_paned(window: &Window) {
+    let paned = descendants(window.window.upcast_ref())
+        .into_iter()
+        .find_map(|w| w.downcast::<gtk::Paned>().ok())
+        .expect("the window has a paned");
+    settle_until(|| paned.start_child().is_some_and(|c| c.height() == paned.position()));
+    settle();
+}
+
 /// The content's least width at 360 px: a minimum above the window's makes
 /// GTK allocate past the edge, which clips the header chip and the dropdowns.
 #[test]
@@ -1900,6 +1913,7 @@ fn at_360_the_window_content_does_not_overflow_sideways() {
     gtk::test_synced(|| {
         let _font = DesktopLook::set();
         let window = open("io.agentcenter.Narrow360WidthQA", 360, 640, &tipico());
+        settle_paned(&window);
         let content = window.window.content().expect("window content");
         let (least, _, _, _) = content.measure(gtk::Orientation::Horizontal, -1);
         assert!(
@@ -1923,6 +1937,7 @@ fn at_360_the_waiting_chip_and_both_dropdowns_lie_inside_the_window() {
     gtk::test_synced(|| {
         let _font = DesktopLook::set();
         let window = open("io.agentcenter.Narrow360ChipsQA", 360, 640, &tipico());
+        settle_paned(&window);
         let root = window.window.clone();
         let whole = gtk::graphene::Rect::new(0.0, 0.0, 360.0, 640.0);
         let stack = content_stack(&window);
@@ -1948,6 +1963,10 @@ fn at_360_the_waiting_chip_and_both_dropdowns_lie_inside_the_window() {
             if !inside(&b, &whole) {
                 clipped.push(format!("dropdown {b:?} outside the window {whole:?}"));
             }
+            let bar = bounds_in(&window.switcher_bar, &root);
+            if window.switcher_bar.reveals() && b.y() + b.height() > bar.y() {
+                clipped.push(format!("dropdown {b:?} under the switcher bar {bar:?}"));
+            }
         }
         assert!(clipped.is_empty(), "{}", clipped.join("; "));
         window.window.close();
@@ -1960,6 +1979,7 @@ fn at_360_the_memory_strip_is_visible() {
     gtk::test_synced(|| {
         let _font = DesktopLook::set();
         let window = open("io.agentcenter.Narrow360MemoryQA", 360, 640, &tipico());
+        settle_paned(&window);
         let root = window.window.clone();
         let region = bounds_in(&content_stack(&window), &root);
         let bars = mapped_with_class(&window, "memory-bar");
