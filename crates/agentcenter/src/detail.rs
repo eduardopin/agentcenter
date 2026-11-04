@@ -2840,8 +2840,11 @@ mod tests {
         );
         let detail = shown_detail(false);
         let win = gtk::Window::new();
-        detail.page.set_size_request(width, -1);
-        win.set_child(Some(&detail.page));
+        // The stack, not the page: the page header's buttons set a minimum
+        // width above the narrow breakpoint.
+        detail.toolbar.set_content(gtk::Widget::NONE);
+        detail.stack.set_size_request(width, -1);
+        win.set_child(Some(&detail.stack));
         win.present();
         let until = std::time::Instant::now() + std::time::Duration::from_millis(400);
         let ctx = gtk::glib::MainContext::default();
