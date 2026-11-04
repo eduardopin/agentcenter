@@ -106,6 +106,13 @@ for fx in "${fixtures[@]}"; do
             # detail_px=0: o detalhe nao foi desenhado (a captura so tem a faixa).
             if [[ -n $DETAIL && ${DETAIL_BACK:-} != 1 ]]; then
                 detail_px=$(sed -n 's/^detail_px=//p' "$OUT/.stdout")
+                # detail_settled=<paints waited>: the app holds the capture until the
+                # push animation ends (measure.rs); no fixed sleep here. Absent, or at
+                # the cap (600), the capture may be mid-slide.
+                settled=$(sed -n 's/^detail_settled=//p' "$OUT/.stdout")
+                if [[ -z $settled || $settled -ge 600 ]]; then
+                    err+="${err:+; }agentcenter: overflow: the detail transition never settled (detail_settled=${settled:-none})"
+                fi
                 if [[ ${detail_px:-0} -le 0 ]]; then
                     err+="${err:+; }agentcenter: overflow: the detail never showed (detail_px=${detail_px:-none})"
                 fi

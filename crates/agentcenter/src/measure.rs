@@ -78,8 +78,30 @@ struct State {
     done: Cell<bool>,
     /// Capturas que sairam vazias e foram repetidas ([`EMPTY_RETRIES`]).
     empty_tries: Cell<u32>,
+    /// Paints spent waiting for the detail transition ([`DETAIL_SETTLE_TRIES`]).
+    settle_tries: Cell<u32>,
     /// Para pedir a pintura que dispara a captura (ver `data_applied`).
     window: RefCell<Option<glib::WeakRef<gtk::Window>>>,
+}
+
+/// Paints the capture waits for the detail page to stop sliding in. The push
+/// takes ~0.75 s (45 frames at 60 Hz) and several times that on a loaded or
+/// blanked screen; past the cap the capture goes ahead and `detail_px=` or the
+/// overflow check give the verdict, instead of the script's 30 s timeout.
+const DETAIL_SETTLE_TRIES: u32 = 600;
+
+/// The detail page is at rest: its left edge is flush with the window (the
+/// header bar overhangs by [`OVERHANG_PX`]). Mid push the page spans x 67..907
+/// in an 840 window (bug 08da96cb). `None`: not drawn yet, wait for it.
+/// After `tries` paints without settling, give up waiting.
+fn detail_settled(left_edge: Option<f32>, tries: u32) -> bool {
+    tries >= DETAIL_SETTLE_TRIES || left_edge.is_some_and(|x| x.abs() <= OVERHANG_PX)
+}
+
+/// Left edge of the detail view in window coordinates, if it is mapped.
+fn detail_left_edge(window: &gtk::Window) -> Option<f32> {
+    let detail = find_by_class(window.upcast_ref(), "detail-view").filter(|d| d.is_mapped())?;
+    detail.compute_bounds(window).map(|r| r.x())
 }
 
 /// Quantas vezes a captura vazia e repetida na pintura seguinte. O
@@ -123,6 +145,7 @@ impl Probe {
             first_frame_ms: Cell::new(None),
             data_frames: Cell::new(0),
             empty_tries: Cell::new(0),
+            settle_tries: Cell::new(0),
             done: Cell::new(false),
             window: RefCell::new(None),
         })))
@@ -194,6 +217,16 @@ fn on_paint(s: &Rc<State>, app: &adw::Application, window: &gtk::Window) {
     if let Some(path) = &s.screenshot
         && data >= s.frames
     {
+        // Detail opened at start: hold the capture until the push animation
+        // ends. The frame clock keeps painting while it runs, so the next
+        // after-paint asks again; no timer, no sleep.
+        if detail_to_settle() {
+            let tries = s.settle_tries.get();
+            if !detail_settled(detail_left_edge(window), tries) {
+                s.settle_tries.set(tries + 1);
+                return;
+            }
+        }
         s.done.set(true);
         let (path, app, window, s) = (path.clone(), app.clone(), window.clone(), Rc::clone(s));
         let asked = s.size.map(|(w, _)| w);
@@ -219,7 +252,10 @@ fn on_paint(s: &Rc<State>, app: &adw::Application, window: &gtk::Window) {
                     }
                     // Detalhe pedido na partida: altura do que apareceu (0 = nao
                     // desenhado), para o capture-gui.sh --detail falhar.
-                    if std::env::var_os(crate::window::DETAIL_ENV).is_some_and(|v| !v.is_empty()) {
+                    if detail_requested() {
+                        if detail_to_settle() {
+                            println!("detail_settled={}", s.settle_tries.get());
+                        }
                         let px = find_by_class(window.upcast_ref(), "detail-view")
                             .filter(|d| d.is_mapped())
                             .map_or(0, |d| d.height());
@@ -233,6 +269,16 @@ fn on_paint(s: &Rc<State>, app: &adw::Application, window: &gtk::Window) {
             glib::ControlFlow::Break
         });
     }
+}
+
+/// The back probe (`AGENTCENTER_DETAIL_BACK`) pops the page and captures the
+/// list: there is no detail to wait for.
+fn detail_to_settle() -> bool {
+    detail_requested() && std::env::var_os(crate::window::DETAIL_BACK_ENV).is_none_or(|v| v != "1")
+}
+
+fn detail_requested() -> bool {
+    std::env::var_os(crate::window::DETAIL_ENV).is_some_and(|v| !v.is_empty())
 }
 
 /// O AdwHeaderBar passa 1 px de cada lado de proposito (a borda encosta na
