@@ -746,7 +746,16 @@ fn mid_window_shows_one_map_with_a_tokens_memory_toggle() {
 #[test]
 fn narrow_window_shows_two_labelled_strips_and_no_map() {
     gtk::test_synced(|| {
-        let window = open("io.agentcenter.LayoutNarrowQA", 360, 640, &tipico());
+        // The cockpit fixture carries token burn; tipico-40 has none, and an
+        // empty Tokens strip is left out at 360 px
+        // (at_360_the_tokens_strip_is_left_out_while_it_has_no_sessions).
+        let snap: Snapshot =
+            serde_json::from_str(include_str!("../tests/fixtures/snapshots/cockpit.json")).unwrap();
+        let window = open("io.agentcenter.LayoutNarrowQA", 360, 640, &snap);
+        assert!(
+            !window.map.token_input().sessions.is_empty(),
+            "the fixture carries token spend"
+        );
         assert_eq!(window.map.tier(), crate::map_page::Tier::Strips);
         assert_eq!(mapped_tokens_and_memory(&window), (false, false));
         let labels: Vec<String> = descendants(window.map.widget().upcast_ref())
