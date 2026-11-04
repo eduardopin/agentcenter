@@ -141,3 +141,11 @@ procbar.mux > hatch {
 .session-detail .detail-actions {
   margin: var(--ac-space-3) var(--ac-space-4) var(--ac-space-2);
 }
+
+/* Narrow detail: the banner and facts row use the 8 px margins of the other
+ * blocks (sessions.css). */
+.session-detail.narrow .detail-controls,
+.session-detail.narrow .detail-facts:not(.detail-block) {
+  margin-left: var(--ac-space-2);
+  margin-right: var(--ac-space-2);
+}
