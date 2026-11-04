@@ -1019,6 +1019,18 @@ impl Ui {
         &self.root
     }
 
+    /// The height the page needs at `width`. The bin reports the height of
+    /// its reference layout, short of what the child takes once the strips
+    /// are on, so the child is asked directly.
+    pub fn needed_height(&self, width: i32) -> i32 {
+        let (_, page, _, _) = self.root.measure(gtk::Orientation::Vertical, width);
+        let (_, bin, _, _) = self.bin.measure(gtk::Orientation::Vertical, width);
+        let child = self.bin.child().map_or(0, |c| {
+            c.measure(gtk::Orientation::Vertical, width).1
+        });
+        page + (child - bin).max(0)
+    }
+
     /// New snapshot: the map, the bar, the chips and every line of text.
     pub fn update(&self, snap: &Snapshot, r: &Readout) {
         let input = MapInput::from_snapshot(snap);
@@ -1209,7 +1221,11 @@ impl Ui {
         for (pid, name, value) in &next {
             let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             content.append(&LegendGlyph::new(Mark::State(TileState::Waiting)));
-            content.append(&gtk::Label::new(Some(name)));
+            // A long name gives way to the value: the chip's least width must
+            // not push a 360 px window wider than itself.
+            let name_label = gtk::Label::new(Some(name));
+            name_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            content.append(&name_label);
             let v = gtk::Label::new(Some(value));
             v.add_css_class("value");
             content.append(&v);
@@ -1285,6 +1301,19 @@ impl Ui {
         } else {
             gtk::Orientation::Vertical
         });
+        // Narrow, the chips stack under each other so the strips below stay
+        // in view.
+        self.chips_row.set_orientation(if strips {
+            gtk::Orientation::Vertical
+        } else {
+            gtk::Orientation::Horizontal
+        });
+        self.chips_row.set_spacing(if strips { 4 } else { 10 });
+        // The verdict line under the chips says the same; the caption goes.
+        if let Some(caption) = self.chips_row.first_child() {
+            caption.set_visible(!strips);
+        }
+        set_class(&self.root, "strips", strips);
         self.toggle.set_visible(tier == Tier::Toggle && !strips);
         self.maps_row.set_homogeneous(!strips);
         self.maps_row.set_orientation(if strips {
@@ -1293,6 +1322,13 @@ impl Ui {
             gtk::Orientation::Horizontal
         });
         self.maps_row.set_vexpand(!strips);
+        // Stacked strips close up: at 360 x 640 the window has no pixel to
+        // spare above the list.
+        self.maps_row.set_spacing(if strips { 6 } else { 16 });
+        self.chips.set_line_spacing(if strips { 2 } else { 6 });
+        if let Some(inner) = self.bin.child().and_downcast::<gtk::Box>() {
+            inner.set_spacing(if strips { 6 } else { 10 });
+        }
         self.tokens_col.set_visible(show_tokens);
         self.memory_col.set_visible(show_memory);
         self.token_map.set_visible(!strips);

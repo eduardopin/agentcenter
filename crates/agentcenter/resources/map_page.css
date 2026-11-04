@@ -4,6 +4,10 @@
 .map-page {
   padding: 16px;
 }
+/* Strips (narrow or short window): every pixel above the list counts. */
+.map-page.strips {
+  padding: 4px 16px;
+}
 .map-page .head .title {
   font-weight: 700;
   font-size: 1.15em;
