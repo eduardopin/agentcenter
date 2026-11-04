@@ -2025,3 +2025,26 @@ fn at_360_the_memory_strip_stays_visible_when_a_busier_snapshot_arrives() {
         settle();
     });
 }
+
+/// With no token spend the Tokens strip says "no sessions" and nothing else,
+/// and at 360 x 640 its row is the height the memory strip loses in the
+/// capture's real fonts: the strip is left out until there is spend to show.
+#[test]
+fn at_360_the_tokens_strip_is_left_out_while_it_has_no_sessions() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360NoTokensQA", 360, 640, &tipico());
+        settle_paned(&window);
+        let titled = |text: &str| {
+            descendants(window.window.upcast_ref())
+                .into_iter()
+                .filter(|w| w.is_mapped())
+                .filter_map(|w| w.downcast::<gtk::Label>().ok())
+                .any(|l| l.label() == text)
+        };
+        assert!(!titled("Tokens"), "the empty Tokens strip takes a row");
+        assert!(titled("Memory"), "the Memory strip stays");
+        window.window.close();
+        settle();
+    });
+}
