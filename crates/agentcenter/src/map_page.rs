@@ -1328,7 +1328,10 @@ impl Ui {
         if let Some(inner) = self.bin.child().and_downcast::<gtk::Box>() {
             inner.set_spacing(if strips { 6 } else { 10 });
         }
-        self.tokens_col.set_visible(show_tokens);
+        // Narrow, a Tokens strip with no spend is a heading and "no sessions":
+        // a row the memory strip needs more.
+        let idle_tokens = strips && token_input.sessions.is_empty();
+        self.tokens_col.set_visible(show_tokens && !idle_tokens);
         self.memory_col.set_visible(show_memory);
         self.token_map.set_visible(!strips);
         self.token_legend.set_visible(!strips);
