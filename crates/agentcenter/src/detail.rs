@@ -2861,8 +2861,14 @@ mod tests {
             let title_edge = x_of(detail.glyph.upcast_ref());
             assert_eq!(title_edge, 16.0, "the title starts in the gutter");
             for (what, w) in [
-                ("banner", detail.session_controls.widget.upcast_ref::<gtk::Widget>()),
-                ("facts row", detail.session.widget.upcast_ref::<gtk::Widget>()),
+                (
+                    "banner",
+                    detail.session_controls.widget.upcast_ref::<gtk::Widget>(),
+                ),
+                (
+                    "facts row",
+                    detail.session.widget.upcast_ref::<gtk::Widget>(),
+                ),
             ] {
                 assert_eq!(x_of(w), 16.0, "the {what} starts at the 16 px gutter");
             }
