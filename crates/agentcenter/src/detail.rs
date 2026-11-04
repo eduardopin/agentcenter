@@ -2821,6 +2821,54 @@ mod tests {
             .unwrap_or_else(|| panic!("no {label} button in the session controls"))
     }
 
+    /// Bug 06087a61: at 1280 px the "Actions are off" banner (the session
+    /// controls) and the facts row sat at x=0; they belong in the 16 px
+    /// gutter the title and charts use.
+    #[test]
+    fn wide_detail_banner_and_facts_sit_inside_the_gutter() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let provider = gtk::CssProvider::new();
+            provider.load_from_string(concat!(
+                include_str!("../resources/tokens.css"),
+                include_str!("../resources/sessions.css"),
+                include_str!("../resources/detail.css"),
+            ));
+            gtk::style_context_add_provider_for_display(
+                &gtk::gdk::Display::default().unwrap(),
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            let detail = shown_detail(false);
+            let win = gtk::Window::new();
+            detail.page.set_size_request(1280, -1);
+            win.set_child(Some(&detail.page));
+            win.present();
+            let until = std::time::Instant::now() + std::time::Duration::from_millis(400);
+            let ctx = gtk::glib::MainContext::default();
+            while std::time::Instant::now() < until {
+                while ctx.pending() {
+                    ctx.iteration(false);
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            let x_of = |w: &gtk::Widget| {
+                w.compute_point(&win, &gtk::graphene::Point::new(0.0, 0.0))
+                    .expect("same window")
+                    .x()
+            };
+            let title_edge = x_of(detail.glyph.upcast_ref());
+            assert_eq!(title_edge, 16.0, "the title starts in the gutter");
+            for (what, w) in [
+                ("banner", detail.session_controls.widget.upcast_ref::<gtk::Widget>()),
+                ("facts row", detail.session.widget.upcast_ref::<gtk::Widget>()),
+            ] {
+                assert_eq!(x_of(w), 16.0, "the {what} starts at the 16 px gutter");
+            }
+            win.destroy();
+        });
+    }
+
     /// REVIEW_RR1 order: title, verdict pill and its reason line, Handoff and
     /// Compact, the context and token panel, then charts and processes.
     #[test]
