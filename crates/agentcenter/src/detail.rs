@@ -1323,6 +1323,7 @@ impl Detail {
         focus_reason.set_selectable(true);
         focus_reason.set_visible(false);
         let session_controls = actions_ui::session_control::SessionControls::new(live);
+        session_controls.widget.add_css_class("detail-controls");
         // The page header repeats Handoff and Compact (shown only while the
         // detail is a pushed page): the public controls API has no second
         // instance, so each copy forwards its click to the real button.

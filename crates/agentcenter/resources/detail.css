@@ -109,6 +109,11 @@ procbar.mux > hatch {
   margin-left: var(--ac-space-4);
   margin-right: var(--ac-space-4);
 }
+.session-detail .detail-controls,
+.session-detail .detail-facts:not(.detail-block) {
+  margin-left: var(--ac-space-4);
+  margin-right: var(--ac-space-4);
+}
 .session-detail .detail-section,
 .session-detail .detail-note {
   margin-left: var(--ac-space-4);
