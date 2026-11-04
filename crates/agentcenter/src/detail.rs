@@ -2822,57 +2822,99 @@ mod tests {
             .unwrap_or_else(|| panic!("no {label} button in the session controls"))
     }
 
+    /// Left x and right gap, in px, of the banner, the facts row, and the
+    /// runs and transcript facts (`detail-block`, which keep their own
+    /// margins) when the detail is `width` px wide.
+    fn gutters(width: i32) -> Vec<(&'static str, f32, f32)> {
+        adw::init().expect("isolated test display required");
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(concat!(
+            include_str!("../resources/tokens.css"),
+            include_str!("../resources/sessions.css"),
+            include_str!("../resources/detail.css"),
+        ));
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().unwrap(),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        let detail = shown_detail(false);
+        let win = gtk::Window::new();
+        detail.page.set_size_request(width, -1);
+        win.set_child(Some(&detail.page));
+        win.present();
+        let until = std::time::Instant::now() + std::time::Duration::from_millis(400);
+        let ctx = gtk::glib::MainContext::default();
+        while std::time::Instant::now() < until {
+            while ctx.pending() {
+                ctx.iteration(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let pos = |w: &gtk::Widget| {
+            let x = w
+                .compute_point(&win, &gtk::graphene::Point::new(0.0, 0.0))
+                .expect("same window")
+                .x();
+            (x, win.width() as f32 - x - w.width() as f32)
+        };
+        let out = [
+            (
+                "banner",
+                detail.session_controls.widget.upcast_ref::<gtk::Widget>(),
+            ),
+            (
+                "facts row",
+                detail.session.widget.upcast_ref::<gtk::Widget>(),
+            ),
+            ("runs facts", detail.runs.widget.upcast_ref::<gtk::Widget>()),
+            (
+                "transcript facts",
+                detail.transcript.widget.upcast_ref::<gtk::Widget>(),
+            ),
+        ]
+        .into_iter()
+        .map(|(what, w)| {
+            let (x, right) = pos(w);
+            (what, x, right)
+        })
+        .collect();
+        win.destroy();
+        out
+    }
+
     /// Bug 06087a61: at 1280 px the "Actions are off" banner (the session
     /// controls) and the facts row sat at x=0; they belong in the 16 px
-    /// gutter the title and charts use.
+    /// gutter the title and charts use, on both sides. The runs and
+    /// transcript facts keep their own inset (12 px margin, 16 px padding).
     #[test]
     fn wide_detail_banner_and_facts_sit_inside_the_gutter() {
         gtk::test_synced(|| {
-            adw::init().expect("isolated test display required");
-            let provider = gtk::CssProvider::new();
-            provider.load_from_string(concat!(
-                include_str!("../resources/tokens.css"),
-                include_str!("../resources/sessions.css"),
-                include_str!("../resources/detail.css"),
-            ));
-            gtk::style_context_add_provider_for_display(
-                &gtk::gdk::Display::default().unwrap(),
-                &provider,
-                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
-            );
-            let detail = shown_detail(false);
-            let win = gtk::Window::new();
-            detail.page.set_size_request(1280, -1);
-            win.set_child(Some(&detail.page));
-            win.present();
-            let until = std::time::Instant::now() + std::time::Duration::from_millis(400);
-            let ctx = gtk::glib::MainContext::default();
-            while std::time::Instant::now() < until {
-                while ctx.pending() {
-                    ctx.iteration(false);
+            for (what, x, right) in gutters(1280) {
+                let want = if what.contains("banner") || what == "facts row" {
+                    16.0
+                } else {
+                    28.0
+                };
+                assert_eq!(x, want, "{what} left edge at 1280 px");
+                assert_eq!(right, want, "{what} right gap at 1280 px");
+            }
+        });
+    }
+
+    /// At the narrow breakpoint the other blocks drop to 8 px margins
+    /// (sessions.css, `.session-detail.narrow`); the banner and facts row
+    /// follow them.
+    #[test]
+    fn narrow_detail_banner_and_facts_follow_the_narrow_margins() {
+        gtk::test_synced(|| {
+            for (what, x, right) in gutters(360) {
+                if !(what.contains("banner") || what == "facts row") {
+                    continue;
                 }
-                std::thread::sleep(std::time::Duration::from_millis(5));
+                assert_eq!(x, 8.0, "{what} left edge at 360 px");
+                assert_eq!(right, 8.0, "{what} right gap at 360 px");
             }
-            let x_of = |w: &gtk::Widget| {
-                w.compute_point(&win, &gtk::graphene::Point::new(0.0, 0.0))
-                    .expect("same window")
-                    .x()
-            };
-            let title_edge = x_of(detail.glyph.upcast_ref());
-            assert_eq!(title_edge, 16.0, "the title starts in the gutter");
-            for (what, w) in [
-                (
-                    "banner",
-                    detail.session_controls.widget.upcast_ref::<gtk::Widget>(),
-                ),
-                (
-                    "facts row",
-                    detail.session.widget.upcast_ref::<gtk::Widget>(),
-                ),
-            ] {
-                assert_eq!(x_of(w), 16.0, "the {what} starts at the 16 px gutter");
-            }
-            win.destroy();
         });
     }
 
