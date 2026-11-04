@@ -1838,3 +1838,139 @@ fn wide_start_detail_leaves_nothing_that_pushes_a_later_selection() {
         settle();
     });
 }
+
+// ---- 360 px overflow (bug 8b4af569) ------------------------------------------
+
+/// `inner` lies inside `outer` (px, half a px of rounding allowed).
+fn inside(inner: &gtk::graphene::Rect, outer: &gtk::graphene::Rect) -> bool {
+    inner.x() >= outer.x() - 0.5
+        && inner.y() >= outer.y() - 0.5
+        && inner.x() + inner.width() <= outer.x() + outer.width() + 0.5
+        && inner.y() + inner.height() <= outer.y() + outer.height() + 0.5
+}
+
+fn mapped_with_class(window: &Window, class: &str) -> Vec<gtk::Widget> {
+    descendants(window.window.upcast_ref())
+        .into_iter()
+        .filter(|w| w.is_mapped() && w.has_css_class(class))
+        .collect()
+}
+
+/// What the desktop captures run with, for the length of a test: the app's
+/// stylesheet (the widths and paddings are CSS) and the owner's 11 pt font.
+/// The Broadway defaults (no stylesheet, Sans 10) hide the overflow. Tests run
+/// one at a time on the main thread; the drop puts both back.
+struct DesktopLook {
+    provider: gtk::CssProvider,
+    font: Option<gtk::glib::GString>,
+}
+
+impl DesktopLook {
+    fn set() -> Self {
+        adw::init().expect("isolated Broadway display required");
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(crate::app::STYLESHEET);
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().expect("display"),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        let settings = gtk::Settings::default().expect("default settings");
+        let font = settings.gtk_font_name();
+        settings.set_gtk_font_name(Some("Adwaita Sans 11"));
+        Self { provider, font }
+    }
+}
+
+impl Drop for DesktopLook {
+    fn drop(&mut self) {
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_remove_provider_for_display(&display, &self.provider);
+        }
+        if let Some(settings) = gtk::Settings::default() {
+            settings.set_gtk_font_name(self.font.as_deref());
+        }
+    }
+}
+
+/// The content's least width at 360 px: a minimum above the window's makes
+/// GTK allocate past the edge, which clips the header chip and the dropdowns.
+#[test]
+fn at_360_the_window_content_does_not_overflow_sideways() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360WidthQA", 360, 640, &tipico());
+        let content = window.window.content().expect("window content");
+        let (least, _, _, _) = content.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            least <= 360,
+            "content needs {least} px at the least, 360 given"
+        );
+        assert!(
+            content.width() <= 360,
+            "content allocated {} px in a 360 px window",
+            content.width()
+        );
+        let problems = crate::measure::overflow(window.window.upcast_ref(), Some(360));
+        assert!(problems.is_empty(), "overflow: {problems:?}");
+        window.window.close();
+        settle();
+    });
+}
+
+#[test]
+fn at_360_the_waiting_chip_and_both_dropdowns_lie_inside_the_window() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360ChipsQA", 360, 640, &tipico());
+        let root = window.window.clone();
+        let whole = gtk::graphene::Rect::new(0.0, 0.0, 360.0, 640.0);
+        let stack = content_stack(&window);
+        let region = bounds_in(&stack, &root);
+        let chips = mapped_with_class(&window, "chip");
+        assert!(!chips.is_empty(), "the waiting chips are shown");
+        let mut clipped = Vec::new();
+        for chip in &chips {
+            let b = bounds_in(chip, &root);
+            if !inside(&b, &whole) || !inside(&b, &region) {
+                clipped.push(format!(
+                    "chip {b:?} outside the window {whole:?} or the maps region {region:?}"
+                ));
+            }
+        }
+        let drops: Vec<gtk::Widget> = descendants(root.upcast_ref())
+            .into_iter()
+            .filter(|w| w.is_mapped() && w.is::<gtk::DropDown>())
+            .collect();
+        assert_eq!(drops.len(), 2, "sort and agent dropdowns are shown");
+        for d in &drops {
+            let b = bounds_in(d, &root);
+            if !inside(&b, &whole) {
+                clipped.push(format!("dropdown {b:?} outside the window {whole:?}"));
+            }
+        }
+        assert!(clipped.is_empty(), "{}", clipped.join("; "));
+        window.window.close();
+        settle();
+    });
+}
+
+#[test]
+fn at_360_the_memory_strip_is_visible() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360MemoryQA", 360, 640, &tipico());
+        let root = window.window.clone();
+        let region = bounds_in(&content_stack(&window), &root);
+        let bars = mapped_with_class(&window, "memory-bar");
+        assert_eq!(bars.len(), 1, "the memory strip is mapped");
+        let b = bounds_in(&bars[0], &root);
+        assert!(b.height() > 0.0, "the memory strip has a height");
+        assert!(
+            inside(&b, &region),
+            "memory strip {b:?} clipped by the maps region {region:?}"
+        );
+        window.window.close();
+        settle();
+    });
+}
