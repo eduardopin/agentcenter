@@ -2048,3 +2048,26 @@ fn at_360_the_tokens_strip_is_left_out_while_it_has_no_sessions() {
         settle();
     });
 }
+
+/// The breakpoint bin hands its child the height of its reference (wide)
+/// layout, which the stacked strips outgrow: Adwaita warns "requested 177 px,
+/// 108 px available" and the bin clips the Memory heading and bar while the
+/// paned leaves blank room below. The child gets what it asks for.
+#[test]
+fn at_360_the_maps_content_gets_the_height_it_asks_for() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360AskedQA", 360, 640, &tipico());
+        settle_paned(&window);
+        let bin = window.map.widget().first_child().expect("the breakpoint bin");
+        let inner = bin.downcast::<adw::BreakpointBin>().unwrap().child().unwrap();
+        let asked = inner.measure(gtk::Orientation::Vertical, inner.width()).1;
+        assert!(
+            inner.height() >= asked,
+            "the maps content is {} px tall and asks for {asked}",
+            inner.height()
+        );
+        window.window.close();
+        settle();
+    });
+}
