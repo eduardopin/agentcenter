@@ -79,6 +79,7 @@
     "subagents_total": null,
     "provider": null,
     "cockpit": null,
+    "spend_30m": null,
     "cockpit_pending": true
    },
    "processes": [
@@ -354,6 +355,7 @@
      "recommendation": "CONTINUAR",
      "reasons": []
     },
+    "spend_30m": 55750,
     "cockpit_pending": false
    },
    "processes": [
@@ -513,6 +515,7 @@
       }
      ]
     },
+    "spend_30m": 135250,
     "cockpit_pending": false
    },
    "processes": [
@@ -957,6 +960,7 @@
     "subagents_total": null,
     "provider": "google",
     "cockpit": null,
+    "spend_30m": null,
     "cockpit_pending": false
    },
    "processes": [
@@ -1183,6 +1187,7 @@
       }
      ]
     },
+    "spend_30m": 430000,
     "cockpit_pending": false
    },
    "processes": [
@@ -1337,6 +1342,7 @@
       }
      ]
     },
+    "spend_30m": 5500,
     "cockpit_pending": false
    },
    "processes": [
@@ -1596,6 +1602,7 @@
       }
      ]
     },
+    "spend_30m": 21625,
     "cockpit_pending": false
    },
    "processes": [

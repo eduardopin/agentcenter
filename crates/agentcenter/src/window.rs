@@ -14,12 +14,15 @@
 //! (actions_ui.rs).
 
 use crate::actions_ui::Actions;
-use crate::dashboard::Dashboard;
 use crate::detail::Detail;
-use crate::machine_header::MachineHeader;
+use crate::machine_history::{MachineHistory, Readout};
+use crate::machine_strip::MachineStrip;
+use crate::map_page::{MapPage, Source};
 use crate::prefs::{Prefs, WindowSize};
 use crate::reclaim_page::ReclaimPage;
-use crate::session_list::{MIN_WIDTH_PX, SessionList, SessionModel, scrolled};
+use crate::session_list::{SessionList, SessionModel, SortKey, scrolled};
+use crate::spend::SpendTracker;
+use crate::token_map::TokenInput;
 use adw::prelude::*;
 use agentcenter_core::procfs::ReadError;
 use agentcenter_core::{Frame, History, IoStallSource, Snapshot};
@@ -27,9 +30,16 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// Largura (sp) ate a qual o split fica recolhido: lista e detalhe lado a
-/// lado so a partir de 840.
-pub const COLLAPSE_MAX_SP: f64 = 839.0;
+/// Width (sp) up to which the split is collapsed (07-gui.md: below 1000 the
+/// map sits above the list and the detail is pushed over them).
+pub const COLLAPSE_MAX_SP: f64 = 999.0;
+
+/// Width (sp) up to which the strip is 2x2, the map is the one-dimensional
+/// memory strip and the view switcher moves to the bottom bar.
+pub const COMPACT_MAX_SP: f64 = 599.0;
+/// File, View and Help show as header buttons from this width; narrower, one
+/// primary menu holds them.
+pub const HEADER_MENUS_MIN_SP: f64 = 1500.0;
 
 /// Abre o detalhe de uma sessao na partida (medicao e captura do detalhe):
 /// `busiest` e a sessao com mais processos, ou um pid.
@@ -46,11 +56,7 @@ pub const PAGE_ENV: &str = "AGENTCENTER_PAGE";
 pub const VIEW_SESSIONS: &str = "sessions";
 pub const VIEW_RECLAIM: &str = "reclaim";
 
-/// Largura (sp) ate a qual o seletor de paginas mostra so os icones.
-pub const SWITCHER_ICONS_MAX_SP: f64 = 520.0;
-
 const PAGE_LIST: &str = "list";
-const PAGE_EMPTY: &str = "empty";
 const PAGE_ERROR: &str = "error";
 
 const ENABLE_NOW: &str = "sudo sysctl kernel.task_delayacct=1";
@@ -61,12 +67,21 @@ pub struct Window {
     pub window: adw::ApplicationWindow,
     title: adw::WindowTitle,
     banner: adw::Banner,
-    header: MachineHeader,
+    strip: Rc<MachineStrip>,
+    history: RefCell<MachineHistory>,
+    /// The Reclaim page's window of ticks, kept here too so the map's
+    /// Reclaim button counts what that page lists.
+    reclaim_ring: RefCell<crate::reclaim_page::Ring>,
+    map: Rc<MapPage>,
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by tests"))]
+    switcher_bar: adw::ViewSwitcherBar,
     model: RefCell<SessionModel>,
     list: Rc<SessionList>,
     detail: Rc<Detail>,
-    dashboard: Rc<Dashboard>,
     split: adw::NavigationSplitView,
+    /// Under 1000 sp: the detail is a page pushed over the whole Sessions
+    /// page; wider, it replaces the maps above the list.
+    pub(crate) narrow: Rc<Cell<bool>>,
     last: Rc<RefCell<Option<Arc<Snapshot>>>>,
     last_history: Rc<RefCell<Option<Arc<History>>>>,
     open_at_start: Cell<Option<String>>,
@@ -77,6 +92,56 @@ pub struct Window {
     reclaim: Rc<ReclaimPage>,
     actions: Rc<Actions>,
     probed: Cell<bool>,
+    /// One tracker for the token map and the list, fed on every snapshot.
+    pub(crate) spend: Rc<RefCell<SpendTracker>>,
+}
+
+/// What the vertical paned's top child shows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PanedMode {
+    Maps,
+    Detail,
+}
+
+/// Rows the list keeps at the least, and a row's pitch at its tallest
+/// density (40 px row, 1 px gap; the compact 34 + 4 then shows a sliver of
+/// the sixth row, which says the list scrolls).
+pub const LIST_MIN_ROWS: i32 = 5;
+pub const ROW_PX: i32 = 41;
+/// The list's own chrome above its rows: order bar, column header, padding.
+const LIST_CHROME_PX: i32 = 115;
+
+/// Height the list keeps below the maps: its chrome and [`LIST_MIN_ROWS`]
+/// whole rows, the sixth a scroll away. The GTK test
+/// `the_maps_take_most_of_the_window_and_the_list_shows_its_top_five` holds
+/// these numbers to the real widgets.
+pub const LIST_TOP_PX: i32 = LIST_CHROME_PX + LIST_MIN_ROWS * ROW_PX;
+
+/// The maps' least height and the strips' fixed top (px).
+const MAPS_MIN_PX: i32 = 220;
+const STRIPS_TOP_PX: i32 = 64;
+
+/// Top child height (px) of the paned for a content height `total`: the maps
+/// everything above the list's top rows (owner, 25/10: squeezed maps were
+/// unreadable), the detail 65 %, strips a fixed short line; a saved
+/// (dragged) position replaces the default. The list always keeps
+/// [`LIST_TOP_PX`], which wins over the top's minimum.
+pub fn paned_position(total: i32, mode: PanedMode, strips: bool, saved: Option<i32>) -> i32 {
+    let upper = (total - LIST_TOP_PX).max(0);
+    let want = match (mode, strips) {
+        (PanedMode::Maps, true) => return STRIPS_TOP_PX.min(upper),
+        (PanedMode::Maps, false) => upper,
+        (PanedMode::Detail, _) => total * 65 / 100,
+    };
+    saved.unwrap_or(want).max(MAPS_MIN_PX).min(upper)
+}
+
+/// Text scale factor (1.0 at the default 96 dpi): sp = px / scale.
+fn text_scale() -> f64 {
+    gtk::Settings::default()
+        .map(|s| f64::from(s.gtk_xft_dpi()) / 1024.0 / 96.0)
+        .filter(|f| *f >= 0.5)
+        .unwrap_or(1.0)
 }
 
 /// Qual sessao `AGENTCENTER_DETAIL` pede: a de mais processos, ou um pid.
@@ -118,6 +183,34 @@ impl Window {
         switcher.add_css_class("flat");
         switcher.set_tooltip_text(Some("Page"));
         headerbar.pack_start(&switcher);
+        // File, View and Help from 1500 sp up; below that one primary menu
+        // (F10) holds the same model. `HEADER_MENUS_MIN_SP` sets the switch.
+        let menus = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        menus.set_valign(gtk::Align::Center);
+        let divider = gtk::Separator::new(gtk::Orientation::Vertical);
+        divider.set_size_request(1, 20);
+        divider.set_valign(gtk::Align::Center);
+        divider.set_margin_end(4);
+        menus.append(&divider);
+        for (label, model) in crate::menu::parts() {
+            let button = gtk::MenuButton::builder()
+                .label(label)
+                .use_underline(true)
+                .always_show_arrow(true)
+                .menu_model(&model)
+                .build();
+            button.add_css_class("flat");
+            menus.append(&button);
+        }
+        headerbar.pack_start(&menus);
+        let primary_menu = gtk::MenuButton::builder()
+            .icon_name("open-menu-symbolic")
+            .tooltip_text("Main Menu")
+            .primary(true)
+            .menu_model(&crate::menu::model())
+            .visible(false)
+            .build();
+        headerbar.pack_end(&primary_menu);
 
         let banner = adw::Banner::builder()
             .title("I/O stall is estimated from threads waiting on disk")
@@ -125,63 +218,72 @@ impl Window {
             .revealed(false)
             .build();
 
-        let header = MachineHeader::new();
+        let strip = Rc::new(MachineStrip::new());
         let model = SessionModel::default();
         let list = Rc::new(SessionList::new(&model));
-        list.set_sort_key(prefs.sort_key());
+        list.set_sort_key(startup_sort_key(
+            prefs,
+            std::env::var_os("AGENTCENTER_SCREENSHOT").is_some(),
+        ));
         let p = prefs.clone();
         list.connect_sort_changed(move |k| p.set_sort_key(k));
         let detail = Rc::new(Detail::new(live));
         let home = std::env::var("HOME").ok();
 
-        let dashboard = Rc::new(Dashboard::new());
-        let dashboard_scroll = gtk::ScrolledWindow::builder()
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .child(&dashboard.widget)
-            .build();
+        let narrow = Rc::new(Cell::new(false));
+        let map = Rc::new(MapPage::new());
         let content = gtk::Stack::new();
-        content.add_named(&dashboard_scroll, Some("overview"));
+        content.add_named(map.widget(), Some("overview"));
         // Keep ONE NavigationPage as the split content. Nesting detail.page
         // inside another page disconnects navigation.pop and back-focus restore.
         detail.page.set_child(gtk::Widget::NONE);
-        content.add_named(&detail.toolbar, Some("detail"));
+        // Wide, the detail sits here in place of the maps; narrow, it moves
+        // to `narrow_slot` inside the pushed page.
+        let wide_detail = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        content.add_named(&wide_detail, Some("detail"));
         content.set_visible_child_name("overview");
         let reclaim_back = gtk::Button::with_label("Back to Reclaim");
         reclaim_back.set_visible(false);
         reclaim_back.set_halign(gtk::Align::Start);
         reclaim_back.set_size_request(44, 44);
+        // Wide there is no navigation page to pop: the detail replaces the
+        // maps above the list and this button (Esc, Alt+Left) brings them
+        // back. Narrow, the page header's own back button does it.
+        let map_back = gtk::Button::from_icon_name("go-previous-symbolic");
+        map_back.set_tooltip_text(Some("Back to the maps"));
+        map_back.set_visible(false);
+        map_back.set_halign(gtk::Align::Start);
+        map_back.set_size_request(44, 44);
+        map_back.add_css_class("flat");
+        detail.toolbar.set_vexpand(true);
+        wide_detail.append(&map_back);
+        wide_detail.append(&detail.toolbar);
+        let narrow_slot = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        narrow_slot.set_vexpand(true);
         let detail_body = gtk::Box::new(gtk::Orientation::Vertical, 8);
         detail_body.append(&reclaim_back);
-        content.set_vexpand(true);
-        detail_body.append(&content);
+        detail_body.append(&narrow_slot);
         detail.page.set_child(Some(&detail_body));
-        let disclosure = gtk::Expander::builder()
-            .label("Session resource history")
-            .visible(false)
-            .build();
-        let rack = gtk::Box::new(gtk::Orientation::Vertical, 0);
-        rack.append(&disclosure);
-        rack.append(&scrolled(&list));
+        content.set_vexpand(true);
+        // Maps (or the detail) over the full-width list, one draggable edge.
+        let paned = gtk::Paned::new(gtk::Orientation::Vertical);
+        paned.set_start_child(Some(&content));
+        paned.set_end_child(Some(&scrolled(&list)));
+        paned.set_shrink_start_child(true);
+        paned.set_shrink_end_child(true);
+        paned.set_vexpand(true);
         let sidebar = adw::NavigationPage::builder()
             .title("Sessions")
-            .child(&rack)
+            .child(&paned)
             .build();
+        // Always collapsed: the detail is a pushed page when narrow, and never
+        // shown beside the list.
         let split = adw::NavigationSplitView::builder()
             .sidebar(&sidebar)
             .content(&detail.page)
-            .min_sidebar_width(f64::from(MIN_WIDTH_PX) + 40.0)
-            .max_sidebar_width(620.0)
-            .sidebar_width_fraction(0.44)
+            .collapsed(true)
             .build();
 
-        let empty = adw::StatusPage::builder()
-            .icon_name("utilities-system-monitor-symbolic")
-            .title("No Agent Sessions")
-            .description(
-                "Claude Code, Codex, pi and other coding agents appear here as soon \
-                 as they start.",
-            )
-            .build();
         let error = adw::StatusPage::builder()
             .icon_name("dialog-error-symbolic")
             .title("Cannot Read Processes")
@@ -192,7 +294,6 @@ impl Window {
         // ficavam na altura natural, com a janela vazia embaixo.
         stack.set_vexpand(true);
         stack.add_named(&split, Some(PAGE_LIST));
-        stack.add_named(&empty, Some(PAGE_EMPTY));
         stack.add_named(&error, Some(PAGE_ERROR));
         stack.set_visible_child_name(PAGE_LIST);
 
@@ -215,12 +316,14 @@ impl Window {
 
         let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
         body.append(&banner);
-        body.append(&header.widget);
+        body.append(&strip.widget);
         body.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
         body.append(&view);
 
         let toolbar = adw::ToolbarView::new();
         toolbar.add_top_bar(&headerbar);
+        let switcher_bar = adw::ViewSwitcherBar::builder().stack(&view).build();
+        toolbar.add_bottom_bar(&switcher_bar);
         toolbar.set_content(Some(&body));
         let toasts = adw::ToastOverlay::new();
         toasts.set_child(Some(&toolbar));
@@ -254,43 +357,96 @@ impl Window {
             gtk::glib::Propagation::Proceed
         });
 
-        // Com varios breakpoints valendo, o libadwaita aplica so o ultimo: o
-        // estreito repete o recolhimento do split.
+        // Only the last matching breakpoint applies, so at the narrow width
+        // the medium one is unapplied: `narrow` is on while either is.
+        let relayout: Relayout = Rc::default();
+        let width_flags: Rc<Cell<(bool, bool)>> = Rc::default();
+        let flag = {
+            let (flags, narrow, relayout) = (width_flags.clone(), narrow.clone(), relayout.clone());
+            Rc::new(move |which: usize, on: bool| {
+                let mut f = flags.get();
+                if which == 0 {
+                    f.0 = on;
+                } else {
+                    f.1 = on;
+                }
+                flags.set(f);
+                let now = f.0 || f.1;
+                if narrow.replace(now) != now {
+                    let hook = relayout.borrow().clone();
+                    if let Some(hook) = hook {
+                        hook();
+                    }
+                }
+            })
+        };
         let bp = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
             adw::BreakpointConditionLengthType::MaxWidth,
             COLLAPSE_MAX_SP,
             adw::LengthUnit::Sp,
         ));
-        bp.add_setter(&split, "collapsed", Some(&true.to_value()));
-        window.add_breakpoint(bp);
-        let narrow = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+        let (st, f) = (strip.clone(), flag.clone());
+        bp.connect_apply(move |_| {
+            st.set_medium(true);
+            f(0, true);
+        });
+        let (st, f) = (strip.clone(), flag.clone());
+        bp.connect_unapply(move |_| {
+            st.set_medium(false);
+            f(0, false);
+        });
+        let collapse_menus = |bp: &adw::Breakpoint| {
+            bp.add_setter(&menus, "visible", Some(&false.to_value()));
+            bp.add_setter(&primary_menu, "visible", Some(&true.to_value()));
+        };
+        // Only the last matching breakpoint applies, so every narrower one
+        // repeats the menu collapse.
+        let bp_menus = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
             adw::BreakpointConditionLengthType::MaxWidth,
-            SWITCHER_ICONS_MAX_SP,
+            HEADER_MENUS_MIN_SP - 1.0,
             adw::LengthUnit::Sp,
         ));
-        narrow.add_setter(&split, "collapsed", Some(&true.to_value()));
-        narrow.add_setter(
-            &switcher,
-            "display-mode",
-            Some(&adw::InlineViewSwitcherDisplayMode::Icons.to_value()),
-        );
-        window.add_breakpoint(narrow);
+        collapse_menus(&bp_menus);
+        window.add_breakpoint(bp_menus);
+        collapse_menus(&bp);
+        window.add_breakpoint(bp);
+        let bp_narrow = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+            adw::BreakpointConditionLengthType::MaxWidth,
+            COMPACT_MAX_SP,
+            adw::LengthUnit::Sp,
+        ));
+        collapse_menus(&bp_narrow);
+        bp_narrow.add_setter(&switcher, "visible", Some(&false.to_value()));
+        bp_narrow.add_setter(&switcher_bar, "reveal", Some(&true.to_value()));
+        // The strip takes a flag, not a property: follow the breakpoint
+        // through its signals. The maps region has its own breakpoints.
+        let (st, f) = (strip.clone(), flag.clone());
+        bp_narrow.connect_apply(move |_| {
+            st.set_compact(true);
+            f(1, true);
+        });
+        let (st, f) = (strip.clone(), flag);
+        bp_narrow.connect_unapply(move |_| {
+            st.set_compact(false);
+            f(1, false);
+        });
+        window.add_breakpoint(bp_narrow);
 
-        let (ds, disc, dash) = (
-            dashboard_scroll.clone(),
-            disclosure.clone(),
-            dashboard.clone(),
-        );
-        split.connect_collapsed_notify(move |sp| {
-            if sp.is_collapsed() {
-                ds.set_child(gtk::Widget::NONE);
-                disc.set_child(Some(&dash.widget));
-                disc.set_visible(true);
-            } else {
-                disc.set_child(gtk::Widget::NONE);
-                disc.set_visible(false);
-                ds.set_child(Some(&dash.widget));
+        // The maps' strips turn on at 560 sp of window height or less.
+        let (mp, last_h) = (map.clone(), Cell::new(0));
+        window.add_tick_callback(move |w, _| {
+            let h = w.height();
+            if last_h.replace(h) != h {
+                mp.set_height_sp(f64::from(h) / text_scale());
             }
+            gtk::glib::ControlFlow::Continue
+        });
+
+        // Any dialog the window shows (confirmations, the delay-accounting
+        // one) holds the list's reorder until it closes.
+        let held = list.clone();
+        window.connect_visible_dialog_notify(move |w| {
+            held.set_dialog_open(w.visible_dialog().is_some())
         });
 
         let actions = Actions::new(&window, &toasts, live);
@@ -300,24 +456,24 @@ impl Window {
         // nome da sessao) no lugar do da janela, e sem a faixa da maquina, que
         // e da lista. Aberto: um cabecalho so, o da janela.
         let chrome = {
-            let (toolbar, band, detail, split) = (
+            let (toolbar, band, detail, split, narrow) = (
                 toolbar.clone(),
-                header.widget.clone(),
+                strip.widget.clone(),
                 detail.clone(),
                 split.clone(),
+                narrow.clone(),
             );
             move || {
-                let collapsed = split.is_collapsed();
+                let collapsed = narrow.get();
                 let on_detail = collapsed && split.shows_content();
                 detail.toolbar.set_reveal_top_bars(collapsed);
                 toolbar.set_reveal_top_bars(!on_detail);
+                toolbar.set_reveal_bottom_bars(!on_detail);
                 band.set_visible(!on_detail);
             }
         };
         let chrome = Rc::new(chrome);
         chrome();
-        let c = chrome.clone();
-        split.connect_collapsed_notify(move |_| c());
         // Voltou do detalhe (Esc, Alt+Esquerda, botao voltar): o foco volta
         // para a linha da sessao, nao para o topo da janela. So no fim da
         // transicao (`shown` da pagina da lista): antes dele o AdwNavigationView
@@ -328,21 +484,51 @@ impl Window {
         let returning = Rc::new(Cell::new(false));
         // Deferred focus belongs to the current destination, not the page
         // that scheduled it: a Reclaim return can hide Sessions before idle.
+        // Back from the detail: focus the map tile that opened it, else the
+        // session's row.
+        let opener: Rc<Cell<Option<Source>>> = Rc::default();
+        let selected_pid: Rc<Cell<Option<u32>>> = Rc::default();
+        let restore_focus: Rc<dyn Fn()> = {
+            let (list, map, opener, pid) = (
+                list.clone(),
+                map.clone(),
+                opener.clone(),
+                selected_pid.clone(),
+            );
+            Rc::new(move || {
+                if let Some(source) = opener.take()
+                    && map.focus_source(source, pid.get())
+                {
+                    return;
+                }
+                list.focus_selected();
+            })
+        };
         let focus_list: Rc<dyn Fn()> = {
-            let (view, split, list) = (view.clone(), split.clone(), list.clone());
+            let (view, split, narrow, restore) = (
+                view.clone(),
+                split.clone(),
+                narrow.clone(),
+                restore_focus.clone(),
+            );
             Rc::new(move || {
                 if view.visible_child_name().as_deref() == Some(VIEW_SESSIONS)
-                    && split.is_collapsed()
+                    && narrow.get()
                     && !split.shows_content()
                 {
-                    list.focus_selected();
+                    restore();
                 }
             })
         };
-        let (c, r, focus) = (chrome.clone(), returning.clone(), focus_list.clone());
+        let (c, r, focus, nw) = (
+            chrome.clone(),
+            returning.clone(),
+            focus_list.clone(),
+            narrow.clone(),
+        );
         split.connect_show_content_notify(move |split| {
             c();
-            if split.is_collapsed() && !split.shows_content() {
+            if nw.get() && !split.shows_content() {
                 r.set(true);
                 let focus = focus.clone();
                 gtk::glib::idle_add_local_once(move || focus());
@@ -357,16 +543,195 @@ impl Window {
             }
         });
 
+        // Split open: back from the detail returns the content to the map and
+        // focus to the session's row. The selection stays, so the row still
+        // marks the session and the map keeps its mark; activating the row or
+        // its tile again reopens the detail.
+        let back_action = gtk::gio::SimpleAction::new("detail-back", None);
+        back_action.set_enabled(false);
+        let sync_back = {
+            let (content, narrow, view, button, action) = (
+                content.clone(),
+                narrow.clone(),
+                view.clone(),
+                map_back.clone(),
+                back_action.clone(),
+            );
+            Rc::new(move || {
+                let on = !narrow.get()
+                    && view.visible_child_name().as_deref() == Some(VIEW_SESSIONS)
+                    && content.visible_child_name().as_deref() == Some("detail");
+                button.set_visible(on);
+                action.set_enabled(on);
+            })
+        };
+        let s = sync_back.clone();
+        content.connect_visible_child_name_notify(move |_| s());
+        let s = sync_back.clone();
+        view.connect_visible_child_name_notify(move |_| s());
+        let go_back: Rc<dyn Fn()> = {
+            let (content, restore) = (content.clone(), restore_focus.clone());
+            Rc::new(move || {
+                content.set_visible_child_name("overview");
+                restore();
+            })
+        };
+        let g = go_back.clone();
+        back_action.connect_activate(move |_, _| g());
+        let g = go_back;
+        map_back.connect_clicked(move |_| g());
+        gtk::prelude::ActionMapExt::add_action(&window, &back_action);
+        // A disabled action leaves the key alone, so collapsed the page's own
+        // Esc and Alt+Left (navigation.pop) still win.
+        let keys = gtk::ShortcutController::new();
+        for trigger in ["Escape", "<Alt>Left"] {
+            keys.add_shortcut(gtk::Shortcut::new(
+                gtk::ShortcutTrigger::parse_string(trigger),
+                Some(gtk::NamedAction::new("win.detail-back")),
+            ));
+        }
+        window.add_controller(keys);
+        // Mouse button 8 (back) leaves the detail like Esc: collapsed it pops
+        // the page, wide it brings the maps back (the action is off otherwise).
+        let mouse_back = gtk::GestureClick::builder().button(8).build();
+        let (split_for_mouse, narrow_for_mouse, win_for_mouse) =
+            (split.clone(), narrow.clone(), window.downgrade());
+        mouse_back.connect_pressed(move |_, _, _, _| {
+            if narrow_for_mouse.get() {
+                split_for_mouse.set_show_content(false);
+            } else if let Some(w) = win_for_mouse.upgrade() {
+                gtk::prelude::ActionGroupExt::activate_action(&w, "detail-back", None);
+            }
+        });
+        window.add_controller(mouse_back);
+
+        // The paned's top edge: the default per mode, the user's drag kept
+        // per mode (this run), always inside the clamps.
+        let saved: Rc<Cell<(Option<i32>, Option<i32>)>> = Rc::default();
+        let (dragging, guard) = (Rc::new(Cell::new(false)), Rc::new(Cell::new(false)));
+        let position: Rc<dyn Fn(Option<i32>)> = {
+            let (paned, content, map, saved, guard) = (
+                paned.clone(),
+                content.clone(),
+                map.clone(),
+                saved.clone(),
+                guard.clone(),
+            );
+            Rc::new(move |dragged| {
+                let total = paned.height();
+                if total <= 0 {
+                    return;
+                }
+                let mode = if content.visible_child_name().as_deref() == Some("detail") {
+                    PanedMode::Detail
+                } else {
+                    PanedMode::Maps
+                };
+                let mut kept = saved.get();
+                let slot = match mode {
+                    PanedMode::Maps => &mut kept.0,
+                    PanedMode::Detail => &mut kept.1,
+                };
+                if dragged.is_some() {
+                    *slot = dragged;
+                }
+                let at = paned_position(total, mode, map.is_compact(), *slot);
+                saved.set(kept);
+                if at != paned.position() {
+                    guard.set(true);
+                    paned.set_position(at);
+                    guard.set(false);
+                }
+            })
+        };
+        let (pos, drag_on, g) = (position.clone(), dragging.clone(), guard);
+        paned.connect_position_notify(move |p| {
+            if !g.get() && drag_on.get() {
+                pos(Some(p.position()));
+            }
+        });
+        let pos = position.clone();
+        paned.connect_max_position_notify(move |_| pos(None));
+        let pos = position.clone();
+        content.connect_visible_child_name_notify(move |_| pos(None));
+        let pos = position.clone();
+        map.connect_layout_changed(move || pos(None));
+        // Only a drag that starts on the handle moves the saved edge.
+        let drag = gtk::GestureDrag::new();
+        drag.set_propagation_phase(gtk::PropagationPhase::Capture);
+        let (p, on) = (paned.clone(), dragging.clone());
+        drag.connect_drag_begin(move |_, _, y| {
+            on.set((y - f64::from(p.position())).abs() < 12.0);
+        });
+        drag.connect_drag_end(move |_, _, _| dragging.set(false));
+        paned.add_controller(drag);
+
+        // Crossing 1000 sp moves the detail between the maps' slot and the
+        // pushed page, and keeps what was open open.
+        let relayout_fn: Rc<dyn Fn()> = {
+            let (content, split, narrow, tb) = (
+                content.clone(),
+                split.clone(),
+                narrow.clone(),
+                detail.toolbar.clone(),
+            );
+            let (wide_detail, narrow_slot) = (wide_detail.clone(), narrow_slot.clone());
+            let (chrome, sync_back, position) = (chrome.clone(), sync_back.clone(), position);
+            Rc::new(move || {
+                let n = narrow.get();
+                let (from, to) = if n {
+                    (&wide_detail, &narrow_slot)
+                } else {
+                    (&narrow_slot, &wide_detail)
+                };
+                if tb.parent().as_ref() == Some(from.upcast_ref::<gtk::Widget>()) {
+                    from.remove(&tb);
+                    to.append(&tb);
+                }
+                if n {
+                    if content.visible_child_name().as_deref() == Some("detail") {
+                        content.set_visible_child_name("overview");
+                        split.set_show_content(true);
+                    }
+                } else if split.shows_content() {
+                    content.set_visible_child_name("detail");
+                    split.set_show_content(false);
+                }
+                chrome();
+                sync_back();
+                position(None);
+            })
+        };
+        relayout.replace(Some(relayout_fn));
+
         let last: Rc<RefCell<Option<Arc<Snapshot>>>> = Rc::default();
         let last_history: Rc<RefCell<Option<Arc<History>>>> = Rc::default();
-        let (d, lst, lh, h) = (
+        let (d, lst, lh, h, mp) = (
             detail.clone(),
             last.clone(),
             last_history.clone(),
             home.clone(),
+            map.clone(),
         );
+        let content_for_open = content.clone();
+        let split_for_end = split.clone();
+        let (nw, sel_cell, content_sel) = (narrow.clone(), selected_pid.clone(), content.clone());
         list.connect_selected(move |pid| {
-            content.set_visible_child_name(if pid.is_some() { "detail" } else { "overview" });
+            mp.set_selected(pid);
+            sel_cell.set(pid);
+            // Narrow, with no session the pushed page would be blank: show
+            // the list again. Wide, the detail takes the maps' place.
+            if nw.get() {
+                if pid.is_none() {
+                    split_for_end.set_show_content(false);
+                }
+            } else {
+                content_sel.set_visible_child_name(if pid.is_some() {
+                    "detail"
+                } else {
+                    "overview"
+                });
+            }
             d.show(
                 pid,
                 lst.borrow().as_deref(),
@@ -459,22 +824,65 @@ impl Window {
             back_button.grab_focus();
         });
 
-        let (filtered_list, filtered_view, filtered_stack, filtered_split) =
-            (list.clone(), view.clone(), stack.clone(), split.clone());
-        header.connect_filter(move |filter| {
-            filtered_list.set_filter(filter);
-            filtered_view.set_visible_child_name(VIEW_SESSIONS);
-            filtered_stack.set_visible_child_name(PAGE_LIST);
-            filtered_split.set_show_content(false);
-            let list = filtered_list.clone();
-            gtk::glib::idle_add_local_once(move || list.focus_filtered());
+        // A tile or a chip opens its session like a click on its row; the
+        // Reclaim button is the Reclaim page.
+        let (opened_list, opened_split, nw) = (list.clone(), split.clone(), narrow.clone());
+        let opened_content = content_for_open.clone();
+        let opener_map = opener.clone();
+        map.connect_open_from(move |pid, source| {
+            opener_map.set(Some(source));
+            if opened_list.reveal_pid(pid) {
+                if nw.get() {
+                    opened_split.set_show_content(true);
+                } else {
+                    // Already selected, so no selection change reopens it.
+                    opened_content.set_visible_child_name("detail");
+                }
+            }
+        });
+        let reclaim_view = view.clone();
+        map.connect_reclaim(move || reclaim_view.set_visible_child_name(VIEW_RECLAIM));
+
+        let (sp, nw, opener_row) = (split.clone(), narrow.clone(), opener.clone());
+        list.connect_open(move |_| {
+            opener_row.set(None);
+            if nw.get() {
+                sp.set_show_content(true);
+            } else {
+                content_for_open.set_visible_child_name("detail");
+            }
         });
 
-        let sp = split.clone();
-        list.connect_open(move |_| {
-            if sp.is_collapsed() {
-                sp.set_show_content(true);
+        // The Action column: select the session, show its detail as a click
+        // on the row would, and press the detail's own control, so the
+        // confirmation dialog is the one the detail shows. End is the list's
+        // own `win.act`. A control the detail cannot run says so in a toast:
+        // a click that lands on the detail with no dialog reads as broken.
+        let (sp, nw, lst, d, content_act, toast) = (
+            split.clone(),
+            narrow.clone(),
+            list.clone(),
+            detail.clone(),
+            content.clone(),
+            toasts.clone(),
+        );
+        list.connect_row_action(move |pid, op| {
+            use crate::actions_ui::RowOp;
+            if !matches!(op, RowOp::Compact | RowOp::Handoff) || !lst.select_pid(pid) {
+                return;
             }
+            if nw.get() {
+                sp.set_show_content(true);
+            } else {
+                content_act.set_visible_child_name("detail");
+            }
+            let toast = toast.clone();
+            d.request(pid, op, move || {
+                toast.add_toast(adw::Toast::new(&format!(
+                    "{} is not available for this session now",
+                    op.label()
+                )));
+            });
         });
 
         let parent = window.clone();
@@ -492,12 +900,16 @@ impl Window {
             window,
             title,
             banner,
-            header,
+            strip,
+            history: RefCell::new(MachineHistory::new()),
+            reclaim_ring: RefCell::default(),
+            map,
+            switcher_bar,
             model: RefCell::new(model),
             list,
             detail,
-            dashboard,
             split,
+            narrow,
             last,
             last_history,
             open_at_start: Cell::new(std::env::var(DETAIL_ENV).ok().filter(|v| !v.is_empty())),
@@ -508,6 +920,7 @@ impl Window {
             reclaim,
             actions,
             probed: Cell::new(false),
+            spend: Rc::default(),
         }
     }
 
@@ -532,12 +945,35 @@ impl Window {
         let m = &snap.machine;
         self.banner
             .set_revealed(m.io_stall_source == IoStallSource::DState);
-        self.header.apply(snap);
-        self.dashboard.apply(snap);
+        let readout = Readout::of(snap);
+        {
+            let mut history = self.history.borrow_mut();
+            history.record(snap);
+            self.strip.update(snap, &history);
+        }
+        {
+            // One tracker for both views: updated first, then read by the
+            // token map and the list.
+            let mut spend = self.spend.borrow_mut();
+            spend.update(snap.taken_at_ms, crate::spend::inputs(snap));
+            self.map
+                .set_token_input(TokenInput::from_snapshot(snap, &spend));
+        }
+        {
+            let mut ring = self.reclaim_ring.borrow_mut();
+            ring.push(&frame.snapshot);
+            self.map
+                .set_window_reclaim(ring.reclaim(Some(std::process::id())));
+        }
+        self.map.update(snap, &readout);
+        self.list.describe(snap);
 
         let mut model = self.model.borrow_mut();
         let applied = model.apply(snap, self.home.as_deref());
         self.list.update(&applied);
+        // After the model: a session new in this snapshot has its row now, so
+        // it gets its spend at once instead of sorting last for a tick.
+        self.list.set_spend(&self.spend.borrow());
         let n = model.len();
         let subtitle = match n {
             0 => format!("No sessions · {} processes", m.processes),
@@ -553,13 +989,9 @@ impl Window {
         if self.title.subtitle() != subtitle {
             self.title.set_subtitle(&subtitle);
         }
-        let page = if n == 0 && !self.list.has_filter() {
-            PAGE_EMPTY
-        } else {
-            PAGE_LIST
-        };
-        if self.stack.visible_child_name().as_deref() != Some(page) {
-            self.stack.set_visible_child_name(page);
+        // No sessions is the map's own empty state, not a page of its own.
+        if self.stack.visible_child_name().as_deref() != Some(PAGE_LIST) {
+            self.stack.set_visible_child_name(PAGE_LIST);
         }
         drop(model);
 
@@ -572,8 +1004,14 @@ impl Window {
                     // clique: o AdwNavigationView guarda o foco da pagina no
                     // push e o devolve no pop.
                     self.list.focus_selected();
-                    // Sem efeito com o split aberto; recolhido, empurra o detalhe.
-                    self.split.set_show_content(true);
+                    // O split e sempre recolhido: set_show_content(true) empurra a
+                    // pagina do detalhe, vazia na janela larga (la o detalhe mora
+                    // no lugar dos mapas e a selecao ja o mostra). `narrow` so
+                    // muda apos a primeira alocacao, entao a largura pedida decide:
+                    // estreita empurra ja (sem animacao pendente na captura).
+                    if (1..=COLLAPSE_MAX_SP as i32).contains(&self.window.default_width()) {
+                        self.split.set_show_content(true);
+                    }
                     // Para o measure-gui.sh --detail dizer qual sessao mediu.
                     let procs = snap
                         .sessions
@@ -601,50 +1039,44 @@ impl Window {
     }
 }
 
+/// The sort order the list starts in. A capture ignores the saved order, like
+/// it ignores the saved colour scheme, so two captures of one fixture match.
+fn startup_sort_key(prefs: &Prefs, capturing: bool) -> SortKey {
+    if capturing {
+        SortKey::default()
+    } else {
+        prefs.sort_key()
+    }
+}
+
 impl Window {
-    /// Ver [`DETAIL_BACK_ENV`]. A volta devolve o foco a linha da sessao no
-    /// idle seguinte (`connect_show_content_notify`); o relato sai depois.
+    /// Ver [`DETAIL_BACK_ENV`]. Recolhido, a volta e o `navigation.pop` da
+    /// pagina; com o split aberto, a acao `win.detail-back` (Esc, Alt+Esquerda).
     /// O pop so sai com o detalhe ja alocado: antes do primeiro layout o
     /// breakpoint ainda nao recolheu o split, e um pop ali nao e a volta do
-    /// usuario (o gancho do foco nem arma).
+    /// usuario (o gancho do foco nem arma); aberto, a acao so vale com o
+    /// detalhe na frente, e antes disso ela volta sem fazer nada. O relato espera o foco assentar:
+    /// ele e posto num idle, depois do `shown` ou do notify conforme a
+    /// animacao, e aberto o split nem ha `shown`; um idle da sonda corria na
+    /// frente dele e lia o foco antes da volta.
     fn probe_back(&self) {
         let (win, page) = (self.window.clone(), self.detail.page.clone());
-        let split = self.split.clone();
-        let popped = Rc::new(Cell::new(false));
-        if let Some(sidebar) = split.sidebar() {
-            // Conectado depois do handler do foco: o idle daqui roda depois
-            // do idle dele.
-            let (win, split, popped) = (win.clone(), split.clone(), popped.clone());
-            sidebar.connect_shown(move |_| {
-                if !popped.get() {
-                    return;
-                }
-                let (win, split) = (win.clone(), split.clone());
-                gtk::glib::idle_add_local_once(move || {
-                    let name = |w: Option<gtk::Widget>| {
-                        w.map_or_else(|| "none".to_string(), |w| w.type_().name().to_string())
-                    };
-                    let focus = gtk::prelude::GtkWindowExt::focus(&win);
-                    let forced = force_focus_ring(&win, focus.as_ref());
-                    if !forced.is_empty() {
-                        // A captura mostra estado forcado, nao o da sessao:
-                        // quem le a saida precisa saber.
-                        println!("back_forced={}", forced.join(","));
-                    }
-                    let parent = name(focus.as_ref().and_then(|f| f.parent()));
-                    println!(
-                        "back_focus={} in={parent} shows_content={}",
-                        name(focus),
-                        split.shows_content()
-                    );
-                });
-            });
-        }
+        let (split, narrow) = (self.split.clone(), self.narrow.clone());
         let tries = Cell::new(0u32);
         gtk::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+            // Open, the detail is there once the selection reached the content
+            // stack (an idle after the select): the action is enabled then.
+            let wide_open = || {
+                gtk::gio::prelude::ActionMapExt::lookup_action(&win, "detail-back")
+                    .is_some_and(|a| a.is_enabled())
+            };
             let ready = page.is_mapped()
                 && page.height() > 0
-                && (!split.is_collapsed() || split.shows_content());
+                && if narrow.get() {
+                    split.shows_content()
+                } else {
+                    wide_open()
+                };
             // 3 s sem layout: pop assim mesmo, e o relato diz o que achou.
             if !ready && tries.replace(tries.get() + 1) < 60 {
                 return gtk::glib::ControlFlow::Continue;
@@ -657,10 +1089,34 @@ impl Window {
                 settings.set_gtk_enable_animations(false);
             }
             win.set_focus_visible(true);
-            popped.set(true);
-            if let Err(e) = page.activate_action("navigation.pop", None) {
+            let result = if narrow.get() {
+                page.activate_action("navigation.pop", None)
+            } else {
+                gtk::prelude::WidgetExt::activate_action(&win, "win.detail-back", None)
+            };
+            if let Err(e) = result {
                 println!("back_focus=none error={e}");
+                return gtk::glib::ControlFlow::Break;
             }
+            let (win, split) = (win.clone(), split.clone());
+            gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+                let name = |w: Option<gtk::Widget>| {
+                    w.map_or_else(|| "none".to_string(), |w| w.type_().name().to_string())
+                };
+                let focus = gtk::prelude::GtkWindowExt::focus(&win);
+                let forced = force_focus_ring(&win, focus.as_ref());
+                if !forced.is_empty() {
+                    // A captura mostra estado forcado, nao o da sessao:
+                    // quem le a saida precisa saber.
+                    println!("back_forced={}", forced.join(","));
+                }
+                let parent = name(focus.as_ref().and_then(|f| f.parent()));
+                println!(
+                    "back_focus={} in={parent} shows_content={}",
+                    name(focus),
+                    split.shows_content()
+                );
+            });
             gtk::glib::ControlFlow::Break
         });
     }
@@ -714,6 +1170,9 @@ mod qa_tests;
 
 /// Explica como ligar o delay accounting. A app nunca pede root: o comando e
 /// para o terminal do usuario.
+/// The window's re-layout hook, set once the page widgets exist.
+type Relayout = Rc<RefCell<Option<Rc<dyn Fn()>>>>;
+
 fn delayacct_dialog() -> adw::AlertDialog {
     let dialog = adw::AlertDialog::new(
         Some("Turn On Delay Accounting"),

@@ -326,7 +326,13 @@ impl World {
             self.projects.clone(),
         );
         *self.hook.lock().unwrap() = Some(Box::new(move |text, pane| {
-            if let Some(op) = text.strip_prefix("/clear-pickup handoff agentcenter-op:") {
+            // Either installed skill answers the same contract.
+            let after = |what: &str| {
+                ["/clear-pickup", "/handoff"]
+                    .iter()
+                    .find_map(|s| text.strip_prefix(&format!("{s} {what}")))
+            };
+            if let Some(op) = after("handoff agentcenter-op:") {
                 fs::write(&file, format!("{CANARY} handoff body\n")).unwrap();
                 append(&old, &fixture("handoff.jsonl", SID, op, &file, &file));
                 pane.status = "working";
@@ -335,7 +341,7 @@ impl World {
                     pane.session = NEW;
                     fs::write(projects.join(format!("{NEW}.jsonl")), "").unwrap();
                 }
-            } else if let Some(copy) = text.strip_prefix("/clear-pickup pickup ") {
+            } else if let Some(copy) = after("pickup ") {
                 pane.status = "working";
                 if load {
                     let copy = PathBuf::from(copy);
@@ -361,6 +367,56 @@ fn until(c: &mut Controller, id: &str, done: impl Fn(&Progress) -> bool) -> Prog
 }
 fn at(p: &Progress) -> (State, Stage, &'static str) {
     (p.state, p.stage, p.code)
+}
+
+/// The commands follow `Env::skill` end to end: the Handoff prompt, the pickup
+/// prompt and the pickup evidence all name the installed skill, not a fixed one.
+#[test]
+fn pickup_uses_the_installed_skill_for_prompts_and_evidence() {
+    let w = world();
+    w.claude(false, false, None);
+    let mut env = Env::with_state_home(w.home.clone(), None);
+    env.skill = "handoff";
+    let mut c = Controller::new(w.endpoint.clone(), env);
+    c.io_timeout = Duration::from_secs(2);
+    let p = c.pickup_start(OP, &w.subject);
+    assert_eq!(
+        at(&p),
+        (State::Running, Stage::HandoffPersisted, code::COPIED)
+    );
+    assert!(
+        w.prompts()[0].starts_with(&format!(
+            "/handoff handoff {}",
+            agentcenter_core::control::claude::MARK
+        )),
+        "{:?}",
+        w.prompts()
+    );
+    let copy = p.handoff.clone().expect("copy artifact");
+    w.set(|p| p.status = "idle");
+    c.pickup_status(OP).unwrap();
+    *w.hook.lock().unwrap() = None;
+    w.set(|p| p.session = NEW);
+    fs::write(w.transcript(NEW), "").unwrap();
+    let p = c.pickup_status(OP).unwrap();
+    assert_eq!(
+        at(&p),
+        (State::Running, Stage::PickupSent, code::PICKUP_SENT)
+    );
+    assert_eq!(
+        w.prompts()[2],
+        format!("/handoff pickup {}", copy.path.display())
+    );
+    // A transcript showing the other skill's command is not this pickup loading.
+    append(
+        &w.transcript(NEW),
+        &fixture("pickup.jsonl", NEW, OP, &copy.path, &copy.path),
+    );
+    let p = c.pickup_status(OP).unwrap();
+    assert_eq!(
+        at(&p),
+        (State::Running, Stage::PickupSent, code::PICKUP_SENT)
+    );
 }
 
 #[test]
@@ -941,4 +997,52 @@ fn pickup_entries_from_before_the_send_never_count() {
     let p = until(&mut c, OP, |p| p.state != State::Running);
     assert_eq!(at(&p), (State::Unknown, Stage::PickupSent, code::TIMEOUT));
     assert_eq!(w.prompts().len(), 3);
+}
+
+/// "Handoff + new session" when Claude Code asks permission for the handoff's
+/// Write: the pickup reports `permission_prompt` at `HandoffRunning` past the
+/// evidence timeout, sends no `/clear`, and goes on once the owner allows it.
+#[test]
+fn pickup_waiting_on_handoff_write_permission_reports_it_and_never_clears() {
+    let w = world();
+    let (file, old) = (w.handoff_file(), w.transcript(SID));
+    *w.hook.lock().unwrap() = Some(Box::new(move |text, pane| {
+        if let Some(op) = text.strip_prefix("/clear-pickup handoff agentcenter-op:") {
+            // The mark and the Write call; the result waits on the dialog.
+            let text = fixture("handoff.jsonl", SID, op, &file, &file);
+            let head: Vec<&str> = text.lines().take(2).collect();
+            append(&old, &format!("{}\n", head.join("\n")));
+            pane.status = "blocked";
+        }
+    }));
+    let mut c = w.controller();
+    c.evidence_timeout = Duration::from_millis(50);
+    c.pickup_start(OP, &w.subject);
+    std::thread::sleep(Duration::from_millis(80));
+    let p = c.pickup_status(OP).unwrap();
+    assert_eq!(
+        at(&p),
+        (State::Running, Stage::HandoffRunning, "permission_prompt")
+    );
+    assert_eq!(w.prompts().len(), 1, "no /clear while the dialog is open");
+    // The owner allows the write: the file and its result appear.
+    *w.hook.lock().unwrap() = None;
+    fs::write(w.handoff_file(), format!("{CANARY} handoff body\n")).unwrap();
+    let result = fixture(
+        "handoff.jsonl",
+        SID,
+        OP,
+        &w.handoff_file(),
+        &w.handoff_file(),
+    );
+    append(
+        &w.transcript(SID),
+        &format!("{}\n", result.lines().nth(2).unwrap()),
+    );
+    w.set(|p| p.status = "working");
+    let p = c.pickup_status(OP).unwrap();
+    assert_eq!(
+        at(&p),
+        (State::Running, Stage::HandoffPersisted, code::COPIED)
+    );
 }

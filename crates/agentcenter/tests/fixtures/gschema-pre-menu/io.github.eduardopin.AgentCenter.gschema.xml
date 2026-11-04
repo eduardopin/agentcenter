@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AgentCenter preferences (C19). Read by crates/agentcenter/src/prefs.rs;
+     without this schema installed the app runs on the defaults below and
+     saves nothing. Check: glib-compile-schemas -strict -dry-run data/ -->
+<schemalist>
+  <schema id="io.github.eduardopin.AgentCenter" path="/io/github/eduardopin/AgentCenter/">
+    <key name="tick-interval-ms" type="u">
+      <range min="250" max="10000"/>
+      <default>1000</default>
+      <summary>Sampling interval</summary>
+      <description>Milliseconds between two readings of the sessions. The history keeps 600 readings, so 1000 ms is 10 minutes of history.</description>
+    </key>
+    <key name="sort-order" type="s">
+      <choices>
+        <choice value="state"/>
+        <choice value="memory"/>
+        <choice value="cpu"/>
+        <choice value="name"/>
+        <choice value="recommendation"/>
+      </choices>
+      <default>'state'</default>
+      <summary>Session list order</summary>
+      <description>The last order chosen in the session list.</description>
+    </key>
+    <key name="window-width" type="i">
+      <range min="360" max="32767"/>
+      <default>1180</default>
+      <summary>Window width</summary>
+    </key>
+    <key name="window-height" type="i">
+      <range min="294" max="32767"/>
+      <default>720</default>
+      <summary>Window height</summary>
+    </key>
+    <key name="window-maximized" type="b">
+      <default>false</default>
+      <summary>Window maximized</summary>
+    </key>
+  </schema>
+</schemalist>

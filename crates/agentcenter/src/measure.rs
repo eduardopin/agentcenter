@@ -14,7 +14,8 @@
 //!   conteudo alem da pagina (`hadjustment.upper > page_size`), widget fora
 //!   da janela e rotulo menor que o proprio minimo sai no stderr como
 //!   `agentcenter: overflow: ...`, e o capture-gui.sh falha. Tambem imprime
-//!   `band_px=<altura>` da faixa da maquina.
+//!   `band_px=<altura>` da faixa da maquina e, com AGENTCENTER_DETAIL,
+//!   `detail_px=<altura>` do detalhe desenhado (0: a captura saiu sem ele).
 
 use gtk::prelude::*;
 use gtk::{gdk, glib};
@@ -213,8 +214,16 @@ fn on_paint(s: &Rc<State>, app: &adw::Application, window: &gtk::Window) {
                     for problem in problems {
                         eprintln!("agentcenter: overflow: {problem}");
                     }
-                    if let Some(band) = find_by_class(window.upcast_ref(), "machine-header") {
+                    if let Some(band) = find_by_class(window.upcast_ref(), "machine-strip") {
                         println!("band_px={}", band.height());
+                    }
+                    // Detalhe pedido na partida: altura do que apareceu (0 = nao
+                    // desenhado), para o capture-gui.sh --detail falhar.
+                    if std::env::var_os(crate::window::DETAIL_ENV).is_some_and(|v| !v.is_empty()) {
+                        let px = find_by_class(window.upcast_ref(), "detail-view")
+                            .filter(|d| d.is_mapped())
+                            .map_or(0, |d| d.height());
+                        println!("detail_px={px}");
                     }
                     println!("screenshot={path} empty_retries={}", s.empty_tries.get());
                 }

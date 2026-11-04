@@ -359,13 +359,14 @@ impl Endpoint {
     }
     /// Fresh reads only: /proc identity, a single pane holding the pid
     /// (`agent.list` + `pane.process_info`), then `agent.get` of that pane for
-    /// agent type, explicit location, agent session and `idle`.
+    /// agent type, explicit location, agent session and `idle` (or `done`).
     fn agent_checks(&self, t: &Target, session: AgentSession, end: Instant) -> Result<(), Error> {
         let a = self.pane_agent(t, end)?;
         if !a.session.as_ref().is_some_and(|s| s.is(session)) {
             return Err(Error::Session);
         }
-        if a.status.as_deref() != Some("idle") {
+        // `done` is a finished turn nobody has looked at yet: as ready as `idle`.
+        if !matches!(a.status.as_deref(), Some("idle" | "done")) {
             return Err(Error::Busy);
         }
         process(t.pid, t.starttime)

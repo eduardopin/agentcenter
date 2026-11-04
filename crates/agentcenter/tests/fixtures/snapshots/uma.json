@@ -79,6 +79,7 @@
     "subagents_total": null,
     "provider": "anthropic",
     "cockpit": null,
+    "spend_30m": null,
     "cockpit_pending": false
    },
    "processes": [

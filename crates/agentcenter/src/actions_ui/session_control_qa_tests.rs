@@ -1382,3 +1382,140 @@ fn gtk_claude_sent_moves_to_persisted_or_compacted() {
         }
     });
 }
+
+// ---- Claude Code pickup (CC6): Handoff + new session in herdr ----
+
+fn claude_caps(
+    handoff: agentcenter_core::control::Capability,
+) -> agentcenter_core::control::claude::Capabilities {
+    agentcenter_core::control::claude::Capabilities {
+        handoff,
+        compact: agentcenter_core::control::Capability::enabled(),
+    }
+}
+
+/// Goal 1: a Claude Code session in herdr offers "Handoff + new session"
+/// whenever its handoff can run, and shows the handoff's own reason when not.
+#[test]
+fn claude_ui_session_pickup_follows_handoff_capability() {
+    use agentcenter_core::control::{Capability, claude};
+    let native = sampled("claude", "claude-a", true);
+    let subject = claude::Subject::from_session(&native).unwrap();
+    let ready = claude_ui_session(&native, &subject, &claude_caps(Capability::enabled())).unwrap();
+    assert_eq!(
+        ready.pickup_disabled, None,
+        "pickup hidden on a ready Claude session"
+    );
+    assert_eq!(ready.disabled_reason(Action::Pickup), None);
+    let busy = claude_ui_session(
+        &native,
+        &subject,
+        &claude_caps(Capability::disabled("busy")),
+    )
+    .unwrap();
+    assert_eq!(busy.handoff_disabled.as_deref(), Some("busy"));
+    assert_eq!(busy.pickup_disabled.as_deref(), Some("busy"));
+}
+
+/// The production adapter builds for Claude; Pi pickup stays unintegrated
+/// (PENDENCIAS.md blockers), so its button and adapter remain off.
+#[test]
+fn gtk_default_pickup_connect_builds_claude_and_refuses_pi() {
+    gtk::test_synced(|| {
+        adw::init().unwrap();
+        let p = SessionControls::new(false).panel;
+        let connect = p.pickup_connect.get();
+        let claude = sampled("claude", "claude-a", true);
+        let herdr = agentcenter_core::control::herdr::Endpoint {
+            socket: "/nonexistent".into(),
+            server_pid: 0,
+            server_starttime: 0,
+        };
+        let request = claude_request(Action::Pickup, "00000000-0000-4000-8000-000000000001");
+        assert!(
+            connect(&Backend::Claude(herdr), &claude, &request).is_ok(),
+            "default pickup adapter refuses Claude"
+        );
+        let pi: agentcenter_core::control::pi::Endpoint =
+            serde_json::from_value(serde_json::json!({
+                "handoff_directory": "/private", "model_auth": null, "protocol_version": 2,
+                "session_id": "s", "session_file": "/session.jsonl", "pid": 1,
+                "process_starttime": "4242", "instance_nonce": "n", "expected": null,
+                "socket": "/nonexistent",
+                "capabilities": {"handoff": {"enabled": true, "disabled_reason": null},
+                                 "compact": {"enabled": true, "disabled_reason": null}}
+            }))
+            .unwrap();
+        let mut pi_request = request.clone();
+        pi_request.session.agent = Agent::Pi;
+        assert!(
+            connect(
+                &Backend::Pi(Box::new(pi)),
+                &sampled_pi("pi-a", 0),
+                &pi_request
+            )
+            .is_err(),
+            "Pi pickup must stay unintegrated"
+        );
+    });
+}
+
+/// The session's permission dialog is its own status end to end: both contract
+/// mappings, the text, the polling set and the Query button; a plain Running
+/// outcome with another code is not it.
+#[test]
+fn awaiting_permission_maps_polls_and_offers_query() {
+    use agentcenter_core::control::claude::code::PERMISSION_PROMPT;
+    let c = claude_request(Action::Handoff, "op-h");
+    let mut asked = outcome("op-h", State::Running, None);
+    asked.code = PERMISSION_PROMPT;
+    assert_eq!(
+        status_from_outcome(&c, &asked).0,
+        Status::AwaitingPermission
+    );
+    let plain = outcome("op-h", State::Running, None);
+    assert_eq!(status_from_outcome(&c, &plain).0, Status::Sent);
+
+    let mut pc = claude_request(Action::Pickup, "op-p");
+    pc.session.expected = serde_json::json!({"sessionId":"s","sessionFile":"/c.jsonl"});
+    let mut report = progress(&pc, Stage::HandoffRunning, State::Running, None);
+    report.code = PERMISSION_PROMPT;
+    assert_eq!(
+        status_from_progress(&pc, &report),
+        Status::AwaitingPermission
+    );
+    report.code = "sent";
+    assert_eq!(status_from_progress(&pc, &report), Status::Running);
+
+    assert!(Status::AwaitingPermission.text().contains("permission"));
+    for polled in [
+        Status::Accepted,
+        Status::Running,
+        Status::Sent,
+        Status::AwaitingPermission,
+    ] {
+        assert!(polled.polled(), "{polled:?}");
+    }
+    for idle in [Status::Requested, Status::Unknown, Status::Cancelled] {
+        assert!(!idle.polled(), "{idle:?}");
+    }
+    gtk::test_synced(|| {
+        adw::init().unwrap();
+        let p = SessionControls::new(false).panel;
+        let mut s = selected("claude-a");
+        s.agent = Agent::Claude;
+        s.cancel_supported = false;
+        {
+            let mut c = p.controller.borrow_mut();
+            c.select(Some(s.clone()));
+            let prompt = c.prepare(Action::Handoff).unwrap();
+            c.confirm(prompt, &s, "op-a".into()).unwrap();
+            assert!(c.update("op-a", "claude-a", Status::AwaitingPermission));
+            // A late "accepted" never takes the dialog state back.
+            assert!(!c.update("op-a", "claude-a", Status::Accepted));
+        }
+        p.render();
+        assert!(p.query.is_visible() && p.query.is_sensitive());
+        assert!(p.buttons.iter().all(|(_, b)| !b.is_visible()));
+    });
+}

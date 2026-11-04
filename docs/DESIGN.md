@@ -45,7 +45,16 @@ says "the agents hold 20 of the 29 GiB in use". Everything else stays quiet.
 | Amber | `#9a5800` fill, `#7a4300` text | `#f2a93f` | **work in progress**: the agents' share of a rule, a busy session, the focus ring, the selection tint. Fixed accent, not the system one |
 | Crimson | `#b3123f` | `#ff7590` | **needs you**: blocked session, pressure over its limit, I/O-bound |
 | Slate | `#6b6f80` | `#858a9c` | the rest of the machine in a rule |
+| Idle blue | `#2b72a8` | `#2b72a8` | **idle** session: memory-map tile, state dot, legends (RFC-AC-003); white text 5.15:1 |
+| Green | `#1e7d4b` | `#3fb37f` | **under the limit**: machine chart series and the RAM bar (`--ac-mark-ok`, RFC-AC-003) |
 | Track | `#dfe2e9` | `#30323d` | empty capacity |
+
+Machine charts (CPU, RAM, Swap, Memory stall) are drawn in two levels, with a
+gradient area under the line: green under the limit, crimson over it (swap 50 %,
+stall 10 %, RAM while memory stall is over its limit; CPU has no limit and stays
+green). A chart with no reading is neither: it stays in secondary ink. This replaces the earlier rule "series are monochrome ink, colour only
+means alert". Words still carry the state (triangle, readout), so colour is
+never alone. The darkest violet bin of the token map is `#443a5e`.
 
 Why a fixed accent: in a monitor colour is meaning. Ubuntu's default accent is
 orange, which would collide with any warning colour and would make "busy" and
@@ -318,7 +327,7 @@ Decided by the owner on 17/10/2026:
    not tint the whole row: the row keeps its state colour and the
    recommendation reads as one more pill beside the state pill. Tokens
    (C24, `tokens.css`): `--ac-text-rec-*` and `--ac-mark-rec-*` for ok
-   (neutral, no success colour in the palette), compact (crimson outline),
+   (neutral: this pill never turns green), compact (crimson outline),
    handoff and loop (crimson fill); `contrast.py` requires all of them in both
    themes and measures them on the selected row too. The pill shows the
    script's verdict name (COMPACTAR, OCIOSA, LOOP, lendo) so it matches

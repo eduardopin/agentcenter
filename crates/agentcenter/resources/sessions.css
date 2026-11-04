@@ -3,7 +3,8 @@
  * de cada par usado aqui e medido por scripts/contrast.py pelo nome do token.
  */
 
-/* Componente: altura minima da linha rica (tres linhas de texto). */
+/* Componente: altura minima da linha rica (tres linhas de texto), que a
+ * pagina Reclaim ainda usa. A lista usa a linha de 34 px da direcao B. */
 :root {
   --ac-session-row-min-height: 56px;
 }
@@ -19,16 +20,153 @@ listview.session-rack {
   color: var(--ac-text-primary);
 }
 
-/* Linha: filete de 1 px entre linhas no lugar da zebra. */
+/* Row: one line of 40 px (44 px on touch), the 1 px rule between rows
+ * included. */
 listview.session-rack > row {
-  min-height: var(--ac-session-row-min-height);
-  padding: var(--ac-space-2) var(--ac-space-3);
+  min-height: 40px;
+  padding: 0 var(--ac-space-3);
   border-bottom: 1px solid var(--ac-track);
+}
+
+/* State glyph of the row and the detail header (state_glyph.rs draws it in
+ * this colour): the state fills, the same in both themes. Unknown state
+ * claims no fill. */
+glyph.busy { color: var(--ac-mark-fill-busy); }
+glyph.waiting { color: var(--ac-mark-fill-waiting); }
+glyph.idle { color: var(--ac-mark-fill-idle); }
+glyph.mux { color: var(--ac-mark-fill-mux); }
+glyph.unknown { color: var(--ac-mark-machine); }
+
+listview.session-rack .row-name {
+  font-weight: 400;
+}
+
+/* Rank in the current order, tabular so #9 and #10 line up. */
+listview.session-rack .row-rank {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.6;
+}
+
+/* Metric bar: track, then the state fill; the swapped part hatched in
+ * white at the hatch opacity on top of the same fill. */
+listview.session-rack metricbar {
+  min-height: 10px;
+  border-radius: var(--ac-radius-rule);
+  background-color: var(--ac-track);
+}
+
+listview.session-rack metricbar.busy > box.fill,
+listview.session-rack metricbar.busy > hatch {
+  background-color: var(--ac-mark-fill-busy);
+  color: alpha(var(--ac-on-mark-fill-busy-text), var(--ac-hatch-opacity));
+}
+listview.session-rack metricbar.waiting > box.fill,
+listview.session-rack metricbar.waiting > hatch {
+  background-color: var(--ac-mark-fill-waiting);
+  color: alpha(var(--ac-on-mark-fill-waiting-text), var(--ac-hatch-opacity));
+}
+listview.session-rack metricbar.idle > box.fill,
+listview.session-rack metricbar.idle > hatch,
+listview.session-rack metricbar.unknown > box.fill,
+listview.session-rack metricbar.unknown > hatch {
+  background-color: var(--ac-mark-fill-idle);
+  color: alpha(var(--ac-on-mark-fill-idle-text), var(--ac-hatch-opacity));
+}
+listview.session-rack metricbar.mux > box.fill,
+listview.session-rack metricbar.mux > hatch {
+  background-color: var(--ac-mark-fill-mux);
+  color: alpha(var(--ac-on-mark-fill-mux-text), var(--ac-hatch-opacity));
+}
+
+/* The row's menu stays (07-gui.md) but is quiet: it shows on hover, on the
+ * selected row, with the keyboard focus inside the row, or while its popover
+ * is open. */
+listview.session-rack .ac-actions {
+  opacity: 0;
+}
+listview.session-rack > row:hover .ac-actions,
+listview.session-rack > row:selected .ac-actions,
+listview.session-rack > row:focus-within .ac-actions,
+listview.session-rack .ac-actions:checked {
+  opacity: 1;
+}
+
+/* Numbers in mono with tabular figures, so columns line up. */
+listview.session-rack .row-value,
+listview.session-rack .row-other {
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-feature-settings: "tnum";
+}
+
+listview.session-rack .row-other {
+  font-size: 0.92em;
+  color: var(--ac-text-secondary);
+}
+
+listview.session-rack > row:selected .row-other {
+  color: var(--ac-on-selection-text);
 }
 
 listview.session-rack > row:selected {
   background-color: var(--ac-selection);
   color: var(--ac-on-selection-text);
+  /* Leading bar: the selection reads without the colour alone. */
+  box-shadow: inset 2px 0 0 var(--ac-text-primary);
+}
+
+listview.session-rack.touch-rows > row {
+  min-height: 44px;
+}
+listview.session-rack.touch-rows .ac-actions {
+  opacity: 1;
+}
+
+/* Tokens per minute of the last 30 minutes: a 96x20 sparkline drawn in the
+ * node's colour, the share % and tokens/min beside it. */
+listview.session-rack .row-spark {
+  min-width: 96px;
+  min-height: 20px;
+  color: #7d4dbe;
+}
+listview.session-rack .row-share {
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-size: 13px;
+  font-feature-settings: "tnum";
+}
+listview.session-rack .row-permin {
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-size: 12px;
+  font-feature-settings: "tnum";
+  color: var(--ac-text-secondary);
+}
+listview.session-rack .row-ctx {
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-size: 13px;
+  font-feature-settings: "tnum";
+}
+listview.session-rack .row-reason {
+  font-size: 11px;
+  color: var(--ac-text-secondary);
+}
+
+/* Action button: flat, a 1 px outline, a short semibold label. */
+listview.session-rack button.row-action {
+  min-height: 34px;
+  padding: 0 var(--ac-space-2);
+  background: none;
+  box-shadow: none;
+  border: 1px solid var(--ac-text-secondary);
+  color: var(--ac-text-primary);
+}
+listview.session-rack button.row-action .row-action-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+@media (prefers-color-scheme: dark) {
+  listview.session-rack .row-spark {
+    color: #a47de3;
+  }
 }
 
 /* Foco do teclado: anel solido do token, dentro da linha para nao cortar. */
@@ -365,8 +503,7 @@ columnview.process-table > header > button:focus-visible {
  * ate o ponteiro ou o foco, e nenhuma linha muda de cor por ter acao. O
  * vermelho destrutivo so aparece no botao de confirmar do dialogo
  * (--destructive-* em tokens.css, apontado para o carmim). A pagina Reclaim
- * veste a anatomia do detalhe (C11): a face com o total num painel, a lista
- * noutro, filete de 1 px por linha. Le so tokens semanticos. */
+ * tem o seu proprio reclaim.css. Le so tokens semanticos. */
 
 /* Botao "mais" (linha, cabecalho do detalhe, tabela): alvo de 32 px, acima
  * dos 24 px do WCAG 2.5.8, sem crescer a linha de 56 px. */
@@ -397,67 +534,6 @@ columnview.process-table menubutton.ac-actions > button {
 .session-detail .detail-note-inline {
   font-size: 0.86em;
   color: var(--ac-text-secondary);
-}
-
-/* O total recuperavel e a leitura da pagina: 700 a 1.4em, como a da faixa
- * (DESIGN.md secao 2), em tinta. Nao e ambar: nada esta trabalhando. */
-.reclaim-page .reclaim-total {
-  font-size: 1.4em;
-  font-weight: 700;
-  font-feature-settings: "tnum";
-  color: var(--ac-text-primary);
-}
-
-list.reclaim-list {
-  background-color: var(--ac-surface-panel);
-  color: var(--ac-text-primary);
-}
-
-list.reclaim-list > row {
-  padding: 0;
-  border-bottom: 1px solid var(--ac-track);
-}
-
-list.reclaim-list > row:last-child {
-  border-bottom: none;
-}
-
-list.reclaim-list > row:focus-visible {
-  outline: 2px solid var(--ac-mark-focus);
-  outline-offset: -2px;
-}
-
-.reclaim-row {
-  min-height: var(--ac-session-row-min-height);
-  padding: var(--ac-space-2) var(--ac-space-4);
-}
-
-/* A lista e o segundo painel: separado da face pelo mesmo ar da grade. */
-.reclaim-page .detail-table {
-  margin-top: var(--ac-space-3);
-}
-
-.session-detail.narrow.reclaim-page .detail-table {
-  margin-top: var(--ac-space-2);
-}
-
-/* "Terminate…" em toda linha: compacto (28 px, acima do piso de 24) para
- * nao ditar a altura da linha; neutro, porque o carmim e do confirmar. */
-.reclaim-row button.reclaim-end {
-  min-height: 28px;
-  padding: 0 var(--ac-space-3);
-  font-size: 0.9em;
-}
-
-/* Memoria que sai com a sessao: o numero da linha, em negrito tabular. */
-.reclaim-row .reclaim-memory {
-  font-weight: 700;
-  font-feature-settings: "tnum";
-  color: var(--ac-text-primary);
-}
-
-.session-detail.narrow .reclaim-row {
-  padding: var(--ac-space-2) var(--ac-space-3);
 }
 
 /* Dialogo de confirmacao: a lista de alvos e uma tabela pequena, legenda
@@ -556,3 +632,84 @@ strip > box.mark {
 }
 
 /* ==== fim da secao do historico (C19) ==== */
+
+/* List heading and sub line (direction B): the toggle sets order and bar. */
+.session-controls .list-heading {
+  font-weight: 700;
+  font-size: 1.15em;
+}
+.session-controls .list-sub {
+  color: var(--ac-text-secondary);
+  font-size: 0.92em;
+}
+.session-controls .order-toggle button {
+  min-height: 28px;
+  padding: 0 12px;
+}
+
+/* The agent filter is a small flat control, not a 40 px row of its own. */
+.session-controls .agent-filter > button {
+  min-height: 24px;
+  padding: 0 var(--ac-space-2);
+}
+
+/* Scale axis over the CPU bars: the placeholders carry the row's figure
+ * fonts so the column widths match the rows' labels. */
+.list-axis .axis-tick {
+  font-size: 0.8em;
+  color: var(--ac-text-secondary);
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-feature-settings: "tnum";
+}
+.list-axis .axis-value,
+.list-axis .axis-other {
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-feature-settings: "tnum";
+}
+.list-axis .axis-other {
+  font-size: 0.92em;
+}
+
+/* Header gauge of open sessions: the ring takes its colour from the level,
+ * the same marks the cockpit uses (normal is neutral, 75 % amber, 90 % crimson). */
+.session-gauge,
+.context-gauge {
+  padding: 2px 6px;
+}
+
+.session-gauge .gauge-arc,
+.context-gauge .gauge-arc {
+  color: var(--ac-mark-machine);
+}
+
+.session-gauge.level-warning .gauge-arc,
+.context-gauge.level-warning .gauge-arc {
+  color: var(--ac-mark-agents);
+}
+
+.session-gauge.level-error .gauge-arc,
+.context-gauge.level-error .gauge-arc {
+  color: var(--ac-mark-alert);
+}
+
+.session-gauge .gauge-number {
+  font-size: 11px;
+  font-weight: 700;
+  font-feature-settings: "tnum";
+}
+
+.gauge-popover {
+  margin: var(--ac-space-3);
+}
+
+.gauge-popover .heading {
+  margin-top: var(--ac-space-2);
+}
+
+.gauge-popover .gauge-value {
+  font-feature-settings: "tnum";
+}
+
+.gauge-popover .gauge-nested {
+  margin-left: var(--ac-space-3);
+}

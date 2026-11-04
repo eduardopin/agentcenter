@@ -1,30 +1,27 @@
-//! Tabela de processos da sessao selecionada (C11): um `GtkColumnView`, o
-//! unico lugar da GUI onde uma tabela e legitima (docs/DESIGN.md: a lista e
-//! um rack, o detalhe e a contabilidade do kernel, processo a processo).
+//! Processes of the selected session (direction B): one row per process,
+//! largest memory first, with a hatched memory bar (PSS solid, swapped-out
+//! PSS hatched, like the map and the list) against the largest process of
+//! the session. Comm and pid in mono, the state as a word, CPU in `n %`, and
+//! `in RAM + swapped out` after the bar; the per-process action menu exists
+//! only live.
 //!
 //! RSS aparece por processo e nunca somado: conta as paginas compartilhadas em
 //! cada processo que as mapeia. PSS divide essas paginas e soma para a sessao;
-//! por isso a barra ambar da coluna PSS e a fatia do processo no PSS da
-//! sessao, e a RSS nao tem barra.
+//! a RSS e o resto da contabilidade ([`ProcRow`]) ficam no tooltip da linha.
 //!
-//! Como a lista: o modelo e sincronizado por pid a cada tick, objeto que
-//! existe so troca a propriedade que mudou, e a celula, ligada por expressao
-//! no `setup`, se redesenha sozinha. Nenhum widget nasce por tick.
-//!
-//! Colunas saem por largura ([`Column::tier`]), pelos breakpoints do bin do
-//! detalhe; o que sai continua no rotulo acessivel da linha e, somado, no
-//! cabecalho do detalhe (disco, stall, threads).
+//! Rows are reused across ticks; a widget is born only when the session
+//! gains processes. Columns line up through size groups, measured by Pango.
 
 use crate::actions_ui;
 use crate::format::{DASH, bytes, cpu_pct, human, sanitize};
 use agentcenter_core::actions::Target;
 use agentcenter_core::session::{IO_BOUND_D_THREADS, IO_BOUND_STALL_PCT};
 use agentcenter_core::{IoStallSource, ProcessMetrics, Session};
-use gtk::gio;
-use gtk::glib;
-use gtk::glib::subclass::prelude::*;
 use gtk::prelude::*;
-use std::collections::{HashMap, HashSet};
+use gtk::subclass::prelude::*;
+use gtk::{glib, graphene, gsk};
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 
 /// Texto e chaves de uma linha da tabela, sem GTK: testavel sem display.
 /// Chave de valor ausente e -1, abaixo de qualquer medida (como a lista).
@@ -132,517 +129,451 @@ impl ProcRow {
     }
 }
 
-mod imp {
-    use super::*;
-    use std::cell::{Cell, RefCell};
+// ---- Pure part ---------------------------------------------------------------
 
-    #[derive(Default, glib::Properties)]
-    #[properties(wrapper_type = super::ProcessObject)]
-    pub struct ProcessObject {
-        #[property(get, set)]
-        pub(super) pid: Cell<u32>,
-        #[property(get, set)]
-        pub(super) comm: RefCell<String>,
-        #[property(get, set)]
-        pub(super) pid_text: RefCell<String>,
-        #[property(get, set)]
-        pub(super) cpu: Cell<f64>,
-        #[property(get, set)]
-        pub(super) cpu_text: RefCell<String>,
-        #[property(get, set)]
-        pub(super) pss: Cell<f64>,
-        #[property(get, set)]
-        pub(super) pss_text: RefCell<String>,
-        #[property(get, set)]
-        pub(super) pss_share: Cell<f64>,
-        #[property(get, set)]
-        pub(super) rss: Cell<f64>,
-        #[property(get, set)]
-        pub(super) rss_text: RefCell<String>,
-        #[property(get, set)]
-        pub(super) swap: Cell<f64>,
-        #[property(get, set)]
-        pub(super) swap_text: RefCell<String>,
-        #[property(get, set)]
-        pub(super) read: Cell<f64>,
-        #[property(get, set)]
-        pub(super) read_text: RefCell<String>,
-        #[property(get, set)]
-        pub(super) write: Cell<f64>,
-        #[property(get, set)]
-        pub(super) write_text: RefCell<String>,
-        #[property(get, set)]
-        pub(super) stall: Cell<f64>,
-        #[property(get, set)]
-        pub(super) stall_text: RefCell<String>,
-        #[property(get, set)]
-        pub(super) stall_hot: Cell<bool>,
-        #[property(get, set)]
-        pub(super) threads: Cell<f64>,
-        #[property(get, set)]
-        pub(super) threads_text: RefCell<String>,
-        #[property(get, set)]
-        pub(super) ctxsw: Cell<f64>,
-        #[property(get, set)]
-        pub(super) ctxsw_text: RefCell<String>,
-        #[property(get, set)]
-        pub(super) a11y: RefCell<String>,
+/// `(PSS part, swap part)` of a process bar against `scale` (the largest PSS +
+/// swap of the session); `None` (bare track) without a reading or a scale.
+/// A stale scale never overflows: the swap part gives way.
+pub fn bar_fractions(pss: Option<u64>, swap: Option<u64>, scale: u64) -> Option<(f64, f64)> {
+    if scale == 0 || (pss.is_none() && swap.is_none()) {
+        return None;
     }
+    let s = scale as f64;
+    let p = (pss.unwrap_or(0) as f64 / s).min(1.0);
+    let w = (swap.unwrap_or(0) as f64 / s).min(1.0 - p);
+    Some((p, w))
+}
+
+/// The `/proc/<pid>/stat` state letter as a word.
+pub fn state_word(c: char) -> &'static str {
+    match c {
+        'R' => "running",
+        'S' => "sleeping",
+        'D' => "disk wait",
+        'Z' => "zombie",
+        'T' => "stopped",
+        't' => "traced",
+        'I' => "idle",
+        'X' | 'x' => "dead",
+        _ => "?",
+    }
+}
+
+/// Text and bar of one process row, without GTK.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ProcBar {
+    pub pid: u32,
+    pub comm: String,
+    pub pid_text: String,
+    pub state: &'static str,
+    pub cpu_text: String,
+    /// `436 MiB + 523 MiB` (in RAM + swapped out); just the PSS when nothing
+    /// is swapped; a dash without a reading.
+    pub mem_text: String,
+    pub fractions: Option<(f64, f64)>,
+    /// The whole accounting of the process ([`ProcRow`]): RSS, disk, stall,
+    /// threads, context switches.
+    pub tooltip: String,
+    pub a11y: String,
+}
+
+fn mem_of(p: &ProcessMetrics) -> u64 {
+    p.pss_bytes.unwrap_or(0) + p.swap_pss_bytes.unwrap_or(0)
+}
+
+/// The rows of a session, largest PSS + swap first (ties by pid).
+pub fn proc_bars(s: &Session, source: IoStallSource) -> Vec<ProcBar> {
+    let scale = s.processes.iter().map(mem_of).max().unwrap_or(0);
+    let mut procs: Vec<&ProcessMetrics> = s.processes.iter().collect();
+    procs.sort_by(|a, b| mem_of(b).cmp(&mem_of(a)).then(a.pid.cmp(&b.pid)));
+    procs
+        .into_iter()
+        .map(|p| {
+            let size = |v: Option<u64>| v.map_or_else(|| DASH.to_string(), |b| bytes(b as f64));
+            let (ram, out) = (size(p.pss_bytes), size(p.swap_pss_bytes));
+            let mem_text = match (p.pss_bytes, p.swap_pss_bytes) {
+                (None, None) => DASH.to_string(),
+                (_, None | Some(0)) => ram.clone(),
+                _ => format!("{ram} + {out}"),
+            };
+            let cpu_text = p
+                .cpu_pct
+                .map_or_else(|| DASH.to_string(), |c| format!("{c:.0} %"));
+            let comm = sanitize(&p.comm).into_owned();
+            let state = state_word(p.state);
+            let a11y = format!(
+                "{comm}, pid {}, {state}, CPU {cpu_text}, in RAM {ram}, swapped out {out}",
+                p.pid
+            );
+            ProcBar {
+                pid: p.pid,
+                pid_text: p.pid.to_string(),
+                state,
+                cpu_text,
+                mem_text,
+                fractions: bar_fractions(p.pss_bytes, p.swap_pss_bytes, scale),
+                tooltip: ProcRow::of(p, s.pss_bytes, source).a11y,
+                a11y,
+                comm,
+            }
+        })
+        .collect()
+}
+
+// ---- Memory bar --------------------------------------------------------------
+
+/// Width of the bar where it fits (the mock's 220 px), and the least it
+/// shrinks to in a narrow detail.
+pub const BAR_WIDTH: i32 = 220;
+const BAR_MIN_WIDTH: i32 = 48;
+
+/// Distance between hatch lines and their width, px (as the list's bars).
+const HATCH_STEP_PX: f32 = 4.0;
+const HATCH_LINE_PX: f32 = 1.5;
+
+mod hatch {
+    use super::*;
+
+    #[derive(Default)]
+    pub struct Hatch;
 
     #[glib::object_subclass]
-    impl ObjectSubclass for ProcessObject {
-        const NAME: &'static str = "AgentCenterProcessObject";
-        type Type = super::ProcessObject;
+    impl ObjectSubclass for Hatch {
+        const NAME: &'static str = "AgentCenterProcHatch";
+        type Type = super::Hatch;
+        type ParentType = gtk::Widget;
+
+        fn class_init(klass: &mut Self::Class) {
+            klass.set_css_name("hatch");
+            klass.set_accessible_role(gtk::AccessibleRole::Presentation);
+        }
     }
 
-    #[glib::derived_properties]
-    impl ObjectImpl for ProcessObject {}
+    impl ObjectImpl for Hatch {
+        fn constructed(&self) {
+            self.parent_constructed();
+            self.obj().set_can_target(false);
+            self.obj().set_overflow(gtk::Overflow::Hidden);
+        }
+    }
+
+    impl WidgetImpl for Hatch {
+        /// The CSS background (the state fill) is drawn; the diagonal lines
+        /// go on top in the node's own colour (white at the hatch opacity).
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            let obj = self.obj();
+            let (w, h) = (obj.width() as f32, obj.height() as f32);
+            if w <= 0.0 || h <= 0.0 {
+                return;
+            }
+            let p = gsk::PathBuilder::new();
+            let mut x = -h;
+            while x < w {
+                p.move_to(x, h);
+                p.line_to(x + h, 0.0);
+                x += HATCH_STEP_PX;
+            }
+            snapshot.push_clip(&graphene::Rect::new(0.0, 0.0, w, h));
+            snapshot.append_stroke(&p.to_path(), &gsk::Stroke::new(HATCH_LINE_PX), &obj.color());
+            snapshot.pop();
+        }
+    }
 }
 
 glib::wrapper! {
-    pub struct ProcessObject(ObjectSubclass<imp::ProcessObject>);
+    /// Swapped-out part of a process bar.
+    pub struct Hatch(ObjectSubclass<hatch::Hatch>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
-impl ProcessObject {
-    pub fn new(row: &ProcRow) -> Self {
-        let o: Self = glib::Object::new();
-        o.apply(row);
-        o
+mod proc_mem_bar {
+    use super::*;
+
+    #[derive(Default)]
+    pub struct ProcMemBar {
+        pub fractions: Cell<Option<(f64, f64)>>,
+        pub fill: RefCell<Option<gtk::Box>>,
+        pub hatch: RefCell<Option<Hatch>>,
     }
 
-    /// Troca so o que mudou; `true` se algo mudou.
-    pub fn apply(&self, r: &ProcRow) -> bool {
-        let _freeze = self.freeze_notify();
-        let mut changed = false;
-        macro_rules! sync {
-            ($get:ident, $set:ident, $v:expr) => {
-                if self.$get() != $v {
-                    self.$set($v);
-                    changed = true;
-                }
-            };
-        }
-        sync!(pid, set_pid, r.pid);
-        sync!(comm, set_comm, r.comm.as_str());
-        sync!(pid_text, set_pid_text, r.pid_text.as_str());
-        sync!(cpu, set_cpu, r.cpu);
-        sync!(cpu_text, set_cpu_text, r.cpu_text.as_str());
-        sync!(pss, set_pss, r.pss);
-        sync!(pss_text, set_pss_text, r.pss_text.as_str());
-        sync!(pss_share, set_pss_share, r.pss_share);
-        sync!(rss, set_rss, r.rss);
-        sync!(rss_text, set_rss_text, r.rss_text.as_str());
-        sync!(swap, set_swap, r.swap);
-        sync!(swap_text, set_swap_text, r.swap_text.as_str());
-        sync!(read, set_read, r.read);
-        sync!(read_text, set_read_text, r.read_text.as_str());
-        sync!(write, set_write, r.write);
-        sync!(write_text, set_write_text, r.write_text.as_str());
-        sync!(stall, set_stall, r.stall);
-        sync!(stall_text, set_stall_text, r.stall_text.as_str());
-        sync!(stall_hot, set_stall_hot, r.stall_hot);
-        sync!(threads, set_threads, r.threads);
-        sync!(threads_text, set_threads_text, r.threads_text.as_str());
-        sync!(ctxsw, set_ctxsw, r.ctxsw);
-        sync!(ctxsw_text, set_ctxsw_text, r.ctxsw_text.as_str());
-        sync!(a11y, set_a11y, r.a11y.as_str());
-        changed
-    }
-}
+    #[glib::object_subclass]
+    impl ObjectSubclass for ProcMemBar {
+        const NAME: &'static str = "AgentCenterProcMemBar";
+        type Type = super::ProcMemBar;
+        type ParentType = gtk::Widget;
 
-/// O modelo, sem widget: testavel sem display.
-pub struct ProcessModel {
-    store: gio::ListStore,
-    by_pid: HashMap<u32, ProcessObject>,
-}
-
-impl Default for ProcessModel {
-    fn default() -> Self {
-        Self {
-            store: gio::ListStore::new::<ProcessObject>(),
-            by_pid: HashMap::new(),
+        fn class_init(klass: &mut Self::Class) {
+            klass.set_css_name("procbar");
+            klass.set_accessible_role(gtk::AccessibleRole::Presentation);
         }
     }
-}
 
-impl ProcessModel {
-    pub fn store(&self) -> &gio::ListStore {
-        &self.store
-    }
+    impl ObjectImpl for ProcMemBar {
+        fn constructed(&self) {
+            self.parent_constructed();
+            let obj = self.obj();
+            obj.set_overflow(gtk::Overflow::Hidden);
+            obj.set_valign(gtk::Align::Center);
+            obj.set_can_target(false);
+            let fill = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            fill.add_css_class("fill");
+            fill.set_parent(&*obj);
+            let hatch: Hatch = glib::Object::new();
+            hatch.set_parent(&*obj);
+            self.fill.replace(Some(fill));
+            self.hatch.replace(Some(hatch));
+        }
 
-    pub fn len(&self) -> usize {
-        self.by_pid.len()
-    }
-
-    /// Sincroniza com os processos da sessao. `true` se algo mudou (a ordem
-    /// da tabela pode ter mudado).
-    pub fn apply(&mut self, s: &Session, source: IoStallSource) -> bool {
-        let live: HashSet<u32> = s.processes.iter().map(|p| p.pid).collect();
-        let mut changed = false;
-        if self.by_pid.keys().any(|p| !live.contains(p)) {
-            for i in (0..self.store.n_items()).rev() {
-                let Some(o) = self.store.item(i).and_downcast::<ProcessObject>() else {
-                    continue;
-                };
-                if !live.contains(&o.pid()) {
-                    self.store.remove(i);
-                    self.by_pid.remove(&o.pid());
-                    changed = true;
-                }
+        fn dispose(&self) {
+            if let Some(f) = self.fill.take() {
+                f.unparent();
+            }
+            if let Some(h) = self.hatch.take() {
+                h.unparent();
             }
         }
-        let mut new = Vec::new();
-        for p in &s.processes {
-            let row = ProcRow::of(p, s.pss_bytes, source);
-            match self.by_pid.get(&p.pid) {
-                Some(o) => changed |= o.apply(&row),
-                None => {
-                    let o = ProcessObject::new(&row);
-                    self.by_pid.insert(p.pid, o.clone());
-                    new.push(o);
-                }
-            }
-        }
-        if !new.is_empty() {
-            self.store.splice(self.store.n_items(), 0, &new);
-            changed = true;
-        }
-        changed
     }
 
-    pub fn clear(&mut self) {
-        if !self.by_pid.is_empty() {
-            self.by_pid.clear();
-            self.store.remove_all();
+    impl WidgetImpl for ProcMemBar {
+        fn measure(&self, o: gtk::Orientation, _: i32) -> (i32, i32, i32, i32) {
+            // Height from the CSS `min-height`.
+            match o {
+                gtk::Orientation::Horizontal => (BAR_MIN_WIDTH, BAR_WIDTH, -1, -1),
+                _ => (0, 0, -1, -1),
+            }
+        }
+
+        fn size_allocate(&self, width: i32, height: i32, _baseline: i32) {
+            let (p, s) = self.fractions.get().unwrap_or((0.0, 0.0));
+            let w = f64::from(width);
+            let x1 = (p * w).round() as i32;
+            let x2 = ((p + s) * w).round() as i32;
+            if let Some(f) = self.fill.borrow().as_ref() {
+                f.size_allocate(&gtk::Allocation::new(0, 0, x1, height), -1);
+            }
+            if let Some(h) = self.hatch.borrow().as_ref() {
+                h.size_allocate(&gtk::Allocation::new(x1, 0, x2 - x1, height), -1);
+            }
         }
     }
 }
 
-/// Uma coluna: id (classe CSS e nome no teste), titulo, propriedade de texto,
-/// chave numerica da ordem e a faixa de largura em que aparece.
-pub struct Column {
-    pub id: &'static str,
-    pub title: &'static str,
-    pub text: &'static str,
-    pub key: &'static str,
-    /// 0: sempre; 1: some abaixo de [`MEDIUM_MAX_SP`]; 2: some abaixo de
-    /// [`WIDE_MAX_SP`]; 3: some abaixo de [`FULL_MAX_SP`].
-    pub tier: u8,
+glib::wrapper! {
+    /// Memory bar of a process: track (CSS background), PSS part
+    /// (`procbar > box.fill`) and hatched swap part (`procbar > hatch`), in
+    /// the session's state fill (`procbar.busy` ...).
+    pub struct ProcMemBar(ObjectSubclass<proc_mem_bar::ProcMemBar>)
+        @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 
-/// Largura do detalhe (sp) abaixo da qual a coluna de faixa 3 sai: trocas de
-/// contexto. Com a coluna de acoes do C12 a tabela inteira pede ~886 px; sem
-/// esta faixa, o detalhe de 840 px rolava de lado.
-pub const FULL_MAX_SP: f64 = 900.0;
-/// Abaixo desta saem tambem as de faixa 2: disco, stall e threads.
-pub const WIDE_MAX_SP: f64 = 780.0;
-/// Abaixo desta sai tambem o Swap PSS: ficam processo, CPU, PSS e RSS.
-pub const MEDIUM_MAX_SP: f64 = 480.0;
-// `breakpoints` depende da ordem: do mais largo ao mais estreito.
-const _: () = assert!(FULL_MAX_SP > WIDE_MAX_SP && WIDE_MAX_SP > MEDIUM_MAX_SP);
-
-pub const COLUMNS: [Column; 10] = [
-    Column {
-        id: "process",
-        title: "Process",
-        text: "comm",
-        key: "comm",
-        tier: 0,
-    },
-    Column {
-        id: "cpu",
-        title: "CPU",
-        text: "cpu-text",
-        key: "cpu",
-        tier: 0,
-    },
-    Column {
-        id: "pss",
-        title: "PSS",
-        text: "pss-text",
-        key: "pss",
-        tier: 0,
-    },
-    Column {
-        id: "rss",
-        title: "RSS",
-        text: "rss-text",
-        key: "rss",
-        tier: 0,
-    },
-    Column {
-        id: "swap",
-        title: "Swap PSS",
-        text: "swap-text",
-        key: "swap",
-        tier: 1,
-    },
-    Column {
-        id: "read",
-        title: "Read",
-        text: "read-text",
-        key: "read",
-        tier: 2,
-    },
-    Column {
-        id: "write",
-        title: "Write",
-        text: "write-text",
-        key: "write",
-        tier: 2,
-    },
-    Column {
-        id: "stall",
-        title: "Stall",
-        text: "stall-text",
-        key: "stall",
-        tier: 2,
-    },
-    Column {
-        id: "threads",
-        title: "Threads",
-        text: "threads-text",
-        key: "threads",
-        tier: 2,
-    },
-    Column {
-        id: "ctxsw",
-        title: "Ctx switches",
-        text: "ctxsw-text",
-        key: "ctxsw",
-        tier: 3,
-    },
-];
-
-fn bind(item: &gtk::ListItem, prop: &str, target: &impl IsA<glib::Object>, target_prop: &str) {
-    item.property_expression("item")
-        .chain_property::<ProcessObject>(prop)
-        .bind(target, target_prop, gtk::Widget::NONE);
-}
-
-/// Barra da fatia de PSS: o mesmo `levelbar.meter` das linhas (sessions.css),
-/// sem as marcas de nivel do GTK.
-fn share_meter() -> gtk::LevelBar {
-    let bar = gtk::LevelBar::new();
-    bar.set_min_value(0.0);
-    bar.set_max_value(1.0);
-    for name in [
-        gtk::LEVEL_BAR_OFFSET_LOW,
-        gtk::LEVEL_BAR_OFFSET_HIGH,
-        gtk::LEVEL_BAR_OFFSET_FULL,
-    ] {
-        bar.remove_offset_value(Some(name));
+impl ProcMemBar {
+    fn new() -> Self {
+        glib::Object::new()
     }
-    // Keep the numerical PSS value and all five narrow columns visible.
-    // A 40px decorative share track made the table + margins measure 380px.
-    bar.set_size_request(20, -1);
-    bar.set_valign(gtk::Align::Center);
-    bar.add_css_class("meter");
-    bar.set_accessible_role(gtk::AccessibleRole::Presentation);
-    bar
-}
 
-fn cell_factory(c: &'static Column) -> gtk::SignalListItemFactory {
-    let f = gtk::SignalListItemFactory::new();
-    f.connect_setup(move |_, item| {
-        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
-            return;
-        };
-        let value = gtk::Label::new(None);
-        value.add_css_class("proc-value");
-        match c.id {
-            "process" => {
-                value.add_css_class("monospace");
-                value.set_xalign(0.0);
-                value.set_ellipsize(gtk::pango::EllipsizeMode::End);
-                bind(item, "comm", &value, "label");
-                bind(item, "comm", &value, "tooltip-text");
-                let pid = gtk::Label::new(None);
-                pid.set_xalign(0.0);
-                pid.add_css_class("proc-pid");
-                pid.add_css_class("monospace");
-                bind(item, "pid-text", &pid, "label");
-                let b = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                b.append(&value);
-                b.append(&pid);
-                item.set_child(Some(&b));
-            }
-            "pss" => {
-                value.set_xalign(1.0);
-                value.set_hexpand(true);
-                bind(item, c.text, &value, "label");
-                let bar = share_meter();
-                bind(item, "pss-share", &bar, "value");
-                let b = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                b.append(&bar);
-                b.append(&value);
-                b.set_tooltip_text(Some(
-                    "PSS, and the bar: this process's share of the session's PSS",
-                ));
-                item.set_child(Some(&b));
-            }
-            id => {
-                value.set_xalign(1.0);
-                bind(item, c.text, &value, "label");
-                if id == "stall" {
-                    item.property_expression("item")
-                        .chain_property::<ProcessObject>("stall-hot")
-                        .chain_closure_with_callback(|args| {
-                            let hot = args[1].get::<bool>().unwrap_or_default();
-                            let mut v = vec!["proc-value".to_string()];
-                            if hot {
-                                v.push("hot".into());
-                            }
-                            v
-                        })
-                        .bind(&value, "css-classes", gtk::Widget::NONE);
-                }
-                item.set_child(Some(&value));
-            }
+    /// `(PSS part, swap part)` as drawn; `None` is the bare track.
+    pub fn fractions(&self) -> Option<(f64, f64)> {
+        self.imp().fractions.get()
+    }
+
+    fn set(&self, fractions: Option<(f64, f64)>, tone: &str) {
+        if self.imp().fractions.replace(fractions) != fractions {
+            self.queue_allocate();
         }
-    });
-    f
-}
-
-fn sorter(c: &'static Column) -> gtk::CustomSorter {
-    gtk::CustomSorter::new(move |a, b| {
-        let (Some(a), Some(b)) = (
-            a.downcast_ref::<ProcessObject>(),
-            b.downcast_ref::<ProcessObject>(),
-        ) else {
-            return gtk::Ordering::Equal;
-        };
-        let o = if c.key == "comm" {
-            a.comm().to_lowercase().cmp(&b.comm().to_lowercase())
-        } else {
-            let k = |o: &ProcessObject| o.property::<f64>(c.key);
-            k(a).total_cmp(&k(b))
-        };
-        o.then_with(|| a.pid().cmp(&b.pid())).into()
-    })
-}
-
-pub struct ProcessTable {
-    pub widget: gtk::ScrolledWindow,
-    pub columns: Vec<(u8, gtk::ColumnViewColumn)>,
-    model: ProcessModel,
-    sort: gtk::SortListModel,
-}
-
-impl ProcessTable {
-    pub fn new() -> Self {
-        let model = ProcessModel::default();
-        let view = gtk::ColumnView::new(None::<gtk::NoSelection>);
-        view.add_css_class("process-table");
-        view.set_reorderable(false);
-        view.set_show_column_separators(false);
-        view.set_tab_behavior(gtk::ListTabBehavior::Item);
-        view.update_property(&[gtk::accessible::Property::Label("Processes of the session")]);
-        let mut columns = Vec::new();
-        for c in &COLUMNS {
-            let col = gtk::ColumnViewColumn::new(Some(c.title), Some(cell_factory(c)));
-            col.set_id(Some(c.id));
-            col.set_sorter(Some(&sorter(c)));
-            col.set_resizable(false);
-            if c.id == "process" {
-                col.set_expand(true);
-            }
-            view.append_column(&col);
-            columns.push((c.tier, col));
+        if !self.has_css_class(tone) {
+            self.set_css_classes(&[tone]);
         }
-        // Acoes por processo (C12): fora de COLUMNS, sem titulo nem ordem.
-        let acts = gtk::SignalListItemFactory::new();
-        acts.connect_setup(|_, item| {
-            let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
-                return;
-            };
-            let weak = item.downgrade();
-            let b = actions_ui::menu_button("Process actions", move || {
-                let o = weak.upgrade()?.item().and_downcast::<ProcessObject>()?;
-                Some((
-                    Target::Process(o.pid()),
-                    format!("{} (pid {})", o.comm(), o.pid()),
-                ))
-            });
-            item.set_child(Some(&b));
-        });
-        let col = gtk::ColumnViewColumn::new(None, Some(acts));
-        col.set_id(Some("actions"));
-        col.set_resizable(false);
-        view.append_column(&col);
+    }
+}
 
-        let rows = gtk::SignalListItemFactory::new();
-        rows.connect_setup(|_, row| {
-            if let Some(row) = row.downcast_ref::<gtk::ColumnViewRow>() {
-                row.set_activatable(false);
-                row.set_selectable(false);
-                row.property_expression("item")
-                    .chain_property::<ProcessObject>("a11y")
-                    .bind(row, "accessible-label", gtk::Widget::NONE);
-            }
-        });
-        view.set_row_factory(Some(&rows));
+// ---- Rows --------------------------------------------------------------------
 
-        let sort = gtk::SortListModel::new(Some(model.store().clone()), view.sorter());
-        view.set_model(Some(&gtk::NoSelection::new(Some(sort.clone()))));
-        // Padrao: maior PSS primeiro (quem segura a memoria da sessao).
-        if let Some((_, pss)) = columns
-            .iter()
-            .find(|(_, c)| c.id().as_deref() == Some("pss"))
-        {
-            view.sort_by_column(Some(pss), gtk::SortType::Descending);
-        }
+/// One row's widgets.
+pub struct BarRow {
+    pub pid: u32,
+    pub bar: ProcMemBar,
+    /// Process actions (C12); only live.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the tests read the menu"))]
+    pub menu: Option<gtk::MenuButton>,
+    root: gtk::Box,
+    comm: gtk::Label,
+    pid_label: gtk::Label,
+    state: gtk::Label,
+    cpu: gtk::Label,
+    mem: gtk::Label,
+    target: Rc<RefCell<Option<(u32, String)>>>,
+    /// The accessible label last written to `root`.
+    spoken: RefCell<String>,
+}
 
-        let widget = gtk::ScrolledWindow::builder()
-            .child(&view)
-            .hscrollbar_policy(gtk::PolicyType::Never)
-            .vexpand(true)
-            .build();
+fn cell(classes: &[&str], xalign: f32, group: &gtk::SizeGroup) -> gtk::Label {
+    let l = gtk::Label::new(None);
+    l.set_xalign(xalign);
+    for c in classes {
+        l.add_css_class(c);
+    }
+    group.add_widget(&l);
+    l
+}
+
+fn set_text(l: &gtk::Label, t: &str) {
+    if l.label() != t {
+        l.set_label(t);
+    }
+}
+
+/// Stores `new` in `cache` and says whether it differed: an accessible label
+/// is rewritten (and announced again) only when its text changed.
+fn replace_if_changed(cache: &RefCell<String>, new: &str) -> bool {
+    if *cache.borrow() == new {
+        return false;
+    }
+    cache.replace(new.to_string());
+    true
+}
+
+/// The process rows of the detail.
+pub struct ProcessBars {
+    pub widget: gtk::Box,
+    live: bool,
+    /// comm, pid, state, CPU, memory text: one size group per column.
+    groups: [gtk::SizeGroup; 5],
+    rows: RefCell<Vec<BarRow>>,
+    compact: Cell<bool>,
+}
+
+impl ProcessBars {
+    pub fn new(live: bool) -> Self {
+        let widget = gtk::Box::new(gtk::Orientation::Vertical, 0);
+        widget.add_css_class("process-bars");
+        widget.update_property(&[gtk::accessible::Property::Label("Processes of the session")]);
         Self {
             widget,
-            columns,
-            model,
-            sort,
+            live,
+            groups: std::array::from_fn(|_| gtk::SizeGroup::new(gtk::SizeGroupMode::Horizontal)),
+            rows: RefCell::default(),
+            compact: Cell::new(false),
         }
     }
 
-    /// Breakpoints do bin do detalhe: as colunas que saem em cada largura.
-    pub fn breakpoints(&self) -> Vec<adw::Breakpoint> {
-        // Do mais largo ao mais estreito: no bin vence o ultimo que casa, e
-        // cada um esconde tudo da sua faixa para cima.
-        [(FULL_MAX_SP, 3u8), (WIDE_MAX_SP, 2u8), (MEDIUM_MAX_SP, 1u8)]
-            .iter()
-            .map(|&(max, from)| {
-                let bp = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
-                    adw::BreakpointConditionLengthType::MaxWidth,
-                    max,
-                    adw::LengthUnit::Sp,
-                ));
-                for (tier, col) in &self.columns {
-                    if *tier >= from {
-                        bp.add_setter(col, "visible", Some(&false.to_value()));
-                    }
+    fn row(&self) -> BarRow {
+        let [g_comm, g_pid, g_state, g_cpu, g_mem] = &self.groups;
+        let comm = cell(&["proc-comm", "numeric"], 0.0, g_comm);
+        comm.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let pid_label = cell(&["proc-pid", "numeric"], 0.0, g_pid);
+        let state = cell(&["proc-state"], 0.0, g_state);
+        let cpu = cell(&["proc-cpu", "numeric"], 1.0, g_cpu);
+        let bar = ProcMemBar::new();
+        let mem = cell(&["proc-mem", "numeric"], 0.0, g_mem);
+        let root = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        root.add_css_class("proc-row");
+        root.set_focusable(true);
+        for w in [&comm, &pid_label, &state, &cpu] {
+            root.append(w);
+        }
+        root.append(&bar);
+        root.append(&mem);
+        let target = Rc::new(RefCell::new(None));
+        let menu = self.live.then(|| {
+            let t = Rc::clone(&target);
+            let b = actions_ui::menu_button("Process actions", move || {
+                let (pid, name) = t.borrow().clone()?;
+                Some((Target::Process(pid), name))
+            });
+            root.append(&b);
+            b
+        });
+        let compact = self.compact.get();
+        pid_label.set_visible(!compact);
+        state.set_visible(!compact);
+        BarRow {
+            pid: 0,
+            bar,
+            menu,
+            root,
+            comm,
+            pid_label,
+            state,
+            cpu,
+            mem,
+            target,
+            spoken: RefCell::default(),
+        }
+    }
+
+    /// Shows the session's processes in `tone` (the session's state fill
+    /// class); reuses the rows it has.
+    pub fn apply(&self, s: &Session, source: IoStallSource, tone: &str) {
+        let bars = proc_bars(s, source);
+        let mut rows = self.rows.borrow_mut();
+        // A row belongs to its pid: rows of gone processes leave, new pids
+        // get a row, and the survivors are reordered in place, so a popover
+        // open on a row keeps pointing at its own process.
+        let mut old = std::mem::take(&mut *rows);
+        for b in &bars {
+            let r = match old.iter().position(|r| r.pid == b.pid) {
+                Some(i) => old.remove(i),
+                None => {
+                    let mut r = self.row();
+                    r.pid = b.pid;
+                    self.widget.append(&r.root);
+                    r
                 }
-                bp
-            })
-            .collect()
+            };
+            rows.push(r);
+        }
+        for r in old {
+            self.widget.remove(&r.root);
+        }
+        let mut prev: Option<gtk::Widget> = None;
+        for (r, b) in rows.iter().zip(&bars) {
+            if r.root.prev_sibling() != prev {
+                self.widget.reorder_child_after(&r.root, prev.as_ref());
+            }
+            prev = Some(r.root.clone().upcast());
+            set_text(&r.comm, &b.comm);
+            set_text(&r.pid_label, &b.pid_text);
+            set_text(&r.state, b.state);
+            set_text(&r.cpu, &b.cpu_text);
+            set_text(&r.mem, &b.mem_text);
+            r.bar.set(b.fractions, tone);
+            if r.root.tooltip_text().as_deref() != Some(b.tooltip.as_str()) {
+                r.root.set_tooltip_text(Some(&b.tooltip));
+            }
+            if replace_if_changed(&r.spoken, &b.a11y) {
+                r.root
+                    .update_property(&[gtk::accessible::Property::Label(&b.a11y)]);
+            }
+            r.target
+                .replace(Some((b.pid, format!("{} (pid {})", b.comm, b.pid))));
+        }
+    }
+
+    /// Narrow detail: pid and state go (they stay in the tooltip and the
+    /// spoken label).
+    pub fn set_compact(&self, on: bool) {
+        self.compact.set(on);
+        for r in self.rows.borrow().iter() {
+            r.pid_label.set_visible(!on);
+            r.state.set_visible(!on);
+        }
+    }
+
+    #[cfg(test)]
+    pub fn rows(&self) -> std::cell::Ref<'_, Vec<BarRow>> {
+        self.rows.borrow()
     }
 
     pub fn len(&self) -> usize {
-        self.model.len()
+        self.rows.borrow().len()
     }
 
-    /// Aplica os processos da sessao; reordena so se algo mudou.
-    pub fn apply(&mut self, s: &Session, source: IoStallSource) {
-        if self.model.apply(s, source)
-            && let Some(sorter) = self.sort.sorter()
-        {
-            sorter.changed(gtk::SorterChange::Different);
+    pub fn clear(&self) {
+        for r in self.rows.borrow_mut().drain(..) {
+            self.widget.remove(&r.root);
         }
-    }
-
-    pub fn clear(&mut self) {
-        self.model.clear();
     }
 }
 
@@ -727,54 +658,180 @@ mod tests {
     }
 
     #[test]
-    fn model_keeps_objects_by_pid_and_reports_change() {
-        let mut s = agentcenter_core::Session::aggregate(
+    fn bar_fractions_split_pss_and_swap_against_the_largest_process() {
+        let m = 1u64 << 20;
+        let (p, w) = bar_fractions(Some(436 * m), Some(523 * m), 959 * m).unwrap();
+        assert!((p - 436.0 / 959.0).abs() < 1e-9 && (w - 523.0 / 959.0).abs() < 1e-9);
+        assert_eq!(bar_fractions(Some(m), None, 4 * m), Some((0.25, 0.0)));
+        assert_eq!(bar_fractions(None, Some(m), 4 * m), Some((0.0, 0.25)));
+        assert_eq!(
+            bar_fractions(None, None, 4 * m),
+            None,
+            "no reading, bare track"
+        );
+        assert_eq!(bar_fractions(Some(m), Some(m), 0), None, "no scale");
+        // A stale scale never overflows the bar: the swap part gives way.
+        assert_eq!(
+            bar_fractions(Some(3 * m), Some(3 * m), 4 * m),
+            Some((0.75, 0.25))
+        );
+    }
+
+    fn with_memory(
+        pid: u32,
+        comm: &str,
+        state: char,
+        pss: Option<u64>,
+        swap: Option<u64>,
+    ) -> ProcessMetrics {
+        let mut p = proc_(pid);
+        p.comm = comm.into();
+        p.state = state;
+        (p.pss_bytes, p.swap_pss_bytes) = (pss, swap);
+        p
+    }
+
+    /// The rows of the mock: largest PSS + swap first, `436 MiB + 523 MiB`,
+    /// the state as a word, CPU in `n %`; a process with no reading keeps a
+    /// dash and a bare track.
+    #[test]
+    fn proc_bars_sort_by_memory_and_read_like_the_mock() {
+        let m = 1u64 << 20;
+        let s = agentcenter_core::Session::aggregate(
             "claude".into(),
             agentcenter_core::adapters::AgentRole::Agent,
-            10,
+            7,
             16,
-            vec![proc_(10), proc_(11)],
+            vec![
+                with_memory(7, "node", 'S', Some(50 * m), Some(0)),
+                with_memory(8, "claude", 'S', Some(436 * m), Some(523 * m)),
+                with_memory(9, "cargo", 'R', Some(38 * m), Some(15 * m)),
+                with_memory(10, "git", 'D', None, None),
+            ],
         );
-        let mut m = ProcessModel::default();
-        assert!(m.apply(&s, IoStallSource::Delayacct));
-        let first = m.store().item(0).unwrap();
+        let bars = proc_bars(&s, IoStallSource::Delayacct);
+        let pids: Vec<u32> = bars.iter().map(|b| b.pid).collect();
+        assert_eq!(pids, [8, 9, 7, 10]);
+        let top = &bars[0];
+        assert_eq!(
+            (
+                top.comm.as_str(),
+                top.pid_text.as_str(),
+                top.state,
+                top.cpu_text.as_str()
+            ),
+            ("claude", "8", "sleeping", "12 %")
+        );
+        assert_eq!(top.mem_text, "436 MiB + 523 MiB");
+        let (p, w) = top.fractions.unwrap();
+        assert!((p + w - 1.0).abs() < 1e-9, "the largest fills the bar");
+        assert_eq!(bars[1].state, "running");
+        assert_eq!(bars[2].mem_text, "50 MiB", "nothing swapped, no `+ 0`");
+        assert_eq!(bars[2].fractions.unwrap().1, 0.0);
+        assert_eq!((bars[3].mem_text.as_str(), bars[3].fractions), (DASH, None));
+        assert_eq!(bars[3].state, "disk wait");
         assert!(
-            !m.apply(&s, IoStallSource::Delayacct),
-            "same tick, no change"
+            top.a11y.starts_with(
+                "claude, pid 8, sleeping, CPU 12 %, in RAM 436 MiB, swapped out 523 MiB"
+            ),
+            "{}",
+            top.a11y
         );
-        s.processes[0].cpu_pct = Some(50.0);
-        assert!(m.apply(&s, IoStallSource::Delayacct));
-        assert_eq!(m.store().item(0).unwrap(), first, "object reused");
-        s.processes.remove(1);
-        assert!(m.apply(&s, IoStallSource::Delayacct));
-        assert_eq!(m.len(), 1);
-        m.clear();
-        assert_eq!(m.store().n_items(), 0);
+        assert!(top.tooltip.contains("RSS 200 MiB"), "{}", top.tooltip);
+    }
+
+    fn session_of(procs: Vec<ProcessMetrics>) -> Session {
+        Session::aggregate(
+            "claude".into(),
+            agentcenter_core::adapters::AgentRole::Agent,
+            7,
+            16,
+            procs,
+        )
+    }
+
+    /// A row belongs to a process, not to a position: after a re-sort the
+    /// widget (and the open popover of its menu button) follows its pid.
+    #[test]
+    fn a_row_keeps_its_process_when_the_order_changes() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let m = 1u64 << 20;
+            let bars = ProcessBars::new(true);
+            let first = session_of(vec![
+                with_memory(7, "node", 'S', Some(50 * m), Some(0)),
+                with_memory(8, "claude", 'S', Some(436 * m), Some(0)),
+                with_memory(9, "cargo", 'R', Some(38 * m), Some(0)),
+            ]);
+            bars.apply(&first, IoStallSource::Delayacct, "busy");
+            let held = |pid: u32| {
+                let rows = bars.rows();
+                let r = rows.iter().find(|r| r.pid == pid).expect("row");
+                (
+                    r.root.clone(),
+                    r.menu.clone().expect("live menu"),
+                    r.target.clone(),
+                )
+            };
+            let (root9, menu9, target9) = held(9);
+            // pid 9 now outgrows everything: it moves to the top.
+            let second = session_of(vec![
+                with_memory(7, "node", 'S', Some(50 * m), Some(0)),
+                with_memory(8, "claude", 'S', Some(436 * m), Some(0)),
+                with_memory(9, "cargo", 'R', Some(900 * m), Some(0)),
+            ]);
+            bars.apply(&second, IoStallSource::Delayacct, "busy");
+            let rows = bars.rows();
+            assert_eq!(rows.iter().map(|r| r.pid).collect::<Vec<_>>(), [9, 8, 7]);
+            assert_eq!(rows[0].root, root9, "the widget moved with its process");
+            assert_eq!(rows[0].menu.as_ref(), Some(&menu9));
+            assert_eq!(
+                target9.borrow().as_ref().map(|(pid, _)| *pid),
+                Some(9),
+                "the menu still acts on pid 9"
+            );
+            assert_eq!(bars.widget.first_child().as_ref(), Some(root9.upcast_ref()));
+            let mut order = Vec::new();
+            let mut w = bars.widget.first_child();
+            while let Some(c) = w {
+                order.push(c.clone());
+                w = c.next_sibling();
+            }
+            let want: Vec<gtk::Widget> = rows.iter().map(|r| r.root.clone().upcast()).collect();
+            assert_eq!(order, want, "the container order is the row order");
+        });
     }
 
     #[test]
-    fn every_column_reads_real_properties() {
-        let o = ProcessObject::new(&ProcRow::default());
-        for c in &COLUMNS {
-            assert!(o.find_property(c.text).is_some(), "{}", c.text);
-            assert!(o.find_property(c.key).is_some(), "{}", c.key);
-        }
+    fn a_label_is_written_only_when_its_text_changed() {
+        let cache = RefCell::new(String::new());
+        assert!(replace_if_changed(&cache, "a, pid 1"));
         assert!(
-            COLUMNS.iter().filter(|c| c.tier == 0).count() == 4,
-            "process, CPU, PSS and RSS stay at every width"
+            !replace_if_changed(&cache, "a, pid 1"),
+            "same text, no write"
         );
+        assert!(replace_if_changed(&cache, "a, pid 2"));
     }
 
     #[test]
-    fn context_switches_leave_first_below_the_full_width() {
-        // A coluna de trocas de contexto e a unica da faixa 3: sai primeiro,
-        // abaixo de FULL_MAX_SP, para o detalhe de 840 px nao rolar de lado.
-        let top: Vec<_> = COLUMNS
-            .iter()
-            .filter(|c| c.tier == 3)
-            .map(|c| c.id)
+    fn state_letters_become_words() {
+        let words: Vec<&str> = ['R', 'S', 'D', 'Z', 'T', 't', 'I', 'X', '?']
+            .into_iter()
+            .map(state_word)
             .collect();
-        assert_eq!(top, ["ctxsw"]);
-        assert!(COLUMNS.iter().all(|c| c.tier <= 3));
+        assert_eq!(
+            words,
+            [
+                "running",
+                "sleeping",
+                "disk wait",
+                "zombie",
+                "stopped",
+                "traced",
+                "idle",
+                "dead",
+                "?"
+            ]
+        );
     }
 }

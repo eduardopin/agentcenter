@@ -1,0 +1,125 @@
+/* Map page (direction B): heading, verdict, chips, Reclaim button, legend
+ * and the compact memory bar. Tokens only; glyphs draw in their `color`. */
+
+.map-page {
+  padding: 16px;
+}
+.map-page .head .title {
+  font-weight: 700;
+  font-size: 1.15em;
+}
+.map-page .head .lede {
+  font-size: 1em;
+  font-weight: 400;
+  color: var(--ac-text-secondary);
+}
+.map-page .head .lede.compact {
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-feature-settings: "tnum";
+  font-size: 0.92em;
+}
+
+/* Verdict and compact alert: the triangle and the text in alert. */
+.map-page .verdict {
+  color: var(--ac-text-alert);
+  font-size: 0.92em;
+}
+
+.map-page .chips .caption {
+  color: var(--ac-text-secondary);
+  font-size: 0.92em;
+}
+.map-page button.chip {
+  background: none;
+  border: 1px solid var(--ac-mark-alert);
+  border-radius: 999px;
+  padding: 1px 10px;
+  min-height: 20px;
+  font-size: 0.88em;
+  color: var(--ac-text-primary);
+}
+.map-page button.chip:hover {
+  background-color: alpha(currentColor, 0.07);
+}
+.map-page button.chip .value,
+.map-page .memory-bar .totals {
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-feature-settings: "tnum";
+}
+.map-page button.chip .value {
+  color: var(--ac-text-secondary);
+  font-size: 0.92em;
+}
+
+.map-page button.reclaim {
+  background-color: var(--ac-mark-fill-free);
+  color: var(--ac-on-mark-fill-free-text);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-weight: 700;
+}
+.map-page button.reclaim:hover {
+  background-image: image(alpha(currentColor, 0.1));
+}
+.map-page button.reclaim:active {
+  background-image: image(alpha(currentColor, 0.2));
+}
+
+.map-page .legend {
+  color: var(--ac-text-secondary);
+  font-size: 0.92em;
+}
+
+/* Legend marks: the state fills, the hatched swatch, the free outline. */
+legendglyph.waiting { color: var(--ac-mark-fill-waiting); }
+legendglyph.busy { color: var(--ac-mark-fill-busy); }
+legendglyph.idle { color: var(--ac-mark-fill-idle); }
+legendglyph.multiplexer { color: var(--ac-mark-fill-mux); }
+legendglyph.free { color: var(--ac-text-reclaim); }
+legendglyph.swapped {
+  background-color: var(--ac-mark-fill-idle);
+  color: var(--ac-on-mark-fill-idle-text);
+  border-radius: 2px;
+}
+legendglyph > hatch,
+memorybar > segment > hatch {
+  opacity: var(--ac-hatch-opacity);
+}
+
+/* Memory bar under 600 px: the map's fills, free RAM dashed. */
+memorybar > segment {
+  border-radius: 4px;
+}
+memorybar > segment.waiting {
+  background-color: var(--ac-mark-fill-waiting);
+  color: var(--ac-on-mark-fill-waiting-text);
+}
+memorybar > segment.busy {
+  background-color: var(--ac-mark-fill-busy);
+  color: var(--ac-on-mark-fill-busy-text);
+}
+memorybar > segment.idle {
+  background-color: var(--ac-mark-fill-idle);
+  color: var(--ac-on-mark-fill-idle-text);
+}
+memorybar > segment.multiplexer {
+  background-color: var(--ac-mark-fill-mux);
+  color: var(--ac-on-mark-fill-mux-text);
+}
+memorybar > segment.free {
+  background-color: transparent;
+  color: var(--ac-text-reclaim);
+}
+.map-page .memory-bar .totals {
+  color: var(--ac-text-secondary);
+  font-size: 0.92em;
+}
+.map-page .memory-bar .totals .free {
+  color: var(--ac-text-reclaim);
+}
+
+/* Empty page: the centred text over the empty map. */
+.map-page .empty-text {
+  color: var(--ac-text-secondary);
+  font-size: 1.15em;
+}

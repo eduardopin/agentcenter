@@ -80,6 +80,10 @@ pub struct SessionOverlay {
     /// Metricas de cockpit (overlay `transcript`), so depois da varredura
     /// completa do transcript, como `tokens_in` (schema 5).
     pub cockpit: Option<Cockpit>,
+    /// Cost-weighted tokens of the last 30 minutes (overlay `transcript`,
+    /// RFC-AC-002); `None` without a fully read transcript with a request.
+    #[serde(default)]
+    pub spend_30m: Option<u64>,
     /// Transcript casado com a varredura ainda incompleta: `cockpit` e `None`
     /// por enquanto, nao por falta de dado (schema 5; `false` no JSON v4).
     #[serde(default)]
@@ -93,6 +97,9 @@ pub trait Overlay: Send + Sync {
     /// A configuracao do sampler mudou (e na criacao dele); vale a partir do
     /// proximo tick. O overlay de transcripts le dela o orcamento de leitura.
     fn configure(&self, _config: &SamplerConfig) {}
+    /// Comeco de um tick, antes da primeira sessao. O overlay de transcripts
+    /// renova nele o teto de leitura do tick.
+    fn begin_tick(&self) {}
 }
 
 /// Overlays ativos.
@@ -108,6 +115,9 @@ pub fn registry() -> Vec<Box<dyn Overlay>> {
 pub fn apply(overlays: &[Box<dyn Overlay>], sessions: &mut [Session]) {
     if overlays.is_empty() {
         return;
+    }
+    for ov in overlays {
+        ov.begin_tick();
     }
     for s in sessions {
         let mut o = s.overlay.take().unwrap_or_default();

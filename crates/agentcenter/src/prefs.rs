@@ -7,6 +7,7 @@
 //! da faixa (schema antigo, dconf editado a mao) cai para dentro dela; valor
 //! gravado e preso na faixa antes, porque `g_settings_set` fora dela so avisa.
 
+use crate::menu::Theme;
 use crate::session_list::SortKey;
 use gtk::gio;
 use gtk::prelude::*;
@@ -20,12 +21,14 @@ pub const KEY_SORT: &str = "sort-order";
 pub const KEY_WIDTH: &str = "window-width";
 pub const KEY_HEIGHT: &str = "window-height";
 pub const KEY_MAXIMIZED: &str = "window-maximized";
+/// Optional: a schema installed before the menu bar has no such key.
+pub const KEY_THEME: &str = "color-scheme";
 
 /// Faixas e padroes do schema, repetidos aqui para o modo sem schema; o teste
 /// `defaults_match_the_schema` confere que nao divergem.
 pub const INTERVAL_MS: (u32, u32, u32) = (250, 10_000, 1000);
-pub const WIDTH: (i32, i32, i32) = (360, 32_767, 1180);
-pub const HEIGHT: (i32, i32, i32) = (294, 32_767, 720);
+pub const WIDTH: (i32, i32, i32) = (360, 32_767, 1280);
+pub const HEIGHT: (i32, i32, i32) = (294, 32_767, 800);
 
 /// Tamanho da janela guardado.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,10 +94,14 @@ impl Prefs {
         Duration::from_millis(u64::from(ms.clamp(min, max)))
     }
 
+    /// The list offers [`SortKey::OPTIONS`]. The schema keeps the older
+    /// choices (state, recommendation) so an old dconf value stays valid; they
+    /// read back as the default.
     pub fn sort_key(&self) -> SortKey {
         self.settings
             .as_ref()
             .and_then(|s| SortKey::from_id(&s.string(KEY_SORT)))
+            .filter(|k| SortKey::OPTIONS.contains(k))
             .unwrap_or_default()
     }
 
@@ -128,6 +135,29 @@ impl Prefs {
         }
     }
 
+    /// View > Theme. `System` without a schema or with one that predates the key.
+    pub fn theme(&self) -> Theme {
+        self.theme_settings()
+            .and_then(|s| Theme::from_id(&s.string(KEY_THEME)))
+            .unwrap_or_default()
+    }
+
+    pub fn set_theme(&self, theme: Theme) {
+        if let Some(s) = self.theme_settings()
+            && s.string(KEY_THEME) != theme.id()
+        {
+            let _ = s.set_string(KEY_THEME, theme.id());
+        }
+    }
+
+    /// The settings, when their schema has the theme key.
+    fn theme_settings(&self) -> Option<&gio::Settings> {
+        self.settings.as_ref().filter(|s| {
+            s.settings_schema()
+                .is_some_and(|schema| schema.has_key(KEY_THEME))
+        })
+    }
+
     /// `f` com o intervalo novo quando a chave muda (gsettings set, dconf-editor).
     pub fn connect_interval(&self, f: impl Fn(Duration) + 'static) {
         let Some(s) = &self.settings else { return };
@@ -136,21 +166,18 @@ impl Prefs {
     }
 }
 
+/// Compiled schemas and memory-backed preferences for tests in any module.
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
 
-    const SCHEMA_XML: &str =
-        include_str!("../../../data/io.github.eduardopin.AgentCenter.gschema.xml");
-    const CHILD_ENV: &str = "AGENTCENTER_PREFS_CHILD";
-
-    /// Diretorio novo em target/tmp (nunca /tmp), apagado no fim do teste.
-    struct Dir(PathBuf);
+    /// A fresh directory under target/tmp (never /tmp), removed on drop.
+    pub struct Dir(pub PathBuf);
 
     impl Dir {
-        fn new(name: &str) -> Self {
+        pub fn new(name: &str) -> Self {
             let p = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
                 .join("../../target/tmp")
                 .join(format!("prefs-{name}-{}", std::process::id()));
@@ -166,24 +193,58 @@ mod tests {
         }
     }
 
-    /// O schema de data/ compilado num diretorio de target/tmp.
-    fn compiled(name: &str) -> Dir {
+    /// The schemas in `data` compiled into a target/tmp directory.
+    pub fn compiled_from(name: &str, data: &Path) -> Dir {
         let dir = Dir::new(name);
-        let data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data");
         let st = Command::new("glib-compile-schemas")
             .arg("--strict")
             .arg("--targetdir")
             .arg(&dir.0)
-            .arg(&data)
+            .arg(data)
             .status()
             .expect("glib-compile-schemas (libglib2.0-bin) is needed by this test");
         assert!(st.success(), "glib-compile-schemas failed: {st}");
         dir
     }
 
-    fn source(dir: &Dir) -> gio::SettingsSchemaSource {
+    /// The schema of data/ compiled.
+    pub fn compiled(name: &str) -> Dir {
+        compiled_from(
+            name,
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data"),
+        )
+    }
+
+    /// The schema released before the theme key existed (tests/fixtures).
+    pub fn compiled_pre_menu(name: &str) -> Dir {
+        compiled_from(
+            name,
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/gschema-pre-menu"),
+        )
+    }
+
+    pub fn source(dir: &Dir) -> gio::SettingsSchemaSource {
         gio::SettingsSchemaSource::from_directory(&dir.0, None, false).expect("schema source")
     }
+
+    /// Persistent preferences on a memory backend; keep the Dir alive with them.
+    pub fn memory_prefs(dir: &Dir) -> Prefs {
+        Prefs::from_source(
+            Some(&source(dir)),
+            Some(&gio::memory_settings_backend_new()),
+        )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::test_support::*;
+    use super::*;
+    use std::process::Command;
+
+    const SCHEMA_XML: &str =
+        include_str!("../../../data/io.github.eduardopin.AgentCenter.gschema.xml");
+    const CHILD_ENV: &str = "AGENTCENTER_PREFS_CHILD";
 
     #[test]
     fn missing_schema_runs_on_the_defaults_and_saves_nothing() {
@@ -196,17 +257,20 @@ mod tests {
         ] {
             assert!(!p.is_persistent());
             assert_eq!(p.interval(), Duration::from_secs(1));
-            assert_eq!(p.sort_key(), SortKey::State);
+            assert_eq!(p.sort_key(), SortKey::Spend);
             assert_eq!(p.window_size(), WindowSize::default());
             // Nada a gravar e nada quebra.
-            p.set_sort_key(SortKey::Cpu);
+            p.set_sort_key(SortKey::Memory);
             p.set_window_size(WindowSize {
                 width: 1,
                 height: 1,
                 maximized: true,
             });
             p.connect_interval(|_| panic!("no settings, no signal"));
-            assert_eq!(p.sort_key(), SortKey::State);
+            assert_eq!(p.sort_key(), SortKey::Spend);
+            assert_eq!(p.theme(), Theme::System);
+            p.set_theme(Theme::Dark);
+            assert_eq!(p.theme(), Theme::System);
         }
     }
 
@@ -219,8 +283,13 @@ mod tests {
         assert_eq!(p.interval(), Duration::from_secs(1));
         assert_eq!(p.window_size(), WindowSize::default());
 
-        p.set_sort_key(SortKey::Recommendation);
-        assert_eq!(p.sort_key(), SortKey::Recommendation);
+        p.set_sort_key(SortKey::Memory);
+        assert_eq!(p.sort_key(), SortKey::Memory);
+        assert_eq!(p.theme(), Theme::System);
+        p.set_theme(Theme::Dark);
+        assert_eq!(p.theme(), Theme::Dark);
+        p.set_theme(Theme::Light);
+        assert_eq!(p.theme(), Theme::Light);
         // Abaixo da faixa: preso no minimo, sem aviso do GIO.
         p.set_window_size(WindowSize {
             width: 200,
@@ -246,6 +315,49 @@ mod tests {
         assert_eq!((w.width, w.height), (360, 900));
     }
 
+    /// An old dconf value the menu no longer offers reads as the default.
+    #[test]
+    fn saved_orders_the_list_no_longer_offers_read_as_the_default() {
+        let dir = compiled("old-sort");
+        let p = memory_prefs(&dir);
+        let s = p.settings.as_ref().unwrap();
+        for (saved, want) in [
+            ("state", SortKey::Spend),
+            ("recommendation", SortKey::Spend),
+            ("spend", SortKey::Spend),
+            ("since-start", SortKey::SinceStart),
+            ("context", SortKey::Context),
+            ("name", SortKey::Name),
+            ("cpu", SortKey::Cpu),
+            ("memory", SortKey::Memory),
+        ] {
+            s.set_string(KEY_SORT, saved).unwrap();
+            assert_eq!(p.sort_key(), want, "saved {saved}");
+        }
+    }
+
+    /// Spec 09 gives the first window 1280x800.
+    #[test]
+    fn window_defaults_are_the_spec_ones() {
+        assert_eq!((WIDTH.2, HEIGHT.2), (1280, 800));
+    }
+
+    #[test]
+    fn a_schema_without_the_theme_key_keeps_the_other_preferences() {
+        let dir = compiled_pre_menu("pre-menu");
+        let p = memory_prefs(&dir);
+        assert!(
+            p.is_persistent(),
+            "the old schema still serves the other keys"
+        );
+        assert_eq!(p.theme(), Theme::System);
+        // Writing a key the schema lacks aborts the process in GIO: it must be skipped.
+        p.set_theme(Theme::Dark);
+        assert_eq!(p.theme(), Theme::System);
+        p.set_sort_key(SortKey::Memory);
+        assert_eq!(p.sort_key(), SortKey::Memory);
+    }
+
     #[test]
     fn defaults_match_the_schema() {
         let def = |key: &str| {
@@ -258,6 +370,10 @@ mod tests {
         assert_eq!(def(KEY_WIDTH), WIDTH.2.to_string());
         assert_eq!(def(KEY_HEIGHT), HEIGHT.2.to_string());
         assert_eq!(def(KEY_SORT), format!("'{}'", SortKey::default().id()));
+        assert_eq!(def(KEY_THEME), format!("'{}'", Theme::default().id()));
+        for t in Theme::ALL {
+            assert!(SCHEMA_XML.contains(&format!("<choice value=\"{}\"/>", t.id())));
+        }
         assert!(SCHEMA_XML.contains(&format!(
             "<range min=\"{}\" max=\"{}\"/>",
             INTERVAL_MS.0, INTERVAL_MS.1
@@ -278,8 +394,8 @@ mod tests {
         let p = Prefs::load();
         println!("persistent={}", p.is_persistent());
         if p.is_persistent() {
-            p.set_sort_key(SortKey::Name);
-            assert_eq!(p.sort_key(), SortKey::Name);
+            p.set_sort_key(SortKey::Memory);
+            assert_eq!(p.sort_key(), SortKey::Memory);
         }
         assert_eq!(p.interval(), Duration::from_secs(1));
     }

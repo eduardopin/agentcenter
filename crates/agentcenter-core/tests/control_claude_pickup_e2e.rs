@@ -54,6 +54,30 @@ fn transcript(home: &Path, sid: &str) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
+/// `agent.get` of the pane once Herdr reports it idle (or done, which the
+/// controller's gate also accepts). One action after another on one pane,
+/// Claude may still be finishing the last one, and a busy pane is refused
+/// (correctly). Panics after 60 s with the last status.
+fn wait_idle(socket: &str) -> Value {
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let got = raw(
+            socket,
+            "agent.get",
+            serde_json::json!({"target": var("AC_E2E_PANE")}),
+        );
+        let status = &got["result"]["agent"]["agent_status"];
+        if matches!(status.as_str(), Some("idle" | "done")) {
+            return got;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "pane still {status} after 60 s: {got}"
+        );
+        std::thread::sleep(Duration::from_millis(250));
+    }
+}
+
 /// Controller and subject for the pane as it is now: the session ID is read
 /// live from Herdr (a pickup earlier in the run moves the pane to a new
 /// session; the Claude Code process stays the same).
@@ -72,11 +96,7 @@ fn arrangement() -> (PathBuf, Controller, Subject) {
     };
     assert!(in_e2e_root(&home), "{}", home.display());
     assert!(in_e2e_root(Path::new(&socket)), "{socket}");
-    let got = raw(
-        &socket,
-        "agent.get",
-        serde_json::json!({"target": var("AC_E2E_PANE")}),
-    );
+    let got = wait_idle(&socket);
     let session = got["result"]["agent"]["agent_session"]["value"]
         .as_str()
         .unwrap_or_default()
@@ -152,6 +172,7 @@ fn real_claude_handoff_and_compact_complete() {
     );
     assert_eq!(a.size, fs::metadata(&a.path).unwrap().len());
 
+    wait_idle(&var("AC_E2E_SOCKET"));
     let o = c.start(COMPACT_OP, Action::Compact, &subject);
     println!("e2e: compact start {:?} {}", o.state, o.code);
     let o = settle(&mut c, COMPACT_OP);
@@ -242,10 +263,11 @@ fn real_claude_in_isolated_herdr_reaches_pickup_loaded() {
     );
     // Acceptance 3: the real entry has exactly the shape of the fixtures
     // (tests/fixtures/claude_pickup/{handoff,pickup}.jsonl).
+    let skill = agentcenter_core::control::claude::handoff_skill(&home);
     let shape = |args: String| {
         format!(
-            "<command-message>clear-pickup</command-message>\n\
-             <command-name>/clear-pickup</command-name>\n<command-args>{args}</command-args>"
+            "<command-message>{skill}</command-message>\n\
+             <command-name>/{skill}</command-name>\n<command-args>{args}</command-args>"
         )
     };
     assert!(

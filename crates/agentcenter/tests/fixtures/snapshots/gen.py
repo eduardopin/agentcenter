@@ -121,6 +121,8 @@ def session(rng, agent, pid, name, cwd, status, role="agent", children=None, her
         # Schema 5 (C21), fora do rng: as fixtures do C16 saem com os mesmos numeros.
         overlay["provider"] = provider(agent, overlay["model"])
         overlay["cockpit"] = None
+        # RFC-AC-002: 30-minute weighted spend, only with a cockpit.
+        overlay["spend_30m"] = None
         overlay["cockpit_pending"] = pending
     return {
         "agent": agent, "role": role, "pid": pid, "cmdline": agent, "cwd": cwd,
@@ -335,6 +337,8 @@ def with_cockpit(s, model, tokens, window, inferred, idle_min, handoff=None, loo
         "max_streak": loops[0], "repeated_max": loops[1],
         "recommendation": verdict, "reasons": why,
     }
+    # A twentieth of the burn: varied across sessions, no rng draw.
+    o["spend_30m"] = c["burn"] // 20
     o["cockpit_pending"] = False
     return s
 

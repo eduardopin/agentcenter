@@ -1,0 +1,138 @@
+/* ==== Session detail, direction B ==== detail.rs and process_table.rs.
+ * Four chart cards (Timeline inside) and the process rows with hatched
+ * memory bars. Colours only from tokens. */
+
+.session-detail .chart-card {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background-color: var(--ac-surface-panel);
+}
+.session-detail .chart-title {
+  font-weight: 700;
+  color: var(--ac-text-primary);
+}
+.session-detail .chart-unit,
+.session-detail .chart-sub {
+  font-size: 0.85em;
+  color: var(--ac-text-secondary);
+}
+.session-detail .chart-value {
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-feature-settings: "tnum";
+  font-size: 1.45em;
+  font-weight: 700;
+  color: var(--ac-text-primary);
+}
+.session-detail .chart-value.alert {
+  color: var(--ac-text-alert);
+}
+
+/* Process rows: mono figures, a hatched memory bar in the state fill. */
+.session-detail .process-bars .proc-row {
+  min-height: 26px;
+}
+.session-detail .process-bars .proc-comm,
+.session-detail .process-bars .proc-pid,
+.session-detail .process-bars .proc-cpu,
+.session-detail .process-bars .proc-mem {
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-feature-settings: "tnum";
+}
+.session-detail .process-bars .proc-comm,
+.session-detail .process-bars .proc-mem {
+  color: var(--ac-text-primary);
+}
+.session-detail .process-bars .proc-pid,
+.session-detail .process-bars .proc-state,
+.session-detail .process-bars .proc-cpu {
+  color: var(--ac-text-secondary);
+}
+procbar {
+  min-height: 10px;
+  border-radius: var(--ac-radius-rule);
+  background-color: var(--ac-track);
+}
+procbar.busy > box.fill,
+procbar.busy > hatch {
+  background-color: var(--ac-mark-fill-busy);
+  color: alpha(var(--ac-on-mark-fill-busy-text), var(--ac-hatch-opacity));
+}
+procbar.waiting > box.fill,
+procbar.waiting > hatch {
+  background-color: var(--ac-mark-fill-waiting);
+  color: alpha(var(--ac-on-mark-fill-waiting-text), var(--ac-hatch-opacity));
+}
+procbar.idle > box.fill,
+procbar.idle > hatch,
+procbar.unknown > box.fill,
+procbar.unknown > hatch {
+  background-color: var(--ac-mark-fill-idle);
+  color: alpha(var(--ac-on-mark-fill-idle-text), var(--ac-hatch-opacity));
+}
+procbar.mux > box.fill,
+procbar.mux > hatch {
+  background-color: var(--ac-mark-fill-mux);
+  color: alpha(var(--ac-on-mark-fill-mux-text), var(--ac-hatch-opacity));
+}
+
+/* ==== Header ==== glyph, name, state word, one meta line, focus and menu on
+ * the title row; id, facts and controls fold under "Session details". */
+.session-detail .detail-face {
+  background-color: transparent;
+  padding: 0;
+  margin: var(--ac-space-4) var(--ac-space-4) var(--ac-space-3);
+}
+.session-detail .detail-name {
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ac-text-primary);
+}
+.session-detail .detail-title glyph {
+  margin-right: 2px;
+}
+.session-detail .detail-meta {
+  font-size: 12px;
+  color: var(--ac-text-secondary);
+}
+.session-detail .detail-more {
+  margin-top: var(--ac-space-1);
+  color: var(--ac-text-secondary);
+}
+.session-detail .detail-tail {
+  padding: var(--ac-space-2) 0 0;
+}
+
+/* One left and right edge for header, charts, headings and process rows
+ * (16 px); the process rows had no inset and sat on the pane edge. */
+.session-detail .detail-charts,
+.session-detail .detail-procs {
+  margin-left: var(--ac-space-4);
+  margin-right: var(--ac-space-4);
+}
+.session-detail .detail-section,
+.session-detail .detail-note {
+  margin-left: var(--ac-space-4);
+  margin-right: var(--ac-space-4);
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* The processes heading and its one-line caption share a row; the caption
+ * sits on the heading's baseline at the right edge. */
+.session-detail .detail-procs-head {
+  margin: 0 var(--ac-space-4);
+}
+.session-detail .detail-procs-head .detail-section,
+.session-detail .detail-procs-head .detail-note {
+  margin: 0;
+  padding: var(--ac-space-4) 0 var(--ac-space-1);
+}
+.session-detail .detail-more {
+  margin-left: var(--ac-space-4);
+  margin-right: var(--ac-space-4);
+}
+
+/* Suspend, Resume, End: a quiet row under the processes. */
+.session-detail .detail-actions {
+  margin: var(--ac-space-3) var(--ac-space-4) var(--ac-space-2);
+}

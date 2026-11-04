@@ -14,6 +14,13 @@
 //!         tabela (process_table.rs)
 //! ```
 //!
+//! Section order (REVIEW_RR1): title and verdict pill with its reason line,
+//! Handoff and Compact, where the session runs (agent, model, terminal,
+//! folder), the transcript's context and token panel, then the resource
+//! figures, charts and processes. The "Session details" fold keeps only IDs.
+//! Suspend, Resume, Terminate and Kill live in the title row's menu alone.
+//! Collapsed, the page header repeats Handoff and Compact beside Back.
+//!
 //! A recomendacao do cockpit e so a pilula ao lado do estado (decisao do
 //! dono, docs/DESIGN.md secao 8); o texto dela vem da mesma [`Row`] da lista.
 //! Valor ausente e travessao, nunca 0. Nenhum widget nasce por tick: o
@@ -22,7 +29,9 @@
 use crate::actions_ui;
 use crate::format::{DASH, Group, Row, bytes, human, provider_name, rec_class, sanitize};
 use crate::graph::{Strip, nice_max, peak, runs_at_least};
-use crate::process_table::ProcessTable;
+use crate::process_table::ProcessBars;
+use crate::state_glyph::StateGlyph;
+use crate::timeline::{DETAIL_SIZE, Scale, Timeline, scale_max, stacked};
 use adw::prelude::*;
 use agentcenter_core::actions::Target;
 use agentcenter_core::cockpit::{LOOP_REPEATS, Thresholds};
@@ -60,6 +69,8 @@ impl Fact {
 pub const SESSION_FACTS: [&str; 5] = ["Processes", "CPU", "Memory", "Disk", "Stall"];
 /// Legendas dos fatos do transcript, na ordem de [`DetailText::transcript`].
 pub const TRANSCRIPT_FACTS: [&str; 5] = ["Model", "Context", "Tokens", "Tool calls", "Subagents"];
+/// Captions of where the session runs, in the order of [`DetailText::runs`].
+pub const RUNS_FACTS: [&str; 4] = ["Agent", "Model", "Terminal", "Folder"];
 
 /// Todo o texto do detalhe de uma sessao, sem GTK: testavel sem display.
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -67,6 +78,10 @@ pub struct DetailText {
     pub pid: u32,
     pub name: String,
     pub group: u32,
+    /// Agent name alone (`claude`, `herdr`), for the header's meta line.
+    pub agent: String,
+    /// Model the transcript names; empty until it does.
+    pub model: String,
     /// Texto da pilula de estado; vazio no multiplexador.
     pub status: String,
     pub rec: u32,
@@ -78,10 +93,30 @@ pub struct DetailText {
     /// `herdr w4:p3`; vazio fora do herdr.
     pub herdr: String,
     pub herdr_tooltip: String,
+    /// Id que o proprio agente da a sessao (uuid do Claude Code, id do
+    /// arquivo de sessao do pi, id do Codex); travessao sem ele.
+    pub session_id: Fact,
+    /// O id falado com a legenda: um uuid solto nao diz nada ao leitor.
+    pub session_id_a11y: String,
     pub session: [Fact; 5],
+    /// Where the session runs: agent, model, terminal, folder.
+    pub runs: [Fact; 4],
     /// Vazio no multiplexador (nao tem transcript).
     pub transcript: Option<[Fact; 5]>,
     pub a11y: String,
+}
+
+/// Header glyph box, px.
+const GLYPH_PX: i32 = 16;
+
+fn descendants(root: &gtk::Widget) -> Vec<gtk::Widget> {
+    let mut out = vec![root.clone()];
+    let mut child = root.first_child();
+    while let Some(w) = child {
+        out.extend(descendants(&w));
+        child = w.next_sibling();
+    }
+    out
 }
 
 fn n_or_dash(v: Option<u64>) -> String {
@@ -93,6 +128,37 @@ fn rate(v: Option<f64>) -> String {
 }
 
 impl DetailText {
+    /// The header's one meta line: agent, model, pid, cwd, herdr place,
+    /// process count and context. What is not known yet is left out: a dash
+    /// in a sentence reads as a value.
+    pub fn meta_line(&self) -> String {
+        let known = |v: &str| !v.is_empty() && v != DASH;
+        let context = self
+            .transcript
+            .as_ref()
+            .map(|t| t[1].value.split(" \u{b7} ").next().unwrap_or_default())
+            .filter(|c| known(c))
+            .map(|c| format!("context {c}"));
+        let procs = &self.session[0].value;
+        [
+            Some(self.agent.clone()),
+            Some(self.model.clone()),
+            Some(format!("pid {}", self.pid)),
+            Some(self.cwd.clone()),
+            Some(self.herdr.clone()),
+            Some(format!(
+                "{procs} {}",
+                if procs == "1" { "process" } else { "processes" }
+            )),
+            context,
+        ]
+        .into_iter()
+        .flatten()
+        .filter(|p| known(p))
+        .collect::<Vec<_>>()
+        .join(" \u{b7} ")
+    }
+
     pub fn of(s: &Session, source: IoStallSource, home: Option<&str>) -> Self {
         let row = Row::from_session(s, source, home);
         let ov = s.overlay.as_ref();
@@ -132,6 +198,21 @@ impl DetailText {
             }
         };
 
+        let session_id = ov
+            .and_then(|o| o.agent_session_id.as_deref())
+            .map(|i| sanitize(i).into_owned())
+            .filter(|i| !i.trim().is_empty());
+        let (session_id, session_id_a11y) = match session_id {
+            Some(id) => (
+                Fact::new(id.clone(), format!("Session id reported by {agent}")),
+                format!("Session id {id}"),
+            ),
+            None => (
+                Fact::new(DASH, "The agent has not reported a session id yet"),
+                "Session id unavailable".to_string(),
+            ),
+        };
+
         let procs = s.procs.to_string();
         let stall = match (source, s.stall_pct, s.threads_d) {
             (IoStallSource::Delayacct, Some(p), _) => Fact::new(
@@ -158,6 +239,11 @@ impl DetailText {
             stall,
         ];
 
+        let model_name = ov
+            .and_then(|o| o.model.as_deref())
+            .map(|m| sanitize(m).into_owned())
+            .filter(|m| !m.trim().is_empty())
+            .unwrap_or_default();
         let transcript = (!mux).then(|| {
             let model = ov
                 .and_then(|o| o.model.as_deref())
@@ -230,6 +316,35 @@ impl DetailText {
             [model, context, tokens, tools, subs]
         });
 
+        let runs = [
+            Fact::new(agent.clone(), "The agent this session runs"),
+            Fact::new(
+                if model_name.is_empty() {
+                    DASH.to_string()
+                } else {
+                    model_name.clone()
+                },
+                "The model the transcript names",
+            ),
+            if mux {
+                Fact::new("the multiplexer itself", "This is the herdr server")
+            } else if herdr_text.is_empty() {
+                Fact::new(
+                    "terminal unknown",
+                    "No herdr pane was matched; tmux and IDE terminals are not sampled",
+                )
+            } else {
+                Fact::new(herdr_text.clone(), herdr_tooltip.clone())
+            },
+            Fact::new(
+                if row.cwd.is_empty() {
+                    DASH.to_string()
+                } else {
+                    row.cwd.clone()
+                },
+                "Working directory of the session",
+            ),
+        ];
         let a11y = format!(
             "{}, {identity}, {}",
             row.name,
@@ -243,6 +358,8 @@ impl DetailText {
             pid: s.pid,
             name: row.name,
             group: row.group,
+            agent: agent.clone(),
+            model: model_name,
             status: row.status,
             rec: row.rec,
             rec_text: row.rec_text,
@@ -251,22 +368,44 @@ impl DetailText {
             cwd: row.cwd,
             herdr: herdr_text,
             herdr_tooltip,
+            session_id,
+            session_id_a11y,
             session,
+            runs,
             transcript,
             a11y,
         }
     }
 }
 
-/// Legendas das faixas de historico, na ordem de [`StripData::of`].
-pub const HISTORY_STRIPS: [&str; 4] = ["CPU", "Memory", "Disk", "Stall"];
-/// Series por faixa (a segunda e tracejada): memoria = PSS + swap, disco =
-/// leitura + escrita.
-const HISTORY_SERIES: [usize; 4] = [1, 2, 2, 1];
+/// Titles of the four kernel charts, in the order of [`ChartData::of`].
+pub const CHART_TITLES: [&str; 4] = ["CPU", "Memory", "Disk", "I/O stall"];
 /// Limite do stall com delay accounting, o mesmo 10 % da pressao (DESIGN.md
 /// secao 4): acima dele a leitura fica carmim e o filete marca o limite.
 pub const STALL_LIMIT_PCT: f64 = 10.0;
-const MIB: f64 = 1024.0 * 1024.0;
+/// Floor of the CPU scale: a quiet session does not fill the chart.
+const CPU_FLOOR_PCT: f64 = 10.0;
+/// Floor of the stall scale: twice the limit, so its line sits mid-chart.
+const STALL_FLOOR_PCT: f64 = 2.0 * STALL_LIMIT_PCT;
+const KIB: f64 = 1024.0;
+const MIB: f64 = 1024.0 * KIB;
+const GIB: f64 = 1024.0 * MIB;
+/// Smallest width of a detail chart: two fit side by side in the detail at
+/// 1280 (about 360 px each, `timeline::DETAIL_SIZE`), one per line at 360.
+const CHART_MIN_WIDTH: i32 = 240;
+/// Detail width under which it tightens (sp).
+const NARROW_MAX_SP: f64 = 480.0;
+
+/// CSS class of a state fill (tokens.css `--ac-mark-fill-*`).
+fn tone(g: Group) -> &'static str {
+    match g {
+        Group::Busy => "busy",
+        Group::Blocked => "waiting",
+        Group::Idle => "idle",
+        Group::Multiplexer => "mux",
+        Group::Unknown => "unknown",
+    }
+}
 
 /// Legendas das faixas do transcript (CC9), na ordem de [`StripData::cockpit`].
 pub const COCKPIT_STRIPS: [&str; 3] = ["Context", "Burn", "Tool calls/min"];
@@ -299,10 +438,15 @@ fn last(v: &[f32]) -> Option<f64> {
     v.last().filter(|x| x.is_finite()).map(|x| f64::from(*x))
 }
 
+/// Seconds the ring covers at a tick of `interval_ms` (0 is the default 1 s).
+fn span_secs(interval_ms: u64) -> u64 {
+    let ms = if interval_ms == 0 { 1000 } else { interval_ms };
+    HISTORY_LEN as u64 * ms / 1000
+}
+
 /// `Last 10 minutes`: o ring guarda [`HISTORY_LEN`] ticks do intervalo dado.
 pub fn span_text(interval_ms: u64) -> String {
-    let ms = if interval_ms == 0 { 1000 } else { interval_ms };
-    let secs = HISTORY_LEN as u64 * ms / 1000;
+    let secs = span_secs(interval_ms);
     if secs >= 120 {
         format!("Last {} minutes", (secs + 30) / 60)
     } else {
@@ -374,78 +518,201 @@ fn with_marks(mut d: StripData, marks: &[(&str, f64)], fmt: &dyn Fn(f64) -> Stri
     d
 }
 
-impl StripData {
-    /// As quatro faixas de uma sessao; sem historico, trilhos vazios e
-    /// travessao (nunca 0).
-    pub fn of(h: Option<&SessionHistory>, source: IoStallSource, span: &str) -> [StripData; 4] {
+/// Unit for byte quantities, picked by the peak: `(name, divisor,
+/// decimals)`. GiB from 1 GiB up, MiB below.
+fn mem_unit(peak: Option<f64>) -> (&'static str, f64, usize) {
+    if peak.is_some_and(|p| p >= GIB) {
+        ("GiB", GIB, 2)
+    } else {
+        ("MiB", MIB, 0)
+    }
+}
+
+/// Unit for byte rates, picked by the peak: MiB/s from 1 MiB/s up, KiB/s
+/// below.
+fn rate_unit(peak: Option<f64>) -> (&'static str, f64, usize) {
+    if peak.is_some_and(|p| p >= MIB) {
+        ("MiB/s", MIB, 1)
+    } else {
+        ("KiB/s", KIB, 0)
+    }
+}
+
+/// The series in the chart's unit; a missing sample stays `NaN`.
+fn in_unit(v: &[f32], div: f64) -> Vec<f32> {
+    v.iter().map(|x| (f64::from(*x) / div) as f32).collect()
+}
+
+fn num(v: Option<f64>, decimals: usize) -> String {
+    v.map_or_else(|| DASH.to_string(), |v| format!("{v:.decimals$}"))
+}
+
+fn mean(v: &[f32]) -> Option<f64> {
+    let (sum, n) = v
+        .iter()
+        .filter(|x| x.is_finite())
+        .fold((0.0, 0u32), |(s, n), x| (s + f64::from(*x), n + 1));
+    (n > 0).then(|| sum / f64::from(n))
+}
+
+/// One kernel chart of the detail ready to draw, without GTK: the series in
+/// the unit shown, the scale, the threshold, and the texts of the card.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChartData {
+    pub title: &'static str,
+    /// Unit next to the title (`% of one core`, `GiB`, `MiB/s`, `% of time`).
+    pub unit: String,
+    /// Solid series, in `unit`.
+    pub primary: Vec<f32>,
+    /// Dashed series (disk write).
+    pub second: Option<Vec<f32>>,
+    /// Hatched band stacked on `primary` (swapped-out memory).
+    pub band: Option<Vec<f32>>,
+    pub cap: usize,
+    pub scale: Scale,
+    /// Dashed limit line (stall with delay accounting).
+    pub threshold: Option<f64>,
+    /// The newest reading is over the threshold.
+    pub alert: bool,
+    /// Big number on the right: the newest reading (`19 %`, `1.10 GiB`,
+    /// `2.4 / 0.5`); a dash without one, never 0.
+    pub value: String,
+    /// Line under the title (`max 36 % · mean 23 %`, what solid and hatched
+    /// mean).
+    pub sub: String,
+    pub tooltip: String,
+    /// Screen reader label: title, window, now, the line under and the scale.
+    pub a11y: String,
+}
+
+impl ChartData {
+    /// The four kernel charts of a session: CPU, memory (PSS with swap
+    /// hatched on top), disk (read solid, write dashed) and I/O stall. With
+    /// no history, empty tracks and dashes.
+    pub fn of(h: Option<&SessionHistory>, source: IoStallSource, span: &str) -> [ChartData; 4] {
         let span = span.to_lowercase();
+        let blank = |title: &'static str, unit: &str, scale: Scale| ChartData {
+            title,
+            unit: unit.to_string(),
+            primary: Vec::new(),
+            second: None,
+            band: None,
+            cap: HISTORY_LEN,
+            scale,
+            threshold: None,
+            alert: false,
+            value: DASH.to_string(),
+            sub: String::new(),
+            tooltip: String::new(),
+            a11y: String::new(),
+        };
+        let nice = |floor: f64, binary: bool| Scale::Nice { floor, binary };
+        let stall_unit = match source {
+            IoStallSource::Delayacct => "% of time",
+            IoStallSource::DState => "threads in D",
+        };
         let Some(h) = h.filter(|h| !h.is_empty()) else {
-            return HISTORY_STRIPS.map(|cap| no_history(cap, &span));
+            return [
+                blank("CPU", "% of one core", nice(CPU_FLOOR_PCT, false)),
+                blank("Memory", "MiB", nice(1.0, true)),
+                blank("Disk", "KiB/s", nice(1.0, true)),
+                blank("I/O stall", stall_unit, nice(STALL_FLOOR_PCT, false)),
+            ]
+            .map(|mut d| {
+                d.sub = "No history for this session yet".to_string();
+                d.tooltip = d.sub.clone();
+                d.a11y = format!("{}, {span}: no history yet", d.title);
+                d
+            });
         };
         let cap = h.cpu_pct.capacity();
-        let make = |caption: &str,
-                    series: Vec<Vec<f32>>,
-                    floor: f64,
-                    binary: bool,
-                    fmt: &dyn Fn(f64) -> String,
-                    names: &[&str]| {
-            make_strip(caption, &span, cap, series, (floor, binary), fmt, names)
+        let finish = |mut d: ChartData| {
+            d.cap = cap;
+            let top = d.top();
+            let scale = format!("scale 0 to {} {}", crate::timeline::tick_label(top), d.unit);
+            d.tooltip = format!("{}. {}", d.sub, capitalize(&scale));
+            d.a11y = format!("{}, {span}: now {}; {}; {scale}", d.title, d.value, d.sub);
+            d
         };
-        let pct = |v: f64| format!("{v:.0}%");
-        let size = |v: f64| bytes(v);
-        let rate = |v: f64| format!("{}/s", bytes(v));
-        let cpu = make(
-            "CPU",
-            vec![h.cpu_pct.to_vec()],
-            100.0,
-            false,
-            &pct,
-            &["CPU, % of one core"],
-        );
-        let mem = make(
-            "Memory",
-            vec![h.pss_bytes.to_vec(), h.swap_pss_bytes.to_vec()],
-            MIB,
-            true,
-            &size,
-            &["PSS (solid)", "swap PSS (dashed)"],
-        );
-        let disk = make(
-            "Disk",
-            vec![h.read_bps.to_vec(), h.write_bps.to_vec()],
-            MIB,
-            true,
-            &rate,
-            &["read (solid)", "write (dashed)"],
-        );
-        let stall_series = vec![h.stall.to_vec()];
-        let stall = match source {
-            IoStallSource::Delayacct => {
-                let now = last(&stall_series[0]);
-                let mut s = make(
-                    "Stall",
-                    stall_series,
-                    2.0 * STALL_LIMIT_PCT,
-                    false,
-                    &pct,
-                    &["longest block I/O wait, % of the interval"],
-                );
-                s.limits = vec![STALL_LIMIT_PCT];
-                s.alert = now.is_some_and(|n| n >= STALL_LIMIT_PCT);
-                s
-            }
-            IoStallSource::DState => make(
-                "Stall",
-                stall_series,
-                4.0,
-                false,
-                &|v: f64| format!("D:{v:.0}"),
-                &["threads waiting on disk (estimated)"],
+
+        let cpu = h.cpu_pct.to_vec();
+        let pct = |v: Option<f64>| v.map_or_else(|| DASH.to_string(), |v| format!("{v:.0} %"));
+        let cpu = ChartData {
+            value: pct(last(&cpu)),
+            sub: format!(
+                "max {} \u{b7} mean {}",
+                pct(peak([cpu.as_slice()])),
+                pct(mean(&cpu))
             ),
+            primary: cpu,
+            ..blank("CPU", "% of one core", nice(CPU_FLOOR_PCT, false))
         };
-        [cpu, mem, disk, stall]
+
+        let (pss, swap) = (h.pss_bytes.to_vec(), h.swap_pss_bytes.to_vec());
+        let (unit, div, dp) = mem_unit(peak([stacked(&pss, &swap).as_slice(), &pss]));
+        let (pss, swap) = (in_unit(&pss, div), in_unit(&swap, div));
+        let (ram, out) = (last(&pss), last(&swap));
+        let total = ram.map(|r| r + out.unwrap_or(0.0));
+        let mem = ChartData {
+            value: total.map_or_else(|| DASH.to_string(), |t| format!("{t:.dp$} {unit}")),
+            sub: format!(
+                "solid: in RAM {} \u{b7} hatched: swapped out {}",
+                num(ram, dp),
+                num(out, dp)
+            ),
+            primary: pss,
+            band: Some(swap),
+            ..blank("Memory", unit, nice(1.0, true))
+        };
+
+        let (read, write) = (h.read_bps.to_vec(), h.write_bps.to_vec());
+        let (unit, div, dp) = rate_unit(peak([read.as_slice(), &write]));
+        let (read, write) = (in_unit(&read, div), in_unit(&write, div));
+        let disk = ChartData {
+            value: match (last(&read), last(&write)) {
+                (None, None) => DASH.to_string(),
+                (r, w) => format!("{} / {}", num(r, dp), num(w, dp)),
+            },
+            sub: "solid: read \u{b7} dashed: write".to_string(),
+            primary: read,
+            second: Some(write),
+            ..blank("Disk", unit, nice(1.0, true))
+        };
+
+        let stall = h.stall.to_vec();
+        let now = last(&stall);
+        let stall = match source {
+            IoStallSource::Delayacct => ChartData {
+                value: pct(now),
+                sub: "time this session waited on disk".to_string(),
+                threshold: Some(STALL_LIMIT_PCT),
+                alert: now.is_some_and(|n| n >= STALL_LIMIT_PCT),
+                primary: stall,
+                ..blank("I/O stall", stall_unit, nice(STALL_FLOOR_PCT, false))
+            },
+            IoStallSource::DState => ChartData {
+                value: now.map_or_else(|| DASH.to_string(), |n| format!("D:{n:.0}")),
+                sub: "threads waiting on disk (estimated)".to_string(),
+                primary: stall,
+                ..blank("I/O stall", stall_unit, nice(4.0, false))
+            },
+        };
+        [cpu, mem, disk, stall].map(finish)
     }
 
+    /// Top of the scale the timeline will draw this chart on.
+    pub fn top(&self) -> f64 {
+        let total = self
+            .band
+            .as_ref()
+            .map(|b| stacked(&self.primary, b))
+            .unwrap_or_default();
+        let second = self.second.as_deref().unwrap_or(&[]);
+        scale_max(self.scale, peak([self.primary.as_slice(), second, &total]))
+    }
+}
+
+impl StripData {
     /// As tres faixas do transcript (CC9): contexto com releitura, burn e
     /// tool calls/min com o sinal de loop. So o que o sampler gravou do
     /// overlay; amostra sem fonte quebra a linha. Limites de `th`: piso da
@@ -558,6 +825,12 @@ fn set_label(l: &gtk::Label, text: &str) {
     if l.label() != text {
         l.set_label(text);
     }
+}
+
+/// A feedback line that takes no room while it is empty.
+fn set_feedback(l: &gtk::Label, text: &str) {
+    set_label(l, text);
+    l.set_visible(!text.is_empty());
 }
 
 fn set_tip(w: &impl IsA<gtk::Widget>, tip: &str) {
@@ -716,15 +989,113 @@ fn draw_cells(cells: &[StripCell], data: &[StripData]) {
     }
 }
 
-/// Secao "Last 10 minutes": quatro faixas do kernel (duas por linha) e, abaixo dos fatos
+/// One kernel chart card: title, unit and the newest reading on top, the
+/// line under it, and a [`Timeline`] with its axis.
+struct ChartCell {
+    child: gtk::FlowBoxChild,
+    #[cfg_attr(not(test), expect(dead_code, reason = "the tests read the title"))]
+    title: gtk::Label,
+    unit: gtk::Label,
+    value: gtk::Label,
+    sub: gtk::Label,
+    timeline: Timeline,
+}
+
+/// The four charts, two per line where they fit, one per line in a narrow
+/// detail. Same focus behaviour as the strip panel.
+fn chart_panel() -> (gtk::FlowBox, Vec<ChartCell>) {
+    let panel = gtk::FlowBox::builder()
+        .selection_mode(gtk::SelectionMode::None)
+        .homogeneous(true)
+        .column_spacing(8)
+        .row_spacing(8)
+        .min_children_per_line(1)
+        .max_children_per_line(2)
+        .build();
+    panel.add_css_class("detail-charts");
+    let charts = CHART_TITLES
+        .iter()
+        .map(|t| {
+            let title = label(&["chart-title"]);
+            title.set_label(t);
+            let unit = label(&["chart-unit"]);
+            unit.set_hexpand(true);
+            unit.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            let value = label(&["chart-value", "numeric"]);
+            value.set_xalign(1.0);
+            let top = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            top.set_valign(gtk::Align::Baseline);
+            top.append(&title);
+            top.append(&unit);
+            top.append(&value);
+            let sub = label(&["chart-sub"]);
+            sub.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            let timeline = Timeline::new(DETAIL_SIZE.0, DETAIL_SIZE.1);
+            timeline.set_size_request(CHART_MIN_WIDTH, DETAIL_SIZE.1);
+            timeline.set_hexpand(true);
+            timeline.set_y_labels(true);
+            timeline.set_margin_top(8);
+            let card = gtk::Box::new(gtk::Orientation::Vertical, 2);
+            card.add_css_class("chart-card");
+            card.append(&top);
+            card.append(&sub);
+            card.append(&timeline);
+            let child = gtk::FlowBoxChild::new();
+            child.set_child(Some(&card));
+            panel.append(&child);
+            ChartCell {
+                child,
+                title,
+                unit,
+                value,
+                sub,
+                timeline,
+            }
+        })
+        .collect();
+    (panel, charts)
+}
+
+fn draw_charts(cells: &[ChartCell], data: &[ChartData], span_secs: u64) {
+    for (c, d) in cells.iter().zip(data) {
+        set_label(&c.unit, &d.unit);
+        set_label(&c.value, &d.value);
+        set_label(&c.sub, &d.sub);
+        set_classes(
+            &c.value,
+            if d.alert {
+                &["chart-value", "numeric", "alert"]
+            } else {
+                &["chart-value", "numeric"]
+            },
+        );
+        let t = &c.timeline;
+        // The labels are born with the 10-minute text and hidden: compare the
+        // visibility too, not the text alone.
+        if !t.axis_visible()
+            || t.labels().1.first().map(String::as_str)
+                != Some(&crate::timeline::axis_labels(span_secs)[0])
+        {
+            t.set_axis(Some(span_secs));
+        }
+        t.set_scale(d.scale);
+        t.set_threshold(d.threshold);
+        t.set_alert(d.alert);
+        t.set_values(&d.primary, d.second.as_deref(), d.band.as_deref(), d.cap);
+        set_tip(&c.child, &d.tooltip);
+        t.update_property(&[gtk::accessible::Property::Label(&d.a11y)]);
+        c.child
+            .update_property(&[gtk::accessible::Property::Label(&d.a11y)]);
+    }
+}
+
+/// Quatro faixas do kernel (duas por linha) e, abaixo dos fatos
 /// do transcript, tres faixas do cockpit (CC9). Fora da tela (detalhe
 /// recolhido atras da lista) nada e calculado; ao aparecer, desenha o ultimo
 /// historico guardado.
 struct HistoryView {
-    head: gtk::Label,
-    note: gtk::Label,
     panel: gtk::FlowBox,
-    cells: Vec<StripCell>,
+    charts: Vec<ChartCell>,
     /// Faixas do transcript: ficam sob os fatos do transcript e somem com ele
     /// (multiplexador).
     cockpit_note: gtk::Label,
@@ -738,14 +1109,7 @@ struct HistoryView {
 
 impl HistoryView {
     fn new() -> Rc<Self> {
-        let head = label(&["detail-section"]);
-        head.set_accessible_role(gtk::AccessibleRole::Heading);
-        let note = label(&["detail-note"]);
-        note.set_wrap(true);
-        note.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-        // Duas por linha em toda largura: 2x2, sem a quarta faixa sozinha
-        // (o detalhe a 1280 nao cabe quatro de 150 px).
-        let (panel, cells) = strip_panel(&HISTORY_STRIPS, &HISTORY_SERIES, 2);
+        let (panel, charts) = chart_panel();
         let cockpit_note = label(&["detail-note"]);
         // Separa a nota dos fatos do transcript logo acima.
         cockpit_note.set_margin_top(8);
@@ -753,10 +1117,8 @@ impl HistoryView {
         cockpit_note.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         let (cockpit_panel, cockpit_cells) = strip_panel(&COCKPIT_STRIPS, &COCKPIT_SERIES, 3);
         let view = Rc::new(Self {
-            head,
-            note,
             panel,
-            cells,
+            charts,
             cockpit_note,
             cockpit_panel,
             cockpit_cells,
@@ -791,18 +1153,10 @@ impl HistoryView {
         let pending = self.pending.borrow();
         let Some(p) = pending.as_ref() else { return };
         let span = span_text(p.interval_ms);
-        set_label(&self.head, &span);
         let every = match p.interval_ms {
             0 | 1000 => "One reading per second".to_string(),
             ms => format!("One reading every {:.1} s", ms as f64 / 1000.0),
         };
-        set_label(
-            &self.note,
-            &format!(
-                "{every}, newest on the right. Solid: CPU, PSS, disk read, stall; \
-                 dashed: swap, disk write."
-            ),
-        );
         set_label(
             &self.cockpit_note,
             &format!(
@@ -812,13 +1166,24 @@ impl HistoryView {
             ),
         );
         let h = p.history.as_ref().and_then(|h| h.get(p.pid));
-        draw_cells(&self.cells, &StripData::of(h, p.source, &span));
+        // The window is the time axis under each chart; the cadence is in
+        // the tooltip.
+        let mut charts = ChartData::of(h, p.source, &span);
+        for d in &mut charts {
+            d.tooltip = format!("{} {every}, newest on the right.", d.tooltip);
+        }
+        draw_charts(&self.charts, &charts, span_secs(p.interval_ms));
         draw_cells(
             &self.cockpit_cells,
             &StripData::cockpit(h, &self.thresholds, &span),
         );
     }
 }
+
+/// How long a list Action waits for the newly selected session's control:
+/// selecting a session rediscovers its capabilities off-thread, and the
+/// control shows only once that read returns.
+const REQUEST_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 pub struct Detail {
     /// A pagina de conteudo do split view.
@@ -837,21 +1202,31 @@ pub struct Detail {
     focus_reason: gtk::Label,
     focus_target: Rc<RefCell<Option<(Endpoint, FocusTarget)>>>,
     focusing: Rc<Cell<bool>>,
+    /// The feedback line holds the reason the focus button is off.
+    reason_shown: Cell<bool>,
+    /// The list Action request in flight; a newer one ends the older poll.
+    request_gen: Cell<u64>,
     shown: RefCell<Option<DetailText>>,
-    icon: gtk::Image,
+    glyph: StateGlyph,
+    /// The header's one meta line ([`DetailText::meta_line`]).
+    meta: gtk::Label,
+    /// Session id, facts and controls, folded under the header.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the tests read the expander"))]
+    more: gtk::Expander,
     name: gtk::Label,
     state: gtk::Label,
     rec: gtk::Label,
     reason: gtk::Label,
-    identity: gtk::Label,
-    cwd: gtk::Label,
-    herdr: gtk::Label,
+    session_id_row: gtk::Box,
+    session_id: gtk::Label,
     session: Facts,
+    runs: Facts,
+    pid_value: gtk::Label,
     transcript_head: gtk::Label,
     transcript: Facts,
     procs_head: gtk::Label,
     history: Rc<HistoryView>,
-    table: RefCell<ProcessTable>,
+    procs: Rc<ProcessBars>,
     /// Alvo do menu de acoes do cabecalho: pid e nome da sessao mostrada.
     target: Rc<RefCell<Option<(u32, String)>>>,
     actions: gtk::MenuButton,
@@ -871,14 +1246,15 @@ impl Detail {
             .build();
         ended.add_css_class("compact");
 
-        let icon = gtk::Image::new();
-        icon.set_pixel_size(20);
-        icon.set_valign(gtk::Align::Center);
-        icon.set_accessible_role(gtk::AccessibleRole::Presentation);
+        let glyph = StateGlyph::new(GLYPH_PX);
+        let meta = label(&["detail-meta"]);
+        meta.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        meta.set_lines(1);
+        meta.set_xalign(0.0);
         let name = label(&["detail-name"]);
         name.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        name.set_hexpand(true);
         name.set_accessible_role(gtk::AccessibleRole::Heading);
+        name.set_selectable(true);
         let state = label(&["ac-pill"]);
         state.set_valign(gtk::Align::Center);
         let rec = label(&["ac-pill"]);
@@ -891,38 +1267,52 @@ impl Detail {
                 .map(|(pid, name)| (Target::Session(*pid), name.clone()))
         });
         let title = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        title.append(&icon);
+        title.add_css_class("detail-title");
+        title.append(&glyph);
         title.append(&name);
         title.append(&state);
         title.append(&rec);
-        title.append(&actions);
+        // The pills hug the name; the buttons go to the far edge.
+        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        spacer.set_hexpand(true);
+        title.append(&spacer);
 
-        let identity = label(&["detail-meta"]);
-        identity.set_ellipsize(gtk::pango::EllipsizeMode::End);
-        let cwd = label(&["detail-meta", "monospace"]);
-        cwd.set_ellipsize(gtk::pango::EllipsizeMode::Start);
-        cwd.set_hexpand(true);
-        let herdr = label(&["detail-meta", "numeric"]);
-        let ident = adw::WrapBox::builder()
-            .child_spacing(16)
-            .line_spacing(2)
-            .build();
-        ident.append(&identity);
-        ident.append(&cwd);
-        ident.append(&herdr);
+        // Selecionavel para copiar; quebra em vez de elipse, que cortaria o
+        // que se copia.
+        let session_id_caption = label(&["detail-caption"]);
+        session_id_caption.set_label("Session id");
+        session_id_caption.set_accessible_role(gtk::AccessibleRole::Presentation);
+        let session_id = label(&["detail-value", "monospace"]);
+        session_id.set_selectable(true);
+        session_id.set_wrap(true);
+        session_id.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+        let session_id_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        session_id_row.append(&session_id_caption);
+        session_id_row.append(&session_id);
+        let pid_caption = label(&["detail-caption"]);
+        pid_caption.set_label("Pid");
+        pid_caption.set_accessible_role(gtk::AccessibleRole::Presentation);
+        let pid_value = label(&["detail-value", "numeric"]);
+        pid_value.set_selectable(true);
+        let pid_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        pid_row.append(&pid_caption);
+        pid_row.append(&pid_value);
 
         let session = Facts::new(&SESSION_FACTS);
         let face = gtk::Box::new(gtk::Orientation::Vertical, 6);
         face.add_css_class("detail-face");
-        face.append(&title);
-        face.append(&ident);
         let reason = label(&["detail-note"]);
+        reason.set_xalign(0.0);
         reason.set_wrap(true);
         reason.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         reason.set_selectable(true);
-        face.append(&reason);
-        face.append(&session.widget);
-        let controls = gtk::Box::new(gtk::Orientation::Vertical, 8);
+        let tail = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        tail.add_css_class("detail-tail");
+        // The fold keeps identifiers only; everything else is in the open.
+        tail.append(&session_id_row);
+        tail.append(&pid_row);
+        let runs = Facts::new(&RUNS_FACTS);
+        runs.widget.add_css_class("detail-block");
         let focus = gtk::Button::with_label("Focus terminal");
         focus.set_halign(gtk::Align::Start);
         focus.set_size_request(44, 44);
@@ -931,11 +1321,37 @@ impl Detail {
         focus_reason.set_wrap(true);
         focus_reason.set_wrap_mode(gtk::pango::WrapMode::WordChar);
         focus_reason.set_selectable(true);
-        controls.append(&focus);
-        controls.append(&focus_reason);
+        focus_reason.set_visible(false);
         let session_controls = actions_ui::session_control::SessionControls::new(live);
-        controls.append(&session_controls.widget);
-        face.append(&controls);
+        // The page header repeats Handoff and Compact (shown only while the
+        // detail is a pushed page): the public controls API has no second
+        // instance, so each copy forwards its click to the real button.
+        let header = adw::HeaderBar::new();
+        for (short, long) in [("Compact", "Compact…"), ("Handoff", "Handoff…")] {
+            let target = descendants(session_controls.widget.upcast_ref())
+                .into_iter()
+                .filter_map(|w| w.downcast::<gtk::Button>().ok())
+                .find(|b| b.label().as_deref() == Some(long));
+            let Some(target) = target else { continue };
+            let copy = gtk::Button::with_label(short);
+            target
+                .bind_property("sensitive", &copy, "sensitive")
+                .sync_create()
+                .build();
+            copy.connect_clicked(move |_| target.emit_clicked());
+            header.pack_end(&copy);
+        }
+        // Focus sits on the title row beside the actions menu; its feedback
+        // (the reason it is off, or the result) stays under the meta line.
+        title.append(&focus);
+        title.append(&actions);
+        let more = gtk::Expander::new(Some("Session details"));
+        more.add_css_class("detail-more");
+        more.set_child(Some(&tail));
+        face.append(&title);
+        face.append(&meta);
+        face.append(&focus_reason);
+        face.append(&reason);
         let focus_target: Rc<RefCell<Option<(Endpoint, FocusTarget)>>> = Rc::default();
         let focusing = Rc::new(Cell::new(false));
         let (current, busy, feedback) =
@@ -949,7 +1365,7 @@ impl Detail {
                 return;
             };
             button.set_sensitive(false);
-            feedback.set_label("Checking terminal identity…");
+            set_feedback(&feedback, "Checking terminal identity…");
             let identity = (target.pid, target.starttime);
             let (tx, rx) = std::sync::mpsc::channel();
             std::thread::spawn(move || {
@@ -971,14 +1387,17 @@ impl Detail {
                     .as_ref()
                     .is_some_and(|(_, t)| (t.pid, t.starttime) == identity)
                 {
-                    reason.set_label(&match result {
-                        Ok(()) => {
-                            "Terminal pane focused (not desktop window activation).".to_string()
-                        }
-                        Err(e) => format!(
-                            "Terminal focus not confirmed: {e:?}. Refresh and retry explicitly."
-                        ),
-                    });
+                    set_feedback(
+                        &reason,
+                        &match result {
+                            Ok(()) => {
+                                "Terminal pane focused (not desktop window activation).".to_string()
+                            }
+                            Err(e) => format!(
+                                "Terminal focus not confirmed: {e:?}. Refresh and retry explicitly."
+                            ),
+                        },
+                    );
                 }
                 gtk::glib::ControlFlow::Break
             });
@@ -994,32 +1413,41 @@ impl Detail {
 
         let procs_head = label(&["detail-section"]);
         procs_head.set_accessible_role(gtk::AccessibleRole::Heading);
+        // One short caption on the heading's row; the accounting is its tooltip.
         let note = label(&["detail-note"]);
-        note.set_label(
-            "PSS splits shared pages and adds up to the session; RSS counts them in \
-             every process, so it is per process and never summed.",
-        );
-        note.set_wrap(true);
-        note.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-        let table = ProcessTable::new();
-        table.widget.add_css_class("detail-table");
-        // O painel tem raio: as linhas sao recortadas nele.
-        table.widget.set_overflow(gtk::Overflow::Hidden);
-        table.widget.set_min_content_height(180);
+        note.set_label("memory: in RAM + swapped out (hatched)");
+        note.set_tooltip_text(Some(
+            "Memory: in RAM + swapped out (hatched), against the largest process. PSS \
+             splits shared pages and adds up to the session; RSS, per process and never \
+             summed, is in each row's tooltip.",
+        ));
+        note.set_hexpand(true);
+        note.set_xalign(1.0);
+        note.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let procs_row = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+        procs_row.add_css_class("detail-procs-head");
+        procs_row.append(&procs_head);
+        procs_row.append(&note);
+        let procs = Rc::new(ProcessBars::new(live));
+        procs.widget.add_css_class("detail-procs");
 
         let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
         body.add_css_class("session-detail");
+        // REVIEW_RR1 order: header with the verdict and its reason, Handoff
+        // and Compact, where it runs, the context and token panel, then the
+        // resource figures, charts and processes; the folded IDs last.
         body.append(&face);
-        body.append(&history.head);
-        body.append(&history.note);
-        body.append(&history.panel);
+        body.append(&session_controls.widget);
+        body.append(&runs.widget);
         body.append(&transcript_head);
         body.append(&transcript.widget);
         body.append(&history.cockpit_note);
         body.append(&history.cockpit_panel);
-        body.append(&procs_head);
-        body.append(&note);
-        body.append(&table.widget);
+        body.append(&session.widget);
+        body.append(&history.panel);
+        body.append(&procs_row);
+        body.append(&procs.widget);
+        body.append(&more);
 
         // As colunas seguem a largura do detalhe, nao a da janela.
         let scroll = gtk::ScrolledWindow::builder()
@@ -1033,17 +1461,34 @@ impl Detail {
             .build();
         // [largo, medio]: no medio (o ultimo que casa vence no bin) o corpo
         // tambem aperta o ar (sessions.css, `.session-detail.narrow`).
-        let bps = table.breakpoints();
-        if let Some(medium) = bps.last() {
-            medium.add_setter(
-                &body,
-                "css-classes",
-                Some(&["session-detail", "narrow"].to_value()),
-            );
+        // Narrow detail: less air (sessions.css, `.session-detail.narrow`)
+        // and process rows without pid and state.
+        let narrow = adw::Breakpoint::new(adw::BreakpointCondition::new_length(
+            adw::BreakpointConditionLengthType::MaxWidth,
+            NARROW_MAX_SP,
+            adw::LengthUnit::Sp,
+        ));
+        narrow.add_setter(
+            &body,
+            "css-classes",
+            Some(&["session-detail", "narrow"].to_value()),
+        );
+        // The title row has no room for the long label: the name keeps it.
+        narrow.add_setter(&focus, "label", Some(&"Focus".to_value()));
+        for on in [true, false] {
+            let p = Rc::downgrade(&procs);
+            let f = move |_: &adw::Breakpoint| {
+                if let Some(p) = p.upgrade() {
+                    p.set_compact(on);
+                }
+            };
+            if on {
+                narrow.connect_apply(f);
+            } else {
+                narrow.connect_unapply(f);
+            }
         }
-        for bp in bps {
-            bin.add_breakpoint(bp);
-        }
+        bin.add_breakpoint(narrow);
 
         let stack = gtk::Stack::new();
         stack.add_named(&none, Some(STACK_NONE));
@@ -1052,7 +1497,8 @@ impl Detail {
         stack.set_visible_child_name(STACK_NONE);
 
         let toolbar = adw::ToolbarView::new();
-        toolbar.add_top_bar(&adw::HeaderBar::new());
+        toolbar.add_css_class("detail-view");
+        toolbar.add_top_bar(&header);
         toolbar.set_content(Some(&stack));
         let page = adw::NavigationPage::builder()
             .title("Session")
@@ -1074,27 +1520,115 @@ impl Detail {
             focus_reason,
             focus_target,
             focusing,
+            reason_shown: Cell::new(false),
+            request_gen: Cell::new(0),
             shown: RefCell::new(None),
-            icon,
+            glyph,
+            meta,
+            more,
             name,
             state,
             rec,
             reason,
-            identity,
-            cwd,
-            herdr,
+            session_id_row,
+            session_id,
             session,
+            runs,
+            pid_value,
             transcript_head,
             transcript,
             procs_head,
             history,
-            table: RefCell::new(table),
+            procs,
             target,
             actions,
         }
     }
 
     /// Troca a sessao mostrada e ja desenha com o ultimo snapshot.
+    /// Starts the list's Action for session `pid` through the same control
+    /// button the detail shows, so the confirmation and checks stay in one
+    /// place. The row's click selects `pid`, and the detail follows that
+    /// selection in an idle, then rediscovers the control off-thread: the
+    /// request waits until the detail shows `pid` with its control up, never
+    /// pressing another session's. `unavailable` runs when that does not
+    /// happen within [`REQUEST_WAIT`], and at once for End, which has no
+    /// control here. A newer request replaces a pending one.
+    pub fn request(
+        self: &Rc<Self>,
+        pid: u32,
+        op: actions_ui::RowOp,
+        unavailable: impl FnOnce() + 'static,
+    ) {
+        self.request_within(pid, op, REQUEST_WAIT, unavailable);
+    }
+
+    fn request_within(
+        self: &Rc<Self>,
+        pid: u32,
+        op: actions_ui::RowOp,
+        wait: std::time::Duration,
+        unavailable: impl FnOnce() + 'static,
+    ) {
+        let generation = self.request_gen.get().wrapping_add(1);
+        self.request_gen.set(generation);
+        if !matches!(op, actions_ui::RowOp::Compact | actions_ui::RowOp::Handoff) {
+            unavailable();
+            return;
+        }
+        if self.pid.get() == Some(pid) && self.click_control(op) {
+            return;
+        }
+        let until = std::time::Instant::now() + wait;
+        let weak = Rc::downgrade(self);
+        let mut unavailable = Some(unavailable);
+        // Set once the detail shows `pid`: moving away after that drops the
+        // request, the user picked another session.
+        let mut reached = self.pid.get() == Some(pid);
+        gtk::glib::timeout_add_local(std::time::Duration::from_millis(50), move || {
+            let Some(detail) = weak.upgrade() else {
+                return gtk::glib::ControlFlow::Break;
+            };
+            if detail.request_gen.get() != generation {
+                return gtk::glib::ControlFlow::Break;
+            }
+            if detail.pid.get() == Some(pid) {
+                reached = true;
+                if detail.click_control(op) {
+                    return gtk::glib::ControlFlow::Break;
+                }
+            } else if reached {
+                return gtk::glib::ControlFlow::Break;
+            }
+            if std::time::Instant::now() < until {
+                return gtk::glib::ControlFlow::Continue;
+            }
+            if let Some(f) = unavailable.take() {
+                f();
+            }
+            gtk::glib::ControlFlow::Break
+        });
+    }
+
+    /// The session the detail shows, for the window's tests.
+    #[cfg(test)]
+    pub fn shown_pid(&self) -> Option<u32> {
+        self.pid.get()
+    }
+
+    fn click_control(&self, op: actions_ui::RowOp) -> bool {
+        let long = match op {
+            actions_ui::RowOp::Compact => "Compact…",
+            actions_ui::RowOp::Handoff => "Handoff…",
+            _ => return false,
+        };
+        let target = descendants(self.session_controls.widget.upcast_ref())
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Button>().ok())
+            .find(|b| b.label().as_deref() == Some(long) && b.is_sensitive());
+        target.map(|b| b.emit_clicked()).is_some()
+    }
+
     pub fn show(
         &self,
         pid: Option<u32>,
@@ -1103,7 +1637,8 @@ impl Detail {
         home: Option<&str>,
     ) {
         if self.pid.replace(pid) != pid {
-            self.focus_reason.set_label("");
+            set_feedback(&self.focus_reason, "");
+            self.reason_shown.set(false);
             self.focus_target.replace(None);
             self.focus.set_sensitive(false);
             self.starttime.set(
@@ -1115,7 +1650,7 @@ impl Detail {
                     .and_then(|s| s.overlay.as_ref())
                     .and_then(|o| o.agent_session_id.clone()),
             );
-            self.table.borrow_mut().clear();
+            self.procs.clear();
             self.shown.replace(None);
         }
         match snap {
@@ -1162,7 +1697,7 @@ impl Detail {
                     .set_description(Some(&gtk::glib::markup_escape_text(&format!(
                         "{name} is no longer running. Choose another session in the list."
                     ))));
-                self.table.borrow_mut().clear();
+                self.procs.clear();
                 self.set_page(STACK_ENDED);
             }
             return;
@@ -1183,15 +1718,12 @@ impl Detail {
             Ok(target) => {
                 self.focus_target.replace(Some(target));
                 self.focus.set_sensitive(!self.focusing.get());
-                if !self.focusing.get() && self.focus_reason.label().is_empty() {
-                    self.focus_reason
-                        .set_label("Focus the explicitly identified herdr pane.");
-                }
+                self.set_focus_state(None);
             }
             Err(reason) => {
                 self.focus_target.replace(None);
                 self.focus.set_sensitive(false);
-                self.focus_reason.set_label(reason);
+                self.set_focus_state(Some(reason));
             }
         }
         self.history.set(Pending {
@@ -1200,14 +1732,49 @@ impl Detail {
             source,
             interval_ms: snap.interval_ms,
         });
-        let mut table = self.table.borrow_mut();
-        table.apply(s, source);
-        let head = match table.len() {
+        self.procs.apply(s, source, tone(Group::of(s)));
+        let head = match self.procs.len() {
             1 => "Processes · 1".to_string(),
             n => format!("Processes · {n}"),
         };
         set_label(&self.procs_head, &head);
         self.set_page(STACK_SESSION);
+    }
+
+    /// Feedback of the focus action under the meta line; the line is there
+    /// only while there is something to say.
+    #[cfg(test)]
+    fn show_focus_feedback(&self, text: &str) {
+        set_feedback(&self.focus_reason, text);
+    }
+
+    /// Why the button works or does not: its tooltip and spoken description,
+    /// not a standing line under the header.
+    fn set_focus_hint(&self, hint: &str) {
+        if self.focus.tooltip_text().as_deref() != Some(hint) {
+            self.focus.set_tooltip_text(Some(hint));
+            self.focus
+                .update_property(&[gtk::accessible::Property::Description(hint)]);
+        }
+    }
+
+    /// The focus button on or off. Off, the reason is visible text (a tooltip
+    /// alone does not reach keyboard or touch); on, the generic hint is only
+    /// the tooltip and the line goes away, leaving a click's feedback alone.
+    fn set_focus_state(&self, off_reason: Option<&str>) {
+        match off_reason {
+            Some(reason) => {
+                self.set_focus_hint(reason);
+                set_feedback(&self.focus_reason, reason);
+                self.reason_shown.set(true);
+            }
+            None => {
+                self.set_focus_hint("Focus the explicitly identified herdr pane.");
+                if self.reason_shown.replace(false) {
+                    set_feedback(&self.focus_reason, "");
+                }
+            }
+        }
     }
 
     fn set_page(&self, name: &str) {
@@ -1231,20 +1798,7 @@ impl Detail {
     fn render(&self, t: &DetailText) {
         let g = Group::from_rank(t.group);
         let mux = g == Group::Multiplexer;
-        let icon = if mux {
-            "view-grid-symbolic"
-        } else {
-            "utilities-terminal-symbolic"
-        };
-        if self.icon.icon_name().as_deref() != Some(icon) {
-            self.icon.set_icon_name(Some(icon));
-        }
-        let tone = match g {
-            Group::Busy => "busy",
-            Group::Blocked => "blocked",
-            _ => "quiet",
-        };
-        set_classes(&self.icon, &["session-icon", tone]);
+        self.glyph.show(t.group);
         set_label(&self.name, &t.name);
         set_tip(&self.name, &t.name);
 
@@ -1265,17 +1819,23 @@ impl Detail {
         );
         self.reason.set_visible(!mux);
         set_classes(&self.rec, &["ac-pill", "rec", rec_class(t.rec)]);
-        self.rec.set_visible(!mux);
+        self.rec.set_visible(!mux && t.rec_text != DASH);
         // O core recusa o servidor herdr: sem menu que so falharia.
         self.actions.set_visible(!mux);
+        // O herdr nunca reporta id de sessao: a linha so confundiria.
+        if let Some(row) = self.session_id.parent() {
+            row.set_visible(!mux);
+        }
         self.target.replace(Some((t.pid, t.name.clone())));
 
-        set_label(&self.identity, &t.identity);
-        set_label(&self.cwd, &t.cwd);
-        set_tip(&self.cwd, &t.cwd);
-        set_label(&self.herdr, &t.herdr);
-        set_tip(&self.herdr, &t.herdr_tooltip);
-        self.herdr.set_visible(!t.herdr.is_empty());
+        set_label(&self.meta, &t.meta_line());
+        set_tip(&self.meta, &t.meta_line());
+        self.runs.set(&t.runs, &RUNS_FACTS);
+        set_label(&self.pid_value, &t.pid.to_string());
+        set_label(&self.session_id, &t.session_id.value);
+        set_tip(&self.session_id_row, &t.session_id.tooltip);
+        self.session_id
+            .update_property(&[gtk::accessible::Property::Label(&t.session_id_a11y)]);
 
         self.session.set(&t.session, &SESSION_FACTS);
         self.transcript_head.set_visible(t.transcript.is_some());
@@ -1340,6 +1900,7 @@ fn focus_capability(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::state_glyph::Shape;
     use agentcenter_core::adapters::AgentRole;
     use agentcenter_core::overlay::{HerdrOverlay, SessionOverlay};
 
@@ -1532,6 +2093,63 @@ mod tests {
         assert_eq!(t.identity, "herdr · multiplexer");
     }
 
+    /// Native session id of the fixtures: a Claude Code uuid shape, made up.
+    const SID: &str = "5d2c8e1a-7b3f-4c9e-a1d0-6f4b2e8c9a17";
+
+    /// The detail names the session as the list does and carries the id the
+    /// agent itself reports (Claude Code uuid, pi session file id, Codex id).
+    #[test]
+    fn identity_shows_the_list_name_and_the_native_session_id() {
+        for agent in ["claude", "pi", "codex"] {
+            let mut s = session(AgentRole::Agent);
+            s.agent = agent.into();
+            s.overlay = Some(SessionOverlay {
+                name: Some("refactor sampler".into()),
+                agent_session_id: Some(SID.into()),
+                ..Default::default()
+            });
+            let t = DetailText::of(&s, IoStallSource::Delayacct, None);
+            let row = Row::from_session(&s, IoStallSource::Delayacct, None);
+            assert_eq!(t.name, row.name, "{agent}: the name the list shows");
+            assert_eq!(t.name, "refactor sampler");
+            assert_eq!(t.session_id.value, SID, "{agent}");
+            assert!(!t.session_id.tooltip.is_empty(), "{agent}");
+            assert_eq!(t.session_id_a11y, format!("Session id {SID}"), "{agent}");
+        }
+    }
+
+    #[test]
+    fn missing_or_blank_session_id_is_a_dash_and_hostile_text_is_sanitized() {
+        let s = session(AgentRole::Agent);
+        let t = DetailText::of(&s, IoStallSource::Delayacct, None);
+        assert_eq!(
+            t.name, "kiln",
+            "no overlay name: the list falls back to the cwd"
+        );
+        assert_eq!(t.session_id.value, DASH, "absent is a dash, never empty");
+        assert!(!t.session_id.tooltip.is_empty());
+        assert_eq!(t.session_id_a11y, "Session id unavailable");
+
+        let mut blank = session(AgentRole::Agent);
+        blank.overlay = Some(SessionOverlay {
+            agent_session_id: Some("   ".into()),
+            ..Default::default()
+        });
+        let t = DetailText::of(&blank, IoStallSource::Delayacct, None);
+        assert_eq!(t.session_id.value, DASH, "blank is not an id");
+
+        let mut hostile = session(AgentRole::Agent);
+        hostile.overlay = Some(SessionOverlay {
+            agent_session_id: Some("abc\u{202e}def".into()),
+            ..Default::default()
+        });
+        let t = DetailText::of(&hostile, IoStallSource::Delayacct, None);
+        assert_eq!(
+            t.session_id.value, "abc\\u{202e}def",
+            "bidi override escaped"
+        );
+    }
+
     fn history_of(s: &Session, samples: usize) -> History {
         let mut h = History::new(HISTORY_LEN);
         for _ in 0..samples {
@@ -1542,10 +2160,12 @@ mod tests {
 
     #[test]
     fn no_history_draws_empty_tracks_and_dashes() {
-        let data = StripData::of(None, IoStallSource::Delayacct, "Last 10 minutes");
+        let data = ChartData::of(None, IoStallSource::Delayacct, "Last 10 minutes");
+        assert_eq!(data.each_ref().map(|d| d.title), CHART_TITLES);
         for d in &data {
-            assert_eq!(d.readout, DASH);
-            assert!(d.series.is_empty());
+            assert_eq!(d.value, DASH);
+            assert!(d.primary.is_empty());
+            assert!(!d.alert);
             assert!(
                 d.a11y.contains("last 10 minutes: no history yet"),
                 "{}",
@@ -1556,36 +2176,104 @@ mod tests {
 
     #[test]
     fn strips_scale_to_the_peak_and_flag_the_stall_limit() {
+        use crate::timeline::Scale;
         let mut s = session(AgentRole::Agent);
         s.cpu_pct = Some(140.0);
         s.pss_bytes = Some(704 * 1024 * 1024);
         s.swap_pss_bytes = Some(10 * 1024 * 1024);
         s.stall_pct = Some(12.0);
         let h = history_of(&s, 3);
-        let data = StripData::of(h.get(42), IoStallSource::Delayacct, "Last 10 minutes");
+        let data = ChartData::of(h.get(42), IoStallSource::Delayacct, "Last 10 minutes");
         let [cpu, mem, disk, stall] = &data;
-        assert_eq!((cpu.max, cpu.readout.as_str()), (200.0, "max 140%"));
-        assert_eq!(cpu.series[0].len(), 3);
-        assert_eq!(mem.max, 1024.0 * 1024.0 * 1024.0);
-        assert_eq!(mem.readout, "max 704 MiB");
-        assert!(
-            mem.tooltip.contains("swap PSS (dashed): max 10 MiB"),
-            "{}",
-            mem.tooltip
+        assert_eq!(
+            cpu.scale,
+            Scale::Nice {
+                floor: 10.0,
+                binary: false
+            }
         );
-        // Sem leitura de disco: trilho e travessao, nunca 0.
-        assert_eq!(disk.readout, DASH);
-        assert_eq!(stall.limits, [STALL_LIMIT_PCT]);
+        assert_eq!(cpu.top(), 200.0);
+        assert_eq!(cpu.primary.len(), 3);
+        assert_eq!(
+            (cpu.value.as_str(), cpu.sub.as_str()),
+            ("140 %", "max 140 % \u{b7} mean 140 %")
+        );
+        // Below 1 GiB the chart counts in MiB, on the unit scale.
+        assert_eq!(mem.unit, "MiB");
+        assert_eq!(
+            (mem.primary[0], mem.band.as_deref()),
+            (704.0, Some(&[10.0f32; 3][..]))
+        );
+        // 714 MiB reads 0..800 (steps of 1, 1.5, 2, 3, 4, 6, 8), no longer a
+        // power of two: the mock's 1.1 GiB reads 0..1.5.
+        assert_eq!(mem.top(), 800.0);
+        assert_eq!(mem.value, "714 MiB");
+        assert_eq!(mem.sub, "solid: in RAM 704 \u{b7} hatched: swapped out 10");
+        // No disk reading: track and dash, never 0.
+        assert_eq!(disk.value, DASH);
+        assert!(disk.second.is_some(), "write is the dashed series");
+        assert_eq!(stall.threshold, Some(STALL_LIMIT_PCT));
+        assert_eq!(stall.top(), 20.0, "floor 20 keeps the 10 % line mid-chart");
+        assert_eq!(stall.value, "12 %");
         assert!(stall.alert, "12% is over the 10% limit");
-        assert!(stall.a11y.starts_with("Stall, last 10 minutes: "));
+        assert!(
+            stall.a11y.starts_with("I/O stall, last 10 minutes: "),
+            "{}",
+            stall.a11y
+        );
 
         s.threads_d = Some(3);
         s.stall_pct = None;
         let h = history_of(&s, 2);
-        let [.., stall] = StripData::of(h.get(42), IoStallSource::DState, "Last 10 minutes");
+        let [.., stall] = ChartData::of(h.get(42), IoStallSource::DState, "Last 10 minutes");
         assert_eq!(
-            (stall.readout.as_str(), stall.limits.is_empty(), stall.alert),
-            ("max D:3", true, false)
+            (stall.value.as_str(), stall.threshold, stall.alert),
+            ("D:3", None, false)
+        );
+    }
+
+    /// From 1 GiB up the memory chart counts in GiB, two decimals, like the
+    /// mock (`1.10 GiB`, in RAM 0.55, swapped out 0.55).
+    #[test]
+    fn memory_counts_in_gib_from_one_gib() {
+        let mut s = session(AgentRole::Agent);
+        s.pss_bytes = Some(1536 * 1024 * 1024);
+        s.swap_pss_bytes = Some(512 * 1024 * 1024);
+        let h = history_of(&s, 2);
+        let [_, mem, ..] = ChartData::of(h.get(42), IoStallSource::Delayacct, "Last 10 minutes");
+        assert_eq!(mem.unit, "GiB");
+        assert_eq!(mem.primary, [1.5, 1.5]);
+        assert_eq!(mem.value, "2.00 GiB");
+        assert_eq!(
+            mem.sub,
+            "solid: in RAM 1.50 \u{b7} hatched: swapped out 0.50"
+        );
+        assert_eq!(mem.top(), 2.0);
+    }
+
+    /// Disk: read solid, write dashed, both now in one unit picked by the
+    /// peak (`2.4 / 0.5` MiB/s; KiB/s below 1 MiB/s).
+    #[test]
+    fn disk_reads_read_over_write_in_one_unit() {
+        let mut s = session(AgentRole::Agent);
+        s.read_bps = Some(2.4 * MIB);
+        s.write_bps = Some(0.5 * MIB);
+        let h = history_of(&s, 2);
+        let [_, _, disk, _] = ChartData::of(h.get(42), IoStallSource::Delayacct, "Last 10 minutes");
+        assert_eq!(
+            (disk.unit.as_str(), disk.value.as_str()),
+            ("MiB/s", "2.4 / 0.5")
+        );
+        assert_eq!(disk.sub, "solid: read \u{b7} dashed: write");
+        assert_eq!(disk.second.as_deref(), Some(&[0.5f32, 0.5][..]));
+
+        s.read_bps = Some(300.0 * 1024.0);
+        s.write_bps = Some(0.0);
+        let h = history_of(&s, 2);
+        let [_, _, disk, _] = ChartData::of(h.get(42), IoStallSource::Delayacct, "Last 10 minutes");
+        assert_eq!(
+            (disk.unit.as_str(), disk.value.as_str()),
+            ("KiB/s", "300 / 0")
         );
     }
 
@@ -1854,5 +2542,746 @@ mod tests {
             assert!(!detail.history.cockpit_panel.is_visible());
             assert!(!detail.history.cockpit_note.is_visible());
         });
+    }
+
+    /// The detail of the typical fixture's busiest session draws four
+    /// 10-minute timelines (axis, stall threshold) and one hatched bar per
+    /// process, largest memory first; the action menus only exist live.
+    #[test]
+    fn detail_draws_four_timelines_and_process_bars_from_the_typical_fixture() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let snap = crate::machine_history::tests::fixture("tipico-40");
+            let pid = crate::window::pick_detail("busiest", &snap).expect("a session");
+            let s = snap.sessions.iter().find(|s| s.pid == pid).unwrap();
+            let mut h = History::new(HISTORY_LEN);
+            for _ in 0..5 {
+                h.record(&snap.sessions, |_| 1);
+            }
+            let h = Arc::new(h);
+            for live in [true, false] {
+                let detail = Detail::new(live);
+                detail.show(Some(pid), Some(&snap), Some(&h), None);
+                detail.history.draw();
+                let charts = &detail.history.charts;
+                assert_eq!(charts.len(), CHART_TITLES.len());
+                for (c, title) in charts.iter().zip(CHART_TITLES) {
+                    assert_eq!(c.title.label(), title);
+                    assert_eq!(c.timeline.height_request(), crate::timeline::DETAIL_SIZE.1);
+                    let (_, axis) = c.timeline.labels();
+                    assert_eq!(axis, ["\u{2212}10 min", "\u{2212}5", "now"]);
+                }
+                assert_ne!(charts[0].value.label(), DASH, "CPU has readings");
+                assert!(charts[1].value.label().ends_with("iB"), "memory has a unit");
+                assert_eq!(charts[3].timeline.threshold(), Some(STALL_LIMIT_PCT));
+
+                let rows = detail.procs.rows();
+                assert_eq!(rows.len(), s.processes.len());
+                let largest = s
+                    .processes
+                    .iter()
+                    .max_by_key(|p| p.pss_bytes.unwrap_or(0) + p.swap_pss_bytes.unwrap_or(0))
+                    .unwrap();
+                assert_eq!(rows[0].pid, largest.pid, "largest memory first");
+                let (p, w) = rows[0].bar.fractions().expect("a bar");
+                assert!((p + w - 1.0).abs() < 1e-9, "the largest fills the bar");
+                assert!(
+                    rows.iter()
+                        .any(|r| r.bar.fractions().is_some_and(|(_, w)| w > 0.0)),
+                    "some process has swapped memory, hatched"
+                );
+                assert_eq!(
+                    rows.iter().all(|r| r.menu.is_some()),
+                    live,
+                    "per-process actions only live"
+                );
+                assert_eq!(
+                    detail.procs_head.label(),
+                    format!("Processes \u{b7} {}", s.processes.len())
+                );
+            }
+        });
+    }
+
+    /// The labels existed from birth with the 10-minute text, so a check on
+    /// their text passed while the axis stayed hidden: the charts must show it.
+    #[test]
+    fn detail_charts_show_the_time_axis_and_the_strip_does_not() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let snap = crate::machine_history::tests::fixture("tipico-40");
+            let pid = crate::window::pick_detail("busiest", &snap).expect("a session");
+            let mut h = History::new(HISTORY_LEN);
+            h.record(&snap.sessions, |_| 1);
+            let detail = Detail::new(false);
+            detail.show(Some(pid), Some(&snap), Some(&Arc::new(h)), None);
+            detail.history.draw();
+            for c in &detail.history.charts {
+                assert!(c.timeline.axis_visible(), "{}", c.title.label());
+            }
+            let strip = Timeline::new(crate::timeline::STRIP_SIZE.0, crate::timeline::STRIP_SIZE.1);
+            assert!(!strip.axis_visible(), "the machine strip stays bare");
+        });
+    }
+
+    /// The panel shows name and native id as text a person can select and
+    /// copy, and the id carries a spoken label (a bare uuid means nothing).
+    #[test]
+    fn detail_name_and_session_id_are_selectable_and_labelled() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let mut s = session(AgentRole::Agent);
+            s.starttime = Some(1);
+            s.overlay = Some(SessionOverlay {
+                name: Some("refactor sampler".into()),
+                agent_session_id: Some(SID.into()),
+                ..Default::default()
+            });
+            let detail = Detail::new(false);
+            detail.show(Some(42), Some(&snapshot_of(vec![s])), None, None);
+            assert_eq!(detail.name.label(), "refactor sampler");
+            assert!(detail.name.is_selectable(), "the name can be copied");
+            assert_eq!(detail.session_id.label(), SID);
+            assert!(detail.session_id.is_selectable(), "the id can be copied");
+            assert!(detail.session_id.is_visible());
+            // Copied whole: wrapped, never cut by an ellipsis.
+            assert_eq!(
+                detail.session_id.ellipsize(),
+                gtk::pango::EllipsizeMode::None
+            );
+            assert!(detail.session_id.wraps());
+            // The id is folded under "Session details" since the header
+            // redesign: it is part of the panel once that is open.
+            detail.more.set_expanded(true);
+            assert!(
+                detail.session_id.is_ancestor(&detail.page),
+                "the id row is part of the panel"
+            );
+            assert_eq!(
+                spoken_label(&detail.session_id, &format!("Session id {SID}")),
+                None,
+                "the id is announced with its caption"
+            );
+
+            // Another session, no id yet: a dash, never the previous id.
+            let mut bare = session(AgentRole::Agent);
+            bare.pid = 43;
+            bare.starttime = Some(1);
+            detail.show(Some(43), Some(&snapshot_of(vec![bare])), None, None);
+            assert_eq!(detail.name.label(), "kiln");
+            assert_eq!(detail.session_id.label(), DASH);
+            assert_eq!(
+                spoken_label(&detail.session_id, "Session id unavailable"),
+                None
+            );
+
+            // A multiplexer row has no session id to show.
+            let mut mux = session(AgentRole::Multiplexer);
+            mux.pid = 44;
+            mux.starttime = Some(1);
+            detail.show(Some(44), Some(&snapshot_of(vec![mux])), None, None);
+            assert!(!detail.session_id.parent().unwrap().is_visible());
+        });
+    }
+
+    fn described() -> Session {
+        let mut s = session(AgentRole::Agent);
+        s.cwd = Some("/home/dev/src/atlas".into());
+        s.overlay = Some(SessionOverlay {
+            model: Some("claude-opus-5-5".into()),
+            context_pct: Some(44.0),
+            kind: Some("interactive".into()),
+            ..Default::default()
+        });
+        s
+    }
+
+    /// The header's one meta line, as the B mock reads it.
+    #[test]
+    fn header_meta_line_reads_like_the_mock() {
+        let t = DetailText::of(&described(), IoStallSource::Delayacct, Some("/home/dev"));
+        assert_eq!(
+            t.meta_line(),
+            "claude \u{b7} claude-opus-5-5 \u{b7} pid 42 \u{b7} ~/src/atlas \u{b7} 0 processes \u{b7} context 44%"
+        );
+    }
+
+    /// What the transcript has not said is left out, never shown as a dash.
+    #[test]
+    fn header_meta_line_skips_what_is_not_known() {
+        let t = DetailText::of(
+            &session(AgentRole::Agent),
+            IoStallSource::Delayacct,
+            Some("/home/dev"),
+        );
+        assert_eq!(
+            t.meta_line(),
+            "claude \u{b7} pid 42 \u{b7} ~/src/kiln \u{b7} 0 processes"
+        );
+        let mut mux = session(AgentRole::Multiplexer);
+        mux.agent = "herdr".into();
+        let t = DetailText::of(&mux, IoStallSource::Delayacct, Some("/home/dev"));
+        assert!(
+            t.meta_line().starts_with("herdr \u{b7} pid 42"),
+            "{}",
+            t.meta_line()
+        );
+        assert!(!t.meta_line().contains("context"));
+    }
+
+    /// Header: state glyph, 20 px name, state word and one meta line on top;
+    /// the focus button sits in the title row, and the long tail (id, facts,
+    /// controls) is folded behind an expander that starts closed.
+    #[test]
+    fn detail_header_has_glyph_name_one_meta_line_and_folded_tail() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = Detail::new(false);
+            let mut busy = described();
+            busy.starttime = Some(1);
+            let snap = snapshot_of(vec![busy]);
+            detail.show(Some(42), Some(&snap), None, None);
+            let text = DetailText::of(&snap.sessions[0], IoStallSource::Delayacct, None);
+            assert_eq!(detail.meta.label(), text.meta_line());
+            assert!(detail.meta.is_visible());
+            assert_eq!(detail.meta.lines(), 1);
+            assert_eq!(
+                detail.meta.ellipsize(),
+                gtk::pango::EllipsizeMode::End,
+                "one line, never wrapped"
+            );
+            assert!(detail.glyph.is_ancestor(&detail.page));
+            assert_eq!(
+                detail.glyph.parent(),
+                detail.name.parent(),
+                "glyph and name share the title row"
+            );
+            assert_eq!(
+                detail.focus.parent(),
+                detail.name.parent(),
+                "the focus button is on the title row"
+            );
+            assert!(!detail.more.is_expanded(), "the tail starts folded");
+            // GTK parents the child of a closed expander only when it opens.
+            detail.more.set_expanded(true);
+            assert!(detail.session_id.is_ancestor(&detail.more));
+            assert!(detail.more.is_ancestor(&detail.page));
+
+            // Glyph shape follows the state, as in the list.
+            for (group, shape) in [
+                (Group::Busy, Shape::Disc),
+                (Group::Blocked, Shape::Triangle),
+                (Group::Idle, Shape::Ring),
+                (Group::Multiplexer, Shape::Grid),
+            ] {
+                let mut t = text.clone();
+                t.group = group.rank();
+                detail.render(&t);
+                assert_eq!(detail.glyph.shape(), shape, "{group:?}");
+            }
+        });
+    }
+
+    fn shown_detail(live: bool) -> Detail {
+        let detail = Detail::new(live);
+        let mut busy = described();
+        busy.starttime = Some(1);
+        let snap = snapshot_of(vec![busy]);
+        detail.show(Some(42), Some(&snap), None, None);
+        detail
+    }
+
+    /// Index, among the body's children, of the one that holds `w`.
+    fn slot(detail: &Detail, w: &impl IsA<gtk::Widget>) -> usize {
+        let body = detail
+            .name
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap();
+        let mut child = body.first_child();
+        let mut i = 0;
+        while let Some(c) = child {
+            if w.upcast_ref::<gtk::Widget>() == &c || w.is_ancestor(&c) {
+                return i;
+            }
+            child = c.next_sibling();
+            i += 1;
+        }
+        panic!("not in the detail body");
+    }
+
+    fn control_button(detail: &Detail, label: &str) -> gtk::Button {
+        descendants(detail.session_controls.widget.upcast_ref())
+            .into_iter()
+            .filter_map(|w| w.downcast::<gtk::Button>().ok())
+            .find(|b| b.label().as_deref() == Some(label))
+            .unwrap_or_else(|| panic!("no {label} button in the session controls"))
+    }
+
+    /// REVIEW_RR1 order: title, verdict pill and its reason line, Handoff and
+    /// Compact, the context and token panel, then charts and processes.
+    #[test]
+    fn detail_sections_follow_the_review_order() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = shown_detail(false);
+            let title = detail.name.parent().expect("title row");
+            let face = title.parent().expect("header");
+            assert!(
+                detail.rec.is_ancestor(&title),
+                "the verdict pill is on the title row"
+            );
+            assert!(
+                detail.reason.is_ancestor(&face),
+                "the reason line sits under the title, in the header"
+            );
+            let order = [
+                slot(&detail, &face),
+                slot(&detail, &detail.session_controls.widget),
+                slot(&detail, &detail.runs.widget),
+                slot(&detail, &detail.transcript_head),
+                slot(&detail, &detail.history.cockpit_panel),
+                slot(&detail, &detail.history.panel),
+                slot(&detail, detail.procs_head.parent().as_ref().unwrap()),
+                slot(&detail, &detail.procs.widget),
+                slot(&detail, &detail.more),
+            ];
+            assert!(
+                order.windows(2).all(|w| w[0] < w[1]),
+                "header < controls < where it runs < context < token strips < charts < processes < IDs: {order:?}"
+            );
+            assert!(
+                !detail.more.is_ancestor(&face),
+                "the tail is not in the header"
+            );
+        });
+    }
+
+    #[test]
+    fn handoff_and_compact_sit_above_the_context_panel_and_out_of_the_fold() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = shown_detail(false);
+            for label in ["Handoff…", "Compact…"] {
+                let b = control_button(&detail, label);
+                assert!(!b.is_ancestor(&detail.more), "{label} is not folded away");
+                assert!(
+                    slot(&detail, &b) < slot(&detail, &detail.transcript_head),
+                    "{label} comes before the context panel"
+                );
+            }
+        });
+    }
+
+    /// The page header carries the same two actions as the controls: its
+    /// buttons forward the click, so confirmation and discovery stay in one
+    /// place.
+    #[test]
+    fn header_handoff_and_compact_forward_to_the_session_controls() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = shown_detail(false);
+            let header = descendants(detail.toolbar.upcast_ref())
+                .into_iter()
+                .find(|w| w.is::<adw::HeaderBar>())
+                .expect("the page header");
+            for (short, long) in [("Handoff", "Handoff…"), ("Compact", "Compact…")] {
+                let copy = descendants(&header)
+                    .into_iter()
+                    .filter_map(|w| w.downcast::<gtk::Button>().ok())
+                    .find(|b| b.label().as_deref() == Some(short))
+                    .unwrap_or_else(|| panic!("no {short} in the header"));
+                let target = control_button(&detail, long);
+                let clicks = Rc::new(Cell::new(0));
+                let seen = clicks.clone();
+                target.connect_clicked(move |_| seen.set(seen.get() + 1));
+                copy.emit_clicked();
+                assert_eq!(clicks.get(), 1, "{short} reaches the control");
+                assert_eq!(
+                    copy.is_sensitive(),
+                    target.is_sensitive(),
+                    "{short} is on or off with the control"
+                );
+            }
+        });
+    }
+
+    /// Pumps the main loop for `ms`, so timeouts and idles run.
+    fn pump(ms: u64) {
+        let until = std::time::Instant::now() + std::time::Duration::from_millis(ms);
+        let context = gtk::glib::MainContext::default();
+        while std::time::Instant::now() < until {
+            while context.pending() {
+                context.iteration(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    #[test]
+    fn request_clicks_the_control_of_the_list_action() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = Rc::new(shown_detail(false));
+            for (op, long) in [
+                (actions_ui::RowOp::Compact, "Compact…"),
+                (actions_ui::RowOp::Handoff, "Handoff…"),
+            ] {
+                let target = control_button(&detail, long);
+                let clicks = Rc::new(Cell::new(0));
+                let seen = clicks.clone();
+                target.connect_clicked(move |_| seen.set(seen.get() + 1));
+                let missed = Rc::new(Cell::new(0));
+                let m = missed.clone();
+                target.set_sensitive(true);
+                detail.request(42, op, move || m.set(m.get() + 1));
+                assert_eq!(clicks.get(), 1, "{long} on: clicked at once");
+                assert_eq!(missed.get(), 0, "{long} on: no toast");
+            }
+            let missed = Rc::new(Cell::new(0));
+            let m = missed.clone();
+            detail.request(42, actions_ui::RowOp::End, move || m.set(m.get() + 1));
+            assert_eq!(missed.get(), 1, "End has no control here");
+        });
+    }
+
+    /// The owner's bug (25/10): the Action click selects the session, whose
+    /// control is still rediscovering (hidden, insensitive). The request
+    /// waits for it instead of reporting it unavailable.
+    #[test]
+    fn request_waits_for_the_control_of_a_session_still_discovering() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = Rc::new(shown_detail(false));
+            let target = control_button(&detail, "Compact…");
+            let clicks = Rc::new(Cell::new(0));
+            let seen = clicks.clone();
+            target.connect_clicked(move |_| seen.set(seen.get() + 1));
+            target.set_sensitive(false);
+            let missed = Rc::new(Cell::new(0));
+            let m = missed.clone();
+            detail.request_within(
+                42,
+                actions_ui::RowOp::Compact,
+                std::time::Duration::from_millis(600),
+                move || m.set(m.get() + 1),
+            );
+            assert_eq!(clicks.get(), 0, "not yet: still discovering");
+            let t = target.clone();
+            gtk::glib::timeout_add_local_once(std::time::Duration::from_millis(150), move || {
+                t.set_sensitive(true)
+            });
+            pump(900);
+            assert_eq!(clicks.get(), 1, "clicked once the control came up");
+            assert_eq!(missed.get(), 0, "no toast");
+        });
+    }
+
+    #[test]
+    fn request_reports_unavailable_when_the_control_never_comes_up() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = Rc::new(shown_detail(false));
+            let target = control_button(&detail, "Handoff…");
+            let clicks = Rc::new(Cell::new(0));
+            let seen = clicks.clone();
+            target.connect_clicked(move |_| seen.set(seen.get() + 1));
+            target.set_sensitive(false);
+            let missed = Rc::new(Cell::new(0));
+            let m = missed.clone();
+            detail.request_within(
+                42,
+                actions_ui::RowOp::Handoff,
+                std::time::Duration::from_millis(300),
+                move || m.set(m.get() + 1),
+            );
+            assert_eq!(missed.get(), 0, "not before the wait ends");
+            pump(600);
+            assert_eq!((clicks.get(), missed.get()), (0, 1), "one toast, no click");
+            target.set_sensitive(true);
+            pump(200);
+            assert_eq!(clicks.get(), 0, "the wait is over: no late click");
+        });
+    }
+
+    /// Another session selected while waiting: the request is dropped, never
+    /// run on the wrong session.
+    #[test]
+    fn request_is_dropped_when_another_session_is_shown() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = Rc::new(shown_detail(false));
+            let target = control_button(&detail, "Compact…");
+            let clicks = Rc::new(Cell::new(0));
+            let seen = clicks.clone();
+            target.connect_clicked(move |_| seen.set(seen.get() + 1));
+            target.set_sensitive(false);
+            let missed = Rc::new(Cell::new(0));
+            let m = missed.clone();
+            detail.request_within(
+                42,
+                actions_ui::RowOp::Compact,
+                std::time::Duration::from_millis(600),
+                move || m.set(m.get() + 1),
+            );
+            detail.pid.set(Some(43));
+            target.set_sensitive(true);
+            pump(800);
+            assert_eq!((clicks.get(), missed.get()), (0, 0), "dropped silently");
+        });
+    }
+
+    /// The row clicked is not the one shown yet (the selection reaches the
+    /// detail in an idle): the shown session's ready control is never
+    /// pressed; the request runs once the detail shows the row's session.
+    #[test]
+    fn request_waits_for_the_detail_to_show_the_rows_session() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = Rc::new(shown_detail(false));
+            let target = control_button(&detail, "Compact…");
+            let clicks = Rc::new(Cell::new(0));
+            let seen = clicks.clone();
+            target.connect_clicked(move |_| seen.set(seen.get() + 1));
+            target.set_sensitive(true);
+            let missed = Rc::new(Cell::new(0));
+            let m = missed.clone();
+            detail.request_within(
+                43,
+                actions_ui::RowOp::Compact,
+                std::time::Duration::from_millis(600),
+                move || m.set(m.get() + 1),
+            );
+            pump(150);
+            assert_eq!(clicks.get(), 0, "42's control is not 43's");
+            detail.pid.set(Some(43));
+            pump(200);
+            assert_eq!(
+                (clicks.get(), missed.get()),
+                (1, 0),
+                "43 shown: clicked once"
+            );
+        });
+    }
+
+    /// Two clicks (or Compact then Handoff) while waiting: one request, the
+    /// newer.
+    #[test]
+    fn a_newer_request_replaces_the_pending_one() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = Rc::new(shown_detail(false));
+            let compact = control_button(&detail, "Compact…");
+            let handoff = control_button(&detail, "Handoff…");
+            let clicks = Rc::new(RefCell::new(Vec::new()));
+            for (b, name) in [(&compact, "compact"), (&handoff, "handoff")] {
+                let seen = clicks.clone();
+                b.connect_clicked(move |_| seen.borrow_mut().push(name));
+                b.set_sensitive(false);
+            }
+            let wait = std::time::Duration::from_millis(600);
+            detail.request_within(42, actions_ui::RowOp::Compact, wait, || {});
+            detail.request_within(42, actions_ui::RowOp::Compact, wait, || {});
+            detail.request_within(42, actions_ui::RowOp::Handoff, wait, || {});
+            compact.set_sensitive(true);
+            handoff.set_sensitive(true);
+            pump(300);
+            assert_eq!(*clicks.borrow(), ["handoff"], "only the newest runs");
+        });
+    }
+
+    fn herdr_session() -> Session {
+        let snap: Snapshot =
+            serde_json::from_str(include_str!("../tests/fixtures/snapshots/uma.json")).unwrap();
+        snap.sessions[0].clone()
+    }
+
+    #[test]
+    fn where_it_runs_names_agent_model_herdr_pane_and_folder() {
+        let s = herdr_session();
+        let t = DetailText::of(&s, IoStallSource::Delayacct, Some("/home/dev"));
+        let [agent, model, terminal, folder] = &t.runs;
+        assert_eq!(agent.value, "claude");
+        assert_eq!(model.value, "claude-haiku-5");
+        assert!(terminal.value.starts_with("herdr "), "{}", terminal.value);
+        assert!(
+            terminal.value.contains(&t.herdr["herdr ".len()..]),
+            "the pane the header names: {}",
+            terminal.value
+        );
+        assert_eq!(folder.value, "~/src/atlas");
+        assert!(
+            !terminal.tooltip.is_empty(),
+            "workspace, tab and pane in the tooltip"
+        );
+    }
+
+    #[test]
+    fn where_it_runs_says_terminal_unknown_for_a_bare_session() {
+        let mut s = herdr_session();
+        s.overlay.as_mut().unwrap().herdr = None;
+        s.overlay.as_mut().unwrap().model = None;
+        let t = DetailText::of(&s, IoStallSource::Delayacct, Some("/home/dev"));
+        let [agent, model, terminal, folder] = &t.runs;
+        assert_eq!(agent.value, "claude");
+        assert_eq!(model.value, DASH, "no model yet is a dash, never blank");
+        assert_eq!(terminal.value, "terminal unknown");
+        assert_eq!(folder.value, "~/src/atlas");
+    }
+
+    #[test]
+    fn where_it_runs_rows_are_drawn_between_the_controls_and_the_context() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = Detail::new(false);
+            let mut s = herdr_session();
+            s.overlay.as_mut().unwrap().herdr = None;
+            let mut snap = snapshot_of(vec![s.clone()]);
+            snap.sessions[0].starttime = Some(1);
+            detail.show(Some(s.pid), Some(&snap), None, Some("/home/dev"));
+            let texts: Vec<String> = descendants(detail.runs.widget.upcast_ref())
+                .into_iter()
+                .filter_map(|w| w.downcast::<gtk::Label>().ok())
+                .map(|l| l.label().to_string())
+                .collect();
+            for want in ["Agent", "Model", "Terminal", "Folder", "terminal unknown"] {
+                assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
+            }
+            assert!(
+                slot(&detail, &detail.session_controls.widget) < slot(&detail, &detail.runs.widget)
+                    && slot(&detail, &detail.runs.widget) < slot(&detail, &detail.transcript_head),
+            );
+        });
+    }
+
+    /// The fold keeps identifiers only: the session id and the pid. Folder,
+    /// terminal, facts, reason and controls live in the open.
+    #[test]
+    fn session_details_expander_keeps_only_ids() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = shown_detail(false);
+            detail.more.set_expanded(true);
+            assert!(detail.session_id.is_ancestor(&detail.more));
+            assert!(detail.pid_value.is_ancestor(&detail.more));
+            assert_eq!(detail.pid_value.label(), "42");
+            let tail = detail.more.child().expect("the folded content");
+            for (name, w) in [
+                ("runs", detail.runs.widget.upcast_ref::<gtk::Widget>()),
+                ("kernel facts", detail.session.widget.upcast_ref()),
+                ("reason", detail.reason.upcast_ref()),
+                ("controls", detail.session_controls.widget.upcast_ref()),
+            ] {
+                assert!(!w.is_ancestor(&tail), "{name} is not an ID");
+            }
+        });
+    }
+
+    /// One action area: the title row's menu holds Suspend, Resume, Terminate
+    /// and Kill; no second row of session buttons follows the processes.
+    #[test]
+    fn one_action_area_the_menu_holds_suspend_resume_terminate_kill() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let live = shown_detail(true);
+            let stray: Vec<String> = descendants(live.history.panel.parent().unwrap().upcast_ref())
+                .into_iter()
+                .filter_map(|w| w.downcast::<gtk::Button>().ok())
+                .filter_map(|b| b.label())
+                .map(|l| l.to_string())
+                .filter(|l| ["Suspend…", "Resume…", "End…", "Kill…"].contains(&l.as_str()))
+                .collect();
+            assert!(stray.is_empty(), "no loose action buttons: {stray:?}");
+            // The button builds this same menu when it opens (a popup needs a
+            // rooted window, which the headless detail has not).
+            assert_eq!(live.actions.parent(), live.name.parent());
+            assert!(live.actions.is_visible() && live.actions.is_sensitive());
+            let model = actions_ui::menu(Target::Session(42), "atlas");
+            let mut labels = Vec::new();
+            for i in 0..model.n_items() {
+                if let Some(section) = model.item_link(i, "section") {
+                    for j in 0..section.n_items() {
+                        labels.extend(
+                            section
+                                .item_attribute_value(j, "label", None)
+                                .and_then(|v| v.get::<String>()),
+                        );
+                    }
+                }
+            }
+            assert_eq!(labels, ["Suspend…", "Resume…", "End…", "Kill…"]);
+        });
+    }
+
+    /// The note shares the processes heading's row, one short line.
+    #[test]
+    fn processes_heading_has_one_short_note() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = shown_detail(false);
+            let note = detail
+                .procs_head
+                .next_sibling()
+                .and_then(|w| w.downcast::<gtk::Label>().ok());
+            let note = note.expect("a note beside the heading");
+            assert!(note.label().chars().count() < 60, "{}", note.label());
+            assert!(!note.wraps());
+        });
+    }
+
+    /// The line under the header exists only with something to say: the
+    /// reason the button is off (also its tooltip) or an action's feedback.
+    #[test]
+    fn focus_feedback_line_shows_only_with_feedback() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = shown_detail(false);
+            let tip = detail.focus.tooltip_text().expect("why it is off");
+            assert!(tip.contains("fixtures"), "{tip}");
+            assert!(detail.focus_reason.is_visible(), "off: the reason shows");
+            detail.set_focus_state(None);
+            assert!(!detail.focus_reason.is_visible(), "on, nothing to say yet");
+            detail.show_focus_feedback("Terminal pane focused.");
+            assert!(detail.focus_reason.is_visible());
+            detail.show_focus_feedback("");
+            assert!(!detail.focus_reason.is_visible());
+        });
+    }
+
+    /// The state pill sits against the name (the mock), and a recommendation
+    /// pill with nothing to recommend is not drawn as a lone dash.
+    #[test]
+    fn state_pill_hugs_the_name_and_an_empty_rec_pill_hides() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let detail = shown_detail(false);
+            assert!(
+                !detail.name.hexpands(),
+                "the name does not push the pill away"
+            );
+            assert_eq!(detail.rec.label(), DASH);
+            assert!(!detail.rec.is_visible());
+            assert!(detail.state.is_visible());
+        });
+    }
+
+    /// `None` when the widget's accessible label is `expected`; otherwise
+    /// GTK's own mismatch message. gtk4-rs has no reader for the value.
+    fn spoken_label(w: &impl IsA<gtk::Accessible>, expected: &str) -> Option<String> {
+        use gtk::glib::translate::{FromGlibPtrFull, ToGlibPtr};
+        let expected = std::ffi::CString::new(expected).unwrap();
+        // SAFETY: a live widget, a NUL-terminated string for the Label
+        // property's one variadic argument; GTK returns NULL or an owned string.
+        let msg = unsafe {
+            gtk::ffi::gtk_test_accessible_check_property(
+                w.as_ref().to_glib_none().0,
+                gtk::ffi::GTK_ACCESSIBLE_PROPERTY_LABEL,
+                expected.as_ptr(),
+            )
+        };
+        (!msg.is_null()).then(|| unsafe { gtk::glib::GString::from_glib_full(msg) }.to_string())
     }
 }

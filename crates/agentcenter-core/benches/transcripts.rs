@@ -95,6 +95,10 @@ impl Overlay for Shared {
     fn enrich(&self, session: &agentcenter_core::session::Session, overlay: &mut SessionOverlay) {
         self.0.enrich(session, overlay);
     }
+
+    fn begin_tick(&self) {
+        self.0.begin_tick();
+    }
 }
 
 struct World {

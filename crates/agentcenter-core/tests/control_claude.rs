@@ -24,6 +24,10 @@ const SID: &str = "11111111-2222-4333-8444-555555555555";
 const OTHER: &str = "99999999-2222-4333-8444-555555555555";
 const OP: &str = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
 const OP2: &str = "bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+/// The exact text Compact types into the pane.
+const COMPACT_SENT: &str = "/compact Keep: decisions made and why; files touched, with paths; \
+    current task state and the next step; open errors and blockers; \
+    commands that worked. Drop: exploration dead ends and tool output bodies.";
 static SEQ: AtomicU64 = AtomicU64::new(0);
 
 type Hook = Box<dyn FnMut(&str) + Send>;
@@ -33,6 +37,8 @@ struct Fake {
     status: &'static str,
     prompts: Vec<String>,
     on_prompt: Option<Hook>,
+    /// Status the pane reports from the next prompt on (a dialog opening).
+    after_prompt: Option<&'static str>,
 }
 
 struct World {
@@ -152,6 +158,7 @@ fn world(sessions: Vec<&'static str>, status: &'static str) -> World {
         status,
         prompts: Vec::new(),
         on_prompt: None,
+        after_prompt: None,
     }));
     let stop = Arc::new(AtomicBool::new(false));
     let (f, st) = (fake.clone(), stop.clone());
@@ -196,6 +203,9 @@ fn world(sessions: Vec<&'static str>, status: &'static str) -> World {
                         h(&text);
                     }
                     f.prompts.push(text);
+                    if let Some(s) = f.after_prompt.take() {
+                        f.status = s;
+                    }
                     json!({"type":"agent_prompted","agent":agent(SID, "working")})
                 }
                 m => panic!("unexpected method {m}"),
@@ -244,6 +254,12 @@ impl World {
     fn on_prompt(&self, h: Hook) {
         self.fake.lock().unwrap().on_prompt = Some(h);
     }
+    fn after_prompt(&self, status: &'static str) {
+        self.fake.lock().unwrap().after_prompt = Some(status);
+    }
+    fn set_status(&self, status: &'static str) {
+        self.fake.lock().unwrap().status = status;
+    }
 }
 
 #[test]
@@ -257,7 +273,7 @@ fn compact_completes_only_from_manual_boundary_evidence() {
     let o = c.start(OP, Action::Compact, &w.subject);
     assert_eq!((o.state, o.code), (State::Completed, code::COMPACTED));
     assert!(matches!(o.evidence, Some(Evidence::Compacted { .. })));
-    assert_eq!(w.prompts(), ["/compact"]);
+    assert_eq!(w.prompts(), [COMPACT_SENT]);
     // Clique duplo: same operation ID never resends.
     let again = c.start(OP, Action::Compact, &w.subject);
     assert_eq!((again.state, w.prompts().len()), (State::Completed, 1));
@@ -397,6 +413,26 @@ fn second_operation_and_mismatched_duplicate_are_rejected_without_send() {
     assert_eq!(w.prompts().len(), 1);
 }
 
+/// Herdr reports `done` for a pane that finished its turn and has not been
+/// looked at; the agent is as ready for input as when `idle`. Only `working`,
+/// `blocked` and `unknown` are busy.
+#[test]
+fn done_counts_as_idle_and_blocked_or_unknown_do_not() {
+    let w = world(vec![SID], "done");
+    let c = w.controller();
+    let caps = c.capabilities(&w.subject);
+    assert!(caps.compact.enabled && caps.handoff.enabled, "{caps:?}");
+    for status in ["working", "blocked", "unknown"] {
+        let w = world(vec![SID], status);
+        let mut c = w.controller();
+        let caps = c.capabilities(&w.subject);
+        assert!(!caps.compact.enabled && !caps.handoff.enabled, "{status}");
+        let o = c.start(OP, Action::Compact, &w.subject);
+        assert_eq!((o.state, o.code), (State::Rejected, code::BUSY), "{status}");
+        assert!(w.prompts().is_empty(), "{status}");
+    }
+}
+
 #[test]
 fn identity_session_busy_claim_and_socket_failures_never_send() {
     type Setup = fn(&mut World);
@@ -481,4 +517,197 @@ fn identity_session_busy_claim_and_socket_failures_never_send() {
             assert!(o.evidence.is_none(), "{why}");
         }
     }
+}
+
+/// The handoff's Write under `<repo>/.claude/handoffs` waits on Claude Code's
+/// permission dialog (a protected path, asked even under acceptEdits): the
+/// operation reports `permission_prompt` and keeps running past the evidence
+/// timeout instead of ending `unknown`; once the owner allows the write, the
+/// same operation completes from its evidence. Without the dialog (Herdr not
+/// `blocked`), a pending Write still times out as before.
+#[test]
+fn handoff_waiting_on_write_permission_reports_it_instead_of_timing_out() {
+    for (status, asking) in [("blocked", true), ("working", false)] {
+        let w = world(vec![SID], "idle");
+        let file = w.root.join("repo/.claude/handoffs/h.md");
+        fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let (t, f) = (w.transcript.clone(), file.clone());
+        w.on_prompt(Box::new(move |text| {
+            let op = text.rsplit(':').next().unwrap().to_string();
+            // The mark and the Write call, no result: the dialog is open.
+            append(&t, &handoff_lines(&op, &f)[..2]);
+        }));
+        w.after_prompt(status);
+        let mut c = w.controller();
+        c.evidence_timeout = Duration::from_millis(50);
+        let o = c.start(OP, Action::Handoff, &w.subject);
+        assert_eq!(o.state, State::Running, "{status}: {o:?}");
+        std::thread::sleep(Duration::from_millis(80));
+        let o = c.status(OP).unwrap();
+        if !asking {
+            assert_eq!(
+                (o.state, o.code),
+                (State::Unknown, code::TIMEOUT),
+                "{status}"
+            );
+            continue;
+        }
+        assert_eq!((o.state, o.code), (State::Running, "permission_prompt"));
+        // Still the session's operation: nothing else is sent meanwhile.
+        let o2 = c.start(OP2, Action::Compact, &w.subject);
+        assert_eq!((o2.state, o2.code), (State::Rejected, code::PENDING));
+        // The owner allows the write in the pane.
+        fs::write(&file, b"handoff body").unwrap();
+        append(&w.transcript, &handoff_lines(OP, &file)[2..]);
+        w.set_status("idle");
+        let o = c.status(OP).unwrap();
+        assert_eq!((o.state, o.code), (State::Completed, code::PERSISTED));
+        assert_eq!(w.prompts().len(), 1);
+    }
+}
+
+/// A dialog nobody answers cannot hold the session forever: the dialog resets
+/// the evidence timeout, but `permission_timeout` from the send is the ceiling.
+#[test]
+fn permission_prompt_has_an_upper_bound_from_the_send() {
+    let w = world(vec![SID], "idle");
+    let file = w.root.join("repo/.claude/handoffs/h.md");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let (t, f) = (w.transcript.clone(), file.clone());
+    w.on_prompt(Box::new(move |text| {
+        let op = text.rsplit(':').next().unwrap().to_string();
+        append(&t, &handoff_lines(&op, &f)[..2]);
+    }));
+    w.after_prompt("blocked");
+    let mut c = w.controller();
+    c.evidence_timeout = Duration::from_millis(1000);
+    c.permission_timeout = Duration::from_millis(150);
+    let o = c.start(OP, Action::Handoff, &w.subject);
+    assert_eq!(o.state, State::Running, "{o:?}");
+    // Polled inside the ceiling the dialog keeps resetting the evidence clock.
+    for _ in 0..3 {
+        std::thread::sleep(Duration::from_millis(30));
+        let o = c.status(OP).unwrap();
+        assert_eq!((o.state, o.code), (State::Running, "permission_prompt"));
+    }
+    // Past the ceiling, with the dialog seen moments ago and the evidence
+    // timeout far off: only the ceiling can end it.
+    std::thread::sleep(Duration::from_millis(80));
+    let o = c.status(OP).unwrap();
+    assert_eq!((o.state, o.code), (State::Unknown, code::TIMEOUT), "{o:?}");
+    // Unknown never revives and the session is held, not freed.
+    let o2 = c.start(OP2, Action::Compact, &w.subject);
+    assert_eq!((o2.state, o2.code), (State::Rejected, code::PENDING));
+}
+
+/// Sets up a Handoff whose transcript carries the mark and the Write call
+/// without a result (the dialog is open) and leaves the pane as `status`.
+fn handoff_with_open_write(w: &World, file: &Path, status: &'static str) {
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let (t, f) = (w.transcript.clone(), file.to_path_buf());
+    w.on_prompt(Box::new(move |text| {
+        let op = text.rsplit(':').next().unwrap().to_string();
+        append(&t, &handoff_lines(&op, &f)[..2]);
+    }));
+    w.after_prompt(status);
+}
+
+/// Unknown is final for the dialog: an operation that went `unknown` from the
+/// evidence timeout stays so when the pane is `blocked` again before the
+/// ceiling; only late evidence can still complete it.
+#[test]
+fn a_dialog_never_revives_an_unknown_operation() {
+    let w = world(vec![SID], "idle");
+    let file = w.root.join("repo/.claude/handoffs/h.md");
+    // Not blocked at the send: the pending Write times out as `unknown`.
+    handoff_with_open_write(&w, &file, "working");
+    let mut c = w.controller();
+    c.evidence_timeout = Duration::from_millis(50);
+    let o = c.start(OP, Action::Handoff, &w.subject);
+    assert_eq!(o.state, State::Running, "{o:?}");
+    std::thread::sleep(Duration::from_millis(80));
+    let o = c.status(OP).unwrap();
+    assert_eq!((o.state, o.code), (State::Unknown, code::TIMEOUT), "{o:?}");
+    // The dialog shows up now, far inside the ceiling.
+    w.set_status("blocked");
+    let o = c.status(OP).unwrap();
+    assert_eq!((o.state, o.code), (State::Unknown, code::TIMEOUT), "{o:?}");
+}
+
+/// Only a Write that can still be answered and that the controller would
+/// accept counts as the dialog: a denied Write (error result) and a Write
+/// outside the accepted roots, with the pane `blocked` on some other dialog,
+/// neither report `permission_prompt` nor stretch the wait to the ceiling.
+#[test]
+fn blocked_pane_with_a_denied_or_out_of_roots_write_still_times_out() {
+    for why in ["denied", "outside the roots"] {
+        let w = world(vec![SID], "idle");
+        let file = if why == "denied" {
+            w.root.join("repo/.claude/handoffs/h.md")
+        } else {
+            w.root.join("elsewhere/h.md")
+        };
+        handoff_with_open_write(&w, &file, "blocked");
+        if why == "denied" {
+            let t = w.transcript.clone();
+            let mut prev = w.fake.lock().unwrap().on_prompt.take().unwrap();
+            w.on_prompt(Box::new(move |text| {
+                prev(text);
+                let op = text.rsplit(':').next().unwrap().to_string();
+                append(
+                    &t,
+                    &[
+                        json!({"type":"user","sessionId":SID,"timestamp":iso(now_ms() + 3),
+                        "message":{"content":[{"type":"tool_result","is_error":true,
+                            "tool_use_id":format!("toolu_{op}"),"content":"denied"}]},
+                        "toolUseResult":"Error: denied"}),
+                    ],
+                );
+            }));
+        }
+        let mut c = w.controller();
+        c.evidence_timeout = Duration::from_millis(50);
+        c.permission_timeout = Duration::from_secs(60);
+        let o = c.start(OP, Action::Handoff, &w.subject);
+        assert_ne!(o.code, "permission_prompt", "{why}: {o:?}");
+        std::thread::sleep(Duration::from_millis(80));
+        let o = c.status(OP).unwrap();
+        assert_eq!(
+            (o.state, o.code),
+            (State::Unknown, code::TIMEOUT),
+            "{why}: {o:?}"
+        );
+    }
+}
+
+/// The evidence clock counts from the last sighting of the dialog, not from
+/// the send: after a long dialog the owner allows the write, and the operation
+/// gets a fresh evidence window for the tool result to land.
+#[test]
+fn evidence_timeout_counts_from_the_last_sighting_of_the_dialog() {
+    let w = world(vec![SID], "idle");
+    let file = w.root.join("repo/.claude/handoffs/h.md");
+    handoff_with_open_write(&w, &file, "blocked");
+    let mut c = w.controller();
+    c.evidence_timeout = Duration::from_millis(100);
+    let o = c.start(OP, Action::Handoff, &w.subject);
+    assert_eq!((o.state, o.code), (State::Running, "permission_prompt"));
+    // A dialog open for longer than the evidence timeout, seen all along.
+    for _ in 0..5 {
+        std::thread::sleep(Duration::from_millis(40));
+        let o = c.status(OP).unwrap();
+        assert_eq!((o.state, o.code), (State::Running, "permission_prompt"));
+    }
+    // Allowed: the dialog is gone, the tool result has not landed yet.
+    w.set_status("working");
+    let o = c.status(OP).unwrap();
+    assert_eq!((o.state, o.code), (State::Running, code::SENT), "{o:?}");
+    fs::write(&file, b"handoff body").unwrap();
+    append(&w.transcript, &handoff_lines(OP, &file)[2..]);
+    let o = c.status(OP).unwrap();
+    assert_eq!(
+        (o.state, o.code),
+        (State::Completed, code::PERSISTED),
+        "{o:?}"
+    );
 }

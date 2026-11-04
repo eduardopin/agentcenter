@@ -22,8 +22,13 @@ const NON_UNIQUE_ENV: &str = "AGENTCENTER_NON_UNIQUE";
 /// variaveis). Direcao em docs/DESIGN.md; contraste em scripts/contrast.py.
 const STYLESHEET: &str = concat!(
     include_str!("../resources/tokens.css"),
-    include_str!("../resources/summary.css"),
     include_str!("../resources/sessions.css"),
+    include_str!("../resources/memory_map.css"),
+    include_str!("../resources/token_map.css"),
+    include_str!("../resources/map_page.css"),
+    include_str!("../resources/timeline.css"),
+    include_str!("../resources/reclaim.css"),
+    include_str!("../resources/detail.css"),
 );
 
 /// Carrega as folhas acima das do libadwaita. Desde o GTK 4.20 cada provedor
@@ -110,7 +115,14 @@ pub fn run(main_start: Instant) -> glib::ExitCode {
     app.set_accels_for_action("app.quit", &["<Control>q"]);
     app.set_accels_for_action("window.close", &["<Control>w"]);
 
-    app.connect_startup(|_| load_css());
+    // A capture forces its scheme by ADW_DEBUG_COLOR_SCHEME: keep it, save nothing.
+    let capturing = std::env::var_os("ADW_DEBUG_COLOR_SCHEME").is_some()
+        || std::env::var_os("AGENTCENTER_SCREENSHOT").is_some();
+    let p = prefs.clone();
+    app.connect_startup(move |app| {
+        load_css();
+        crate::menu::install(app, &p, capturing);
+    });
 
     app.connect_activate(move |app| {
         if let Some(w) = app.active_window() {

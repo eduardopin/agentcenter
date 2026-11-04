@@ -56,18 +56,26 @@
 //! transcript, somados todos os arquivos (a primeira leitura de um transcript
 //! de 100 MB, inteira, custaria centenas de ms num tick de 5 ms). O que
 //! sobra continua no tick seguinte, do ponto em que parou, inclusive no meio
-//! de uma linha; e o arquivo ainda nao lido ate o fim uma primeira vez nao
+//! de uma linha. A **primeira** leitura de cada arquivo (da primeira passada
+//! ou de uma sessao que aparece depois) nao tem teto e gasta o do tick; o
+//! teto vale para o que o arquivo acrescenta depois. Um arquivo que ainda
+//! nao foi lido ate o fim uma primeira vez (a leitura falhou no meio) nao
 //! publica tokens acumulados (parciais, seriam errados).
+//! O teto renova em [`Overlay::begin_tick`], que [`super::apply`] chama
+//! antes da primeira sessao do tick.
 //!
-//! **Fim do arquivo primeiro**: enquanto a varredura nao chegou ao fim, o
-//! modelo e o contexto % vem da ultima linha de uso, lida de tras para frente
-//! a partir do fim em blocos de [`TAIL_CHUNK`], parando na primeira linha
-//! valida, ate [`TAIL_BUDGET`] por arquivo (fora do teto do tick). Assim eles
-//! aparecem no primeiro tick em que o arquivo casa, mesmo num transcript de
-//! GBs. A janela desse % e a do ultimo pedido (o maior contexto da sessao so a
-//! varredura conhece); quando ela termina, valem os numeros dela, os de
-//! `contexto.py`. Arquivo que cresce antes disso tem so os bytes novos lidos
-//! de tras para frente de novo.
+//! **Fim do arquivo primeiro**: so quando a primeira leitura tem teto, isto e,
+//! com `transcript_first_read_all` = `false` (o gancho do teste do cockpit
+//! da CLI). Com `true`, o padrao, que o GUI e o `snapshot` usam, a primeira
+//! leitura vai ate o fim do arquivo e o [`read_tail`] nao roda. Sem ela
+//! terminada, o modelo e o contexto % vem da ultima linha de uso, lida de
+//! tras para frente a partir do fim em blocos de [`TAIL_CHUNK`], parando na
+//! primeira linha valida, ate [`TAIL_BUDGET`] por arquivo (fora do teto do
+//! tick). Assim eles aparecem no primeiro tick em que o arquivo casa, mesmo
+//! num transcript de GBs. A janela desse % e a do ultimo pedido (o maior
+//! contexto da sessao so a varredura conhece); quando ela termina, valem os
+//! numeros dela, os de `contexto.py`. Arquivo que cresce antes disso tem so
+//! os bytes novos lidos de tras para frente de novo.
 //!
 //! **Subagentes** ([`subagents`], C15): `subagents_live` e `subagents_total`
 //! da sessao Claude (`<sid>/subagents/agent-*.jsonl`) e Codex (rollouts com
@@ -83,7 +91,7 @@ pub mod subagents;
 pub mod tools;
 
 use super::{HerdrOverlay, Overlay, OverlayStatus, SessionOverlay};
-use crate::cockpit::{self, Cockpit, HandoffIndex, Loops, Thresholds, Tokens};
+use crate::cockpit::{self, Cockpit, HandoffIndex, Loops, SpendWindow, Thresholds, Tokens};
 use crate::procfs::stat::parse_stat;
 use crate::procfs::{ProcRoot, read_file_into};
 use crate::sampler::{READ_ALL, SamplerConfig, USER_HZ};
@@ -157,12 +165,21 @@ impl Format {
         }
     }
 
-    /// Aplica uma linha completa (sem o `\n`) ao acumulado.
+    /// Aplica uma linha completa (sem o `\n`) ao acumulado. What the line
+    /// adds to the weighted burn goes to the spend window at the line's
+    /// timestamp; a Codex total that drops adds nothing.
     pub fn feed(self, line: &[u8], u: &mut Usage) {
+        let before = u.burn();
+        u.line_at_ms = None;
         match self {
             Self::Claude => claude::feed(line, u),
             Self::Codex => codex::feed(line, u),
             Self::Pi => pi::feed(line, u),
+        }
+        let added = u.burn() - before;
+        // A line without a timestamp has no time to put its spend at.
+        if let Some(at) = u.line_at_ms.filter(|_| added > 0.0) {
+            u.spend.add(at, added);
         }
     }
 }
@@ -199,9 +216,19 @@ pub struct Usage {
     /// Id da sessao do agente (Codex: `session_meta.payload.id`; pi: `id` da
     /// linha `session`), so se for um nome simples ([`valid_session_id`]).
     pub session_id: Option<String>,
+    /// Weighted spend per minute of the last half hour, keyed by the
+    /// timestamp of the line that counted the request ([`Format::feed`]).
+    pub spend: SpendWindow,
+    /// Timestamp of the line being fed, `None` when it has none.
+    pub(crate) line_at_ms: Option<u64>,
 }
 
 impl Usage {
+    /// Cost-weighted tokens so far ([`cockpit::weighted`]).
+    pub fn burn(&self) -> f64 {
+        cockpit::weighted(self.input, self.cache_write, self.cache_read, self.output)
+    }
+
     pub fn tokens_in(&self) -> u64 {
         self.input
             .saturating_add(self.cache_write)
@@ -234,6 +261,7 @@ impl Usage {
     /// Horario da linha (tambem devolvido, para a tool call da linha).
     pub(crate) fn set_timestamp(&mut self, ts: Option<&str>) -> Option<u64> {
         let ms = ts.and_then(parse_iso_ms);
+        self.line_at_ms = ms;
         if ms.is_some() {
             self.last_at_ms = ms;
         }
@@ -330,6 +358,7 @@ impl Usage {
             session_id: self.session_id.clone(),
             tokens: self.tokens(f),
             loops: Some(self.tools.loops()),
+            spend_30m: counted.then(|| self.spend.total(now_ms)),
             pending: false,
             cockpit: None,
         }
@@ -368,6 +397,9 @@ pub struct TranscriptMeta {
     pub tokens: Option<Tokens>,
     /// Sinal de loop do cockpit, so com a varredura completa.
     pub loops: Option<Loops>,
+    /// Weighted spend of the last 30 minutes ([`SpendWindow::total`]), only
+    /// with the full scan and a counted request.
+    pub spend_30m: Option<u64>,
     /// Varredura ainda incompleta.
     pub pending: bool,
     /// Calculado na conferencia do arquivo ([`Transcripts`]).
@@ -392,6 +424,9 @@ impl TranscriptMeta {
         }
         if self.context_pct.is_some() {
             o.context_pct = self.context_pct;
+        }
+        if self.spend_30m.is_some() {
+            o.spend_30m = self.spend_30m;
         }
         if self.tool_calls.is_some() {
             o.tool_calls = self.tool_calls;
@@ -894,8 +929,8 @@ struct Inner {
     text: String,
     /// Bytes que ainda podem ser lidos neste tick.
     budget: u64,
-    /// Pids ja vistos neste tick: um repetido marca o tick seguinte.
-    tick_pids: Vec<u32>,
+    /// A primeira leitura de um arquivo ignora `budget`.
+    first_all: bool,
     handoffs: Handoffs,
     subagents: subagents::Subagents,
 }
@@ -1033,6 +1068,7 @@ impl Transcripts {
             sub_read_budget: AtomicU64::new(subagents::READ_BUDGET),
             inner: Mutex::new(Inner {
                 budget: READ_BUDGET,
+                first_all: true,
                 subagents: subagents::Subagents::new(),
                 ..Inner::default()
             }),
@@ -1145,7 +1181,15 @@ impl Transcripts {
         let mut buf = Vec::new();
         let mut unlimited = u64::MAX;
         let (total, tail) = (AtomicU64::new(0), AtomicU64::new(0));
-        read_new(path, f, &mut st, &mut buf, [&total, &tail], &mut unlimited)?;
+        read_new(
+            path,
+            f,
+            &mut st,
+            &mut buf,
+            [&total, &tail],
+            &mut unlimited,
+            false,
+        )?;
         Ok(st.usage)
     }
 
@@ -1313,9 +1357,11 @@ impl Transcripts {
             files,
             buf,
             budget,
+            first_all,
             handoffs,
             ..
         } = inner;
+        let first_all = *first_all;
         let st = files.entry(path.clone()).or_insert_with(FileState::empty);
         // Leitura cortada pelo teto continua no tick seguinte, sem esperar.
         let fresh = st.at_end
@@ -1325,7 +1371,7 @@ impl Transcripts {
         let ok = fresh || {
             st.checked = Some(now);
             let counters = [&self.bytes_read, &self.tail_bytes];
-            read_new(path, f, st, buf, counters, budget).is_ok()
+            read_new(path, f, st, buf, counters, budget, first_all).is_ok()
         };
         if !ok {
             files.remove(&**path);
@@ -1388,6 +1434,7 @@ fn read_new(
     buf: &mut Vec<u8>,
     [counter, tail_counter]: [&AtomicU64; 2],
     budget: &mut u64,
+    first_all: bool,
 ) -> std::io::Result<()> {
     let mut file = File::open(path)?;
     let meta = file.metadata()?;
@@ -1409,14 +1456,21 @@ fn read_new(
         file.seek(SeekFrom::Start(st.offset))?;
         buf.clear();
         buf.append(&mut st.partial);
-        while *budget > 0 {
+        // A primeira leitura de um arquivo (ainda sem `ready`) ignora o teto do
+        // tick: sem ela os tokens de ~40 sessoes levavam minutos para chegar.
+        // Ela gasta o teto do tick (saturando), entao o que cresce nos outros
+        // arquivos no mesmo tick espera o proximo.
+        let first = first_all && !st.ready;
+        let mut unlimited = READ_ALL;
+        let cap: &mut u64 = if first { &mut unlimited } else { budget };
+        while *cap > 0 {
             let old = buf.len();
-            let want = CHUNK.min(usize::try_from(*budget).unwrap_or(CHUNK));
+            let want = CHUNK.min(usize::try_from(*cap).unwrap_or(CHUNK));
             buf.resize(old + want, 0);
             let n = file.read(&mut buf[old..])?;
             buf.truncate(old + n);
             counter.fetch_add(n as u64, Ordering::Relaxed);
-            *budget -= n as u64;
+            *cap -= n as u64;
             st.offset += n as u64;
             if n == 0 {
                 st.at_end = true;
@@ -1439,6 +1493,9 @@ fn read_new(
                 buf.clear();
                 st.skipping = true;
             }
+        }
+        if first {
+            *budget = budget.saturating_sub(READ_ALL - unlimited);
         }
         st.at_end |= st.offset >= meta.len();
         st.partial.clear();
@@ -1674,7 +1731,14 @@ impl Overlay for Transcripts {
         self.sub_read_budget.store(sub, Ordering::Relaxed);
         let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
         inner.budget = bytes;
+        inner.first_all = config.transcript_first_read_all;
         inner.subagents.budget = sub;
+    }
+
+    fn begin_tick(&self) {
+        let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
+        inner.budget = self.read_budget.load(Ordering::Relaxed);
+        inner.subagents.budget = self.sub_read_budget.load(Ordering::Relaxed);
     }
 }
 
@@ -1693,13 +1757,6 @@ impl Transcripts {
         };
         let now = Instant::now();
         let mut inner = self.inner.lock().unwrap_or_else(|p| p.into_inner());
-        // Overlays rodam sessao por sessao: pid repetido e o tick seguinte.
-        if inner.tick_pids.contains(&session.pid) || inner.tick_pids.len() >= CACHE_CAP {
-            inner.tick_pids.clear();
-            inner.budget = self.read_budget.load(Ordering::Relaxed);
-            inner.subagents.budget = self.sub_read_budget.load(Ordering::Relaxed);
-        }
-        inner.tick_pids.push(session.pid);
         let path = self.link(&mut inner, session, f, root, sid, now)?;
         let wall = SystemTime::now();
         let (every, c) = (self.refresh_every, &self.sub_counters);
@@ -1717,6 +1774,119 @@ impl Transcripts {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 2026-10-17T02:53:28Z, and minutes after it as ISO timestamps.
+    const T0: u64 = 1_792_205_608_000;
+    fn iso(min_after: u64) -> String {
+        let s = 28 + min_after * 60;
+        let (h, m, s) = (2 + (53 * 60 + s) / 3600, ((53 * 60 + s) / 60) % 60, s % 60);
+        format!("2026-10-17T{h:02}:{m:02}:{s:02}.000Z")
+    }
+
+    #[test]
+    fn iso_helper_matches_the_parser() {
+        assert_eq!(parse_iso_ms(&iso(0)), Some(T0));
+        assert_eq!(parse_iso_ms(&iso(45)), Some(T0 + 45 * 60_000));
+    }
+
+    #[test]
+    fn claude_requests_land_in_the_spend_window_at_their_timestamp() {
+        let mut u = Usage::default();
+        let line = |rid: &str, min: u64| {
+            format!(
+                "{{\"type\":\"assistant\",\"requestId\":\"{rid}\",\"timestamp\":\"{}\",\
+                 \"message\":{{\"model\":\"m\",\"usage\":{{\"input_tokens\":1000,\
+                 \"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":1000,\
+                 \"output_tokens\":100}}}}}}",
+                iso(min)
+            )
+        };
+        // 1000 + 0.1*1000 + 5*100 = 1600 weighted per request.
+        Format::Claude.feed(line("r1", 0).as_bytes(), &mut u);
+        Format::Claude.feed(line("r1", 0).as_bytes(), &mut u);
+        assert_eq!(u.spend.total(T0 + 20 * 60_000), 1_600, "r1 once");
+        Format::Claude.feed(line("r2", 40).as_bytes(), &mut u);
+        assert_eq!(u.spend.total(T0 + 40 * 60_000), 1_600, "r1 is 40 min old");
+        let meta = u.meta_at(Format::Claude, T0 + 40 * 60_000);
+        assert_eq!(meta.spend_30m, Some(1_600));
+        assert_eq!(
+            u.meta_at(Format::Claude, T0 + 80 * 60_000).spend_30m,
+            Some(0)
+        );
+    }
+
+    #[test]
+    fn codex_totals_add_their_increase_and_a_drop_adds_nothing() {
+        let mut u = Usage::default();
+        let count = |min: u64, input: u64, out: u64| {
+            format!(
+                "{{\"timestamp\":\"{}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\
+                 \"token_count\",\"info\":{{\"total_token_usage\":{{\"input_tokens\":{input},\
+                 \"cached_input_tokens\":0,\"output_tokens\":{out}}}}}}}}}",
+                iso(min)
+            )
+        };
+        Format::Codex.feed(count(0, 1_000, 10).as_bytes(), &mut u);
+        Format::Codex.feed(count(5, 3_000, 30).as_bytes(), &mut u);
+        assert_eq!(u.spend.total(T0 + 5 * 60_000), 3_150, "1050 then 2100 more");
+        Format::Codex.feed(count(6, 500, 0).as_bytes(), &mut u);
+        assert_eq!(u.spend.total(T0 + 6 * 60_000), 3_150);
+    }
+
+    #[test]
+    fn pi_messages_add_their_usage() {
+        let mut u = Usage::default();
+        let msg = |min: u64| {
+            format!(
+                "{{\"type\":\"message\",\"timestamp\":\"{}\",\"message\":{{\"role\":\
+                 \"assistant\",\"usage\":{{\"input\":200,\"output\":20,\"cacheRead\":0,\
+                 \"cacheWrite\":400}}}}}}",
+                iso(min)
+            )
+        };
+        Format::Pi.feed(msg(1).as_bytes(), &mut u);
+        Format::Pi.feed(msg(2).as_bytes(), &mut u);
+        // 200 + 1.25*400 + 5*20 = 800 each.
+        assert_eq!(u.spend.total(T0 + 2 * 60_000), 1_600);
+    }
+
+    #[test]
+    fn a_request_without_any_timestamp_spends_outside_the_window() {
+        let mut u = Usage::default();
+        Format::Claude.feed(
+            br#"{"type":"assistant","requestId":"r1","message":{"usage":{"input_tokens":500}}}"#,
+            &mut u,
+        );
+        assert_eq!(u.requests, 1);
+        assert!(u.spend.is_empty());
+        assert_eq!(u.meta_at(Format::Claude, T0).spend_30m, Some(0));
+        assert_eq!(Usage::default().meta_at(Format::Claude, T0).spend_30m, None);
+    }
+
+    #[test]
+    fn spend_goes_from_the_meta_to_the_overlay() {
+        let meta = TranscriptMeta {
+            tokens_in: Some(10),
+            tokens_out: Some(1),
+            spend_30m: Some(4_200),
+            ..TranscriptMeta::default()
+        };
+        let mut o = SessionOverlay::default();
+        meta.fill(&mut o);
+        assert_eq!(o.spend_30m, Some(4_200));
+        let tail = TranscriptMeta::default();
+        tail.fill(&mut o);
+        assert_eq!(
+            o.spend_30m,
+            Some(4_200),
+            "a tail read keeps the last known spend"
+        );
+        let old: SessionOverlay = serde_json::from_str(r#"{"name":"x"}"#).unwrap();
+        assert_eq!(
+            old.spend_30m, None,
+            "schema 5 JSON without the field still reads"
+        );
+    }
 
     #[test]
     fn agentcenter_handoff_cache_is_session_scoped_and_fixture_roots_are_isolated() {

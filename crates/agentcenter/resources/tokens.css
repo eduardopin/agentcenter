@@ -59,14 +59,37 @@
   --ac-mark-machine: var(--ac-p-ardosia-600);
   --ac-mark-alert: var(--ac-p-carmim-700);
   --ac-mark-focus: var(--ac-p-ambar-700);
+  /* Under the limit: green series of the machine charts and the RAM bar. */
+  --ac-mark-ok: #1e7d4b;
 
   /* Fundos coloridos e o texto sobre eles (pilula de estado, selecao). */
   --ac-busy: var(--ac-p-ambar-700);
   --ac-on-busy-text: var(--ac-p-gelo-0);
   --ac-blocked: var(--ac-p-carmim-700);
   --ac-on-blocked-text: var(--ac-p-gelo-0);
-  --ac-selection: #f6e3c6;
+  --ac-selection: #dde2ee;
   --ac-on-selection-text: var(--ac-p-tinta-950);
+
+  /* Memory map (direction B, RFC-AC-001): one mid-tone fill per session
+   * state, the same in both themes, with white text on top. A fill is a
+   * mark (>= 3:1 on every surface and on the track) and carries its own
+   * on-text pair. Waiting is the "needs you" crimson family; free RAM and
+   * the reclaim action are the only teal. */
+  --ac-mark-fill-busy: #9e6510;
+  --ac-on-mark-fill-busy-text: #ffffff;
+  --ac-mark-fill-waiting: #c8325f;
+  --ac-on-mark-fill-waiting-text: #ffffff;
+  --ac-mark-fill-idle: #2b72a8;
+  --ac-on-mark-fill-idle-text: #ffffff;
+  --ac-mark-fill-mux: #62708c;
+  --ac-on-mark-fill-mux-text: #ffffff;
+  --ac-mark-fill-free: #11806c;
+  --ac-on-mark-fill-free-text: #ffffff;
+  --ac-text-reclaim: #0b6b5a;
+  /* Context tiles dimmed on the Reclaim page: no label, below 3:1 on purpose. */
+  --ac-tile-dim: #dfe2e9;
+  /* Swapped-out share of a tile or bar: white stripes at this opacity. */
+  --ac-hatch-opacity: 0.32;
 
   /* Cockpit (C24): estados da pilula de recomendacao. OK (continuar) e
    * neutro; COMPACTAR e contorno carmim; HANDOFF (e LOOP) preenchida de
@@ -141,13 +164,18 @@
     --ac-mark-machine: var(--ac-p-ardosia-400);
     --ac-mark-alert: var(--ac-p-carmim-300);
     --ac-mark-focus: var(--ac-p-ambar-300);
+    --ac-mark-ok: #3fb37f;
 
     --ac-busy: var(--ac-p-ambar-300);
     --ac-on-busy-text: var(--ac-p-ambar-950);
     --ac-blocked: var(--ac-p-carmim-300);
     --ac-on-blocked-text: var(--ac-p-carmim-950);
-    --ac-selection: #3a2c17;
+    --ac-selection: #2a2d3a;
     --ac-on-selection-text: var(--ac-p-tinta-50);
+
+    --ac-text-reclaim: #4fd1b5;
+    --ac-tile-dim: #262833;
+    --ac-track: #20222b;
   }
 }
 

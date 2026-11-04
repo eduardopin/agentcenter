@@ -123,6 +123,10 @@ impl Overlay for Shared {
     fn enrich(&self, session: &Session, overlay: &mut SessionOverlay) {
         self.0.enrich(session, overlay);
     }
+
+    fn begin_tick(&self) {
+        self.0.begin_tick();
+    }
 }
 
 /// claude 200 (`SID`), claude 210 (`SID_NONE`), codex 220 (pai aberto no

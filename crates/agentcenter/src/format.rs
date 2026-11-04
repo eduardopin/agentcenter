@@ -38,23 +38,6 @@ pub fn bytes(b: f64) -> String {
     }
 }
 
-/// `used of total`, os dois na unidade do total: `21.3 of 38.0 GiB`.
-pub fn used_of(used: u64, total: u64) -> String {
-    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
-    let mut div = 1.0;
-    let mut u = 0;
-    while total as f64 / div >= 1024.0 && u < UNITS.len() - 1 {
-        div *= 1024.0;
-        u += 1;
-    }
-    let (a, b) = (used as f64 / div, total as f64 / div);
-    if u == 0 {
-        format!("{a:.0} of {b:.0} {}", UNITS[u])
-    } else {
-        format!("{a:.1} of {b:.1} {}", UNITS[u])
-    }
-}
-
 /// Caracteres de controle e de formato (bidi, largura zero) escapados: cwd e
 /// overlay vem de fora, e U+202E inverteria o resto do rotulo.
 pub fn sanitize(s: &str) -> Cow<'_, str> {
@@ -137,11 +120,6 @@ pub fn ctx_marks(th: &Thresholds) -> Vec<f64> {
     }
     m.push(f64::from(th.handoff_now));
     m
-}
-
-/// Contexto quente (carmim) a partir do handoff do vigia; ausente nunca.
-pub fn ctx_hot(th: &Thresholds, ctx_pct: f64) -> bool {
-    ctx_pct >= 0.0 && ctx_pct >= f64::from(th.handoff_now)
 }
 
 /// `value` em % de `capacity`. `None` sem valor, sem capacidade ou com
@@ -311,6 +289,42 @@ pub fn reason_text(r: &Reason) -> String {
     }
 }
 
+/// Width of the share bar's track in px.
+pub const SHARE_BAR_PX: i32 = 96;
+
+/// The cockpit's first reason as a short line for the row, in the words of
+/// the Action column: `ctx 92 %`, `re-read 64 %`, `same call x3`. Empty
+/// without a reason.
+pub fn reason_short(reasons: &[Reason]) -> String {
+    match reasons.first() {
+        None => String::new(),
+        Some(&Reason::ContextoUrgente { ctx_pct, .. } | &Reason::ContextoAlto { ctx_pct, .. }) => {
+            format!("ctx {ctx_pct:.0} %")
+        }
+        Some(&Reason::Releitura { share, .. }) => format!("re-read {:.0} %", share * 100.0),
+        Some(&Reason::Loop { repeats }) => format!("same call x{repeats}"),
+        Some(&Reason::Ociosa { idle_min }) => format!("idle {idle_min:.0} min"),
+        Some(&Reason::HandoffVelho { age_min }) => format!("handoff {:.0} h old", age_min / 60.0),
+    }
+}
+
+/// The share next to the bar: `34 %`, true 0-100 %; `no transcript` when the
+/// session's spend is unknown.
+pub fn share_text(share: Option<f64>) -> String {
+    match share.filter(|s| s.is_finite()) {
+        Some(s) => format!("{:.0} %", (s * 100.0).clamp(0.0, 100.0)),
+        None => "no transcript".to_string(),
+    }
+}
+
+/// Tokens per minute beside the share: `2.1k/min`; empty when unknown.
+pub fn per_min_text(per_min: Option<f64>) -> String {
+    match per_min.filter(|v| v.is_finite() && *v >= 0.0) {
+        Some(v) => format!("{}/min", human(v.round() as u64)),
+        None => String::new(),
+    }
+}
+
 /// Idade do handoff: `35m` abaixo de uma hora, `4h` acima.
 pub fn age(min: f64) -> String {
     if min < 60.0 {
@@ -445,6 +459,8 @@ pub struct Row {
     pub sub_text: String,
     pub sub_tooltip: String,
     pub a11y_label: String,
+    /// The cockpit's first reason, short (`ctx 92 %`); empty without one.
+    pub reason: String,
 }
 
 fn cell<T: Copy>(
@@ -505,14 +521,9 @@ impl Row {
         let mux = group == Group::Multiplexer;
         let agent = sanitize(&s.agent).into_owned();
         let cwd_full = s.cwd.as_deref().map(|c| short_path(c, home));
-        let name = text_or(ov.and_then(|o| o.name.as_deref()))
-            .or_else(|| text_or(herdr.and_then(|h| h.title.as_deref())))
-            .or_else(|| {
-                // O multiplexador se chama pelo agente; o cwd vai na 2a linha.
-                let c = s.cwd.as_deref().filter(|_| !mux)?.trim_end_matches('/');
-                text_or(c.rsplit('/').next())
-            })
-            .unwrap_or_else(|| agent.clone());
+        // The one name rule of the list and both maps: slash commands and
+        // filler are skipped, `<cwd basename> - <pane>` is the fallback.
+        let name = crate::memory_map::session_name(s);
 
         let (cpu, cpu_text) = cell(s, Metric::CpuPct, s.cpu_pct, |v| v, cpu_pct);
         let procs = match s.procs {
@@ -808,6 +819,11 @@ impl Row {
             sub_text,
             sub_tooltip,
             a11y_label,
+            // Only a verdict that asks for something explains itself.
+            reason: match rec {
+                3..=6 => reason_short(&cockpit.reasons),
+                _ => String::new(),
+            },
         }
     }
 }
@@ -829,13 +845,6 @@ mod tests {
         assert_eq!(bytes(340.0 * 1024.0 * 1024.0), "340 MiB");
         assert_eq!(bytes(1.25 * 1024.0 * 1024.0 * 1024.0), "1.2 GiB");
         assert_eq!(bytes(-3.0), "0 B");
-    }
-
-    #[test]
-    fn used_of_shares_the_unit_of_the_total() {
-        let gib = 1u64 << 30;
-        assert_eq!(used_of(gib / 2, 38 * gib), "0.5 of 38.0 GiB");
-        assert_eq!(used_of(700, 900), "700 of 900 B");
     }
 
     #[test]
@@ -1131,6 +1140,25 @@ mod tests {
         assert_eq!(r.cwd, "~/src/kiln/");
     }
 
+    /// The list names a session as both maps do: a slash command is not a
+    /// name, and the fallback is `<cwd basename> - <pane>`.
+    #[test]
+    fn the_name_follows_the_map_rule() {
+        let mut s = session();
+        s.cwd = Some("/home/dev/src/kiln/".into());
+        s.overlay = Some(SessionOverlay {
+            name: Some("/compact".into()),
+            herdr: Some(HerdrOverlay {
+                pane_id: Some("w1-2".into()),
+                ..HerdrOverlay::default()
+            }),
+            ..SessionOverlay::default()
+        });
+        let r = Row::from_session(&s, IoStallSource::Delayacct, None);
+        assert_eq!(r.name, "kiln - w1-2");
+        assert_eq!(r.name, crate::memory_map::session_name(&s));
+    }
+
     #[test]
     fn multiplexer_is_its_own_group_without_state() {
         let s = Session::aggregate("herdr".into(), AgentRole::Multiplexer, 7, 16, Vec::new());
@@ -1141,7 +1169,10 @@ mod tests {
             ("", "herdr · multiplexer")
         );
         assert!(!r.a11y_label.contains("recommendation"));
-        assert_eq!(r.name, "herdr");
+        assert_eq!(
+            r.name, "herdr multiplexer",
+            "the maps' name for a multiplexer"
+        );
     }
 
     #[test]
@@ -1287,14 +1318,11 @@ mod tests {
     }
 
     #[test]
-    fn ctx_marks_and_heat_follow_the_vigia_environment() {
+    fn ctx_marks_follow_the_vigia_environment() {
         let d = th(&[]);
         assert_eq!(ctx_marks(&d), [70.0, 90.0]);
-        assert!(!ctx_hot(&d, 89.9) && ctx_hot(&d, 90.0) && ctx_hot(&d, 112.0));
-        assert!(!ctx_hot(&d, -1.0), "absent is never hot");
         let t = th(&[("SQUAD_REREAD_PISO", "50"), ("SQUAD_CTX_PCT", "80")]);
         assert_eq!(ctx_marks(&t), [50.0, 80.0]);
-        assert!(ctx_hot(&t, 80.0) && !ctx_hot(&t, 79.0));
         // Piso acima do handoff vale o handoff (Thresholds::contas): uma marca.
         assert_eq!(
             ctx_marks(&th(&[("SQUAD_REREAD_PISO", "95"), ("SQUAD_CTX_PCT", "85")])),
@@ -1398,6 +1426,81 @@ mod tests {
             r.a11y_label.contains("burn 134% of budget"),
             "{}",
             r.a11y_label
+        );
+    }
+
+    // ---- RR1 list: reason, share and tokens per minute ------------------------
+
+    #[test]
+    fn the_reason_is_short_and_follows_the_first_cockpit_reason() {
+        let ctx = |p: f64| Reason::ContextoAlto {
+            ctx_pct: p,
+            limite_pct: 50,
+        };
+        assert_eq!(reason_short(&[ctx(92.0)]), "ctx 92 %");
+        assert_eq!(
+            reason_short(&[
+                Reason::ContextoUrgente {
+                    ctx_pct: 77.4,
+                    limite_pct: 50
+                },
+                Reason::HandoffVelho { age_min: 300.0 }
+            ]),
+            "ctx 77 %",
+            "the first reason only"
+        );
+        assert_eq!(
+            reason_short(&[Reason::Releitura {
+                share: 0.64,
+                limite: 0.6,
+                piso: 188_115,
+                turno: 20_000,
+                payback: Some(3.0)
+            }]),
+            "re-read 64 %"
+        );
+        assert_eq!(reason_short(&[Reason::Loop { repeats: 3 }]), "same call x3");
+        assert_eq!(
+            reason_short(&[Reason::Ociosa { idle_min: 42.0 }]),
+            "idle 42 min"
+        );
+        assert_eq!(
+            reason_short(&[Reason::HandoffVelho { age_min: 300.0 }]),
+            "handoff 5 h old"
+        );
+        assert_eq!(reason_short(&[]), "", "no reason, no text");
+    }
+
+    #[test]
+    fn the_cockpit_rows_carry_their_short_reason() {
+        let rows = cockpit_rows();
+        assert_eq!(by_name(&rows, "ledger-migration-v4").reason, "ctx 62 %");
+        assert_eq!(by_name(&rows, "quill-flaky-tests").reason, "same call x4");
+        assert_eq!(by_name(&rows, "atlas-api-auth-refactor").reason, "");
+        assert_eq!(by_name(&rows, "relay-i18n").reason, "");
+    }
+
+    #[test]
+    fn the_share_reads_as_a_true_percentage_or_no_transcript() {
+        assert_eq!(share_text(Some(0.34)), "34 %");
+        assert_eq!(share_text(Some(0.0)), "0 %");
+        assert_eq!(share_text(Some(1.0)), "100 %");
+        assert_eq!(share_text(Some(1.7)), "100 %", "never above the whole");
+        assert_eq!(share_text(Some(0.004)), "0 %", "the bar shows the sliver");
+        assert_eq!(share_text(None), "no transcript");
+        assert_eq!(share_text(Some(f64::NAN)), "no transcript");
+    }
+
+    #[test]
+    fn tokens_per_minute_read_in_k_and_m() {
+        assert_eq!(per_min_text(Some(2100.0)), "2.1k/min");
+        assert_eq!(per_min_text(Some(950.0)), "950/min");
+        assert_eq!(per_min_text(Some(0.0)), "0/min");
+        assert_eq!(per_min_text(Some(1_250_000.0)), "1.2M/min");
+        assert_eq!(
+            per_min_text(None),
+            "",
+            "unknown reads as no transcript instead"
         );
     }
 }

@@ -20,6 +20,8 @@
 //! o resort do `SortListModel` emite so a faixa que mudou e reaproveita os
 //! widgets. Por isso o resort e inteiro, mas so quando a chave mexeu.
 
+#[path = "reorder.rs"]
+mod reorder;
 #[path = "session_row.rs"]
 mod session_row;
 
@@ -28,7 +30,7 @@ use crate::session_object::{Changed, SessionObject};
 use adw::prelude::*;
 use agentcenter_core::Snapshot;
 use gtk::gio;
-use session_row::Density;
+use session_row::{Density, Metric, RowMetric};
 use std::cell::{Cell, RefCell};
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
@@ -111,6 +113,7 @@ impl SessionModel {
                 }
                 None => {
                     let obj = SessionObject::new(&row);
+                    obj.set_starttime(s.starttime.map_or(-1, |t| t as i64));
                     self.by_pid.insert(s.pid, obj.clone());
                     new.push(obj);
                 }
@@ -149,23 +152,44 @@ impl Applied {
 /// Ordem da lista, escolhida no menu.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum SortKey {
-    /// Secoes por estado, memoria dentro de cada uma (layout B).
-    #[default]
+    /// Secoes por estado, memoria dentro de cada uma.
     State,
     Memory,
     Cpu,
     Name,
     /// HANDOFF primeiro, depois contexto e burn, maior primeiro (contexto.py).
     Recommendation,
+    /// Weighted tokens of the last 30 minutes, then memory (REVIEW_RR1). The
+    /// default of `sort-order`: one flat list, the biggest spender first.
+    #[default]
+    Spend,
+    /// Weighted tokens since the session started.
+    SinceStart,
+    /// Context window use, fullest first.
+    Context,
 }
 
 impl SortKey {
-    pub const ALL: [SortKey; 5] = [
+    pub const ALL: [SortKey; 8] = [
         SortKey::State,
         SortKey::Memory,
         SortKey::Cpu,
         SortKey::Name,
         SortKey::Recommendation,
+        SortKey::Spend,
+        SortKey::SinceStart,
+        SortKey::Context,
+    ];
+
+    /// What the sort menu offers, in menu order. State and Recommendation
+    /// stay valid ids so an old setting reads back, but are not offered.
+    pub const OPTIONS: [SortKey; 6] = [
+        SortKey::Spend,
+        SortKey::SinceStart,
+        SortKey::Context,
+        SortKey::Name,
+        SortKey::Cpu,
+        SortKey::Memory,
     ];
 
     /// Valor da chave `sort-order` do GSettings (prefs.rs): estavel, nao muda
@@ -177,6 +201,9 @@ impl SortKey {
             SortKey::Cpu => "cpu",
             SortKey::Name => "name",
             SortKey::Recommendation => "recommendation",
+            SortKey::Spend => "spend",
+            SortKey::SinceStart => "since-start",
+            SortKey::Context => "context",
         }
     }
 
@@ -192,6 +219,23 @@ impl SortKey {
             SortKey::Cpu => "CPU",
             SortKey::Name => "Name",
             SortKey::Recommendation => "Recommendation",
+            SortKey::Spend => "30-min spend",
+            SortKey::SinceStart => "Since start",
+            SortKey::Context => "Context",
+        }
+    }
+
+    /// The order inside a sentence: `Sorted by 30-min spend`.
+    pub fn phrase(self) -> &'static str {
+        match self {
+            SortKey::Cpu => "CPU",
+            SortKey::Spend => "30-min spend",
+            SortKey::State => "state",
+            SortKey::Memory => "memory",
+            SortKey::Name => "name",
+            SortKey::Recommendation => "recommendation",
+            SortKey::SinceStart => "since start",
+            SortKey::Context => "context",
         }
     }
 
@@ -205,42 +249,9 @@ impl SortKey {
             SortKey::Recommendation => {
                 Changed::of("rec") | Changed::of("ctx") | Changed::of("burn")
             }
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum SessionFilter {
-    #[default]
-    All,
-    Group(Group),
-    IoBound,
-    Recommendation(u32),
-}
-
-impl SessionFilter {
-    pub fn matches(self, o: &SessionObject) -> bool {
-        match self {
-            Self::All => true,
-            Self::Group(g) => Group::from_rank(o.group()) == g,
-            Self::IoBound => !is_mux(o) && o.io_bound(),
-            Self::Recommendation(r) => !is_mux(o) && o.rec() == r,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::All => "All sessions",
-            Self::Group(g) => g.title(),
-            Self::IoBound => "I/O-bound",
-            Self::Recommendation(0) => "No cockpit data",
-            Self::Recommendation(1) => "Reading transcript",
-            Self::Recommendation(2) => "Cockpit OK",
-            Self::Recommendation(3) => "Compact",
-            Self::Recommendation(4) => "Handoff",
-            Self::Recommendation(5) => "Cockpit idle",
-            Self::Recommendation(6) => "Loop",
-            Self::Recommendation(_) => "Recommendation",
+            // Spend arrives through `set_spend`, not through a row's props.
+            SortKey::Spend | SortKey::SinceStart => Changed::default(),
+            SortKey::Context => Changed::of("ctx"),
         }
     }
 }
@@ -254,7 +265,56 @@ fn is_mux(o: &SessionObject) -> bool {
 pub fn section(key: SortKey, o: &SessionObject) -> u32 {
     match key {
         SortKey::State => o.group(),
+        // One line per session, the multiplexers among them (direction B).
+        SortKey::Cpu | SortKey::Memory => 0,
+        SortKey::Spend | SortKey::SinceStart | SortKey::Context => 0,
         _ => u32::from(is_mux(o)),
+    }
+}
+
+/// CPU and Memory lists have no section headers.
+fn flat(key: SortKey) -> bool {
+    matches!(
+        key,
+        SortKey::Cpu | SortKey::Memory | SortKey::Spend | SortKey::SinceStart | SortKey::Context
+    )
+}
+
+/// List heading for the order: `CPU by session` or `Memory by session`.
+pub fn heading(key: SortKey) -> &'static str {
+    match key {
+        SortKey::Memory => "Memory by session",
+        SortKey::Spend => "Sessions by 30-min spend",
+        SortKey::SinceStart => "Sessions by spend since start",
+        SortKey::Context => "Sessions by context",
+        _ => "CPU by session",
+    }
+}
+
+/// Sub line under the heading: `% of one core · sessions use 6.2 of 16 cores`
+/// or `PSS + swap · 28.6 GiB`.
+pub fn subheading(key: SortKey, snap: &Snapshot) -> String {
+    if key == SortKey::Memory {
+        let held: u64 = crate::memory_map::MapInput::from_snapshot(snap)
+            .sessions
+            .iter()
+            .map(|s| s.bytes())
+            .sum();
+        return format!("PSS + swap \u{b7} {}", crate::memory_map::gib1(held));
+    }
+    match key {
+        SortKey::Spend => return "weighted tokens, last 30 min".to_owned(),
+        SortKey::SinceStart => return "weighted tokens since start".to_owned(),
+        SortKey::Context => return "context window in use".to_owned(),
+        _ => {}
+    }
+    match snap.summary.sessions_cpu_pct {
+        Some(pct) => format!(
+            "% of one core \u{b7} sessions use {:.1} of {} cores",
+            pct / 100.0,
+            snap.machine.cores
+        ),
+        None => "% of one core".to_owned(),
     }
 }
 
@@ -278,6 +338,16 @@ pub fn order_within(key: SortKey, a: &SessionObject, b: &SessionObject) -> Order
             .cmp(&(b.rec() != REC_HANDOFF))
             .then_with(|| b.ctx().total_cmp(&a.ctx()))
             .then_with(|| b.burn().total_cmp(&a.burn())),
+        // Unknown (-1) sinks below a known zero; the pid closes the tie.
+        SortKey::Spend => b
+            .spend()
+            .cmp(&a.spend())
+            .then_with(|| b.mem().cmp(&a.mem())),
+        SortKey::SinceStart => b
+            .since()
+            .cmp(&a.since())
+            .then_with(|| b.mem().cmp(&a.mem())),
+        SortKey::Context => b.ctx().total_cmp(&a.ctx()),
     };
     by.then_with(|| a.pid().cmp(&b.pid()))
 }
@@ -316,25 +386,167 @@ fn objects(a: &gtk::glib::Object, b: &gtk::glib::Object) -> Option<(SessionObjec
 /// a da janela: com o detalhe ao lado (C11) a lista e a barra lateral.
 // A linha compacta ainda pede ~576px; trocar antes disso evita corte no rack
 // de 563px da janela 1280px com o dashboard ao lado.
-pub const DENSITY_MAX_WIDTH_SP: [(&str, f64); 2] = [("compact", 720.0), ("narrow", 600.0)];
+// The 450 px list beside the map at 1280 keeps both figure columns; only the
+// 360 px window drops one.
+// Column drops (REVIEW_RR1): <= 900 CPU (`no-cpu`), <= 720 memory
+// (`compact`), <= 560 the share bar (`pct-only`), <= 420 context % (`narrow`);
+// under 1000 the rows grow to 44 px (`touch`).
+pub const DENSITY_MAX_WIDTH_SP: [(&str, f64); 5] = [
+    ("touch", 999.0),
+    ("no-cpu", 900.0),
+    ("compact", 720.0),
+    ("pct-only", 560.0),
+    ("narrow", 420.0),
+];
 
 const ALL_AGENTS: &str = "All agents";
+
+/// The handler of the scroll that waits for a layout, if any.
+type PendingScroll = Rc<RefCell<Option<gtk::glib::SignalHandlerId>>>;
+
+/// Milliseconds on the monotonic clock, the gate's time.
+fn now_ms() -> u64 {
+    (gtk::glib::monotonic_time() / 1000) as u64
+}
+
+/// When and how the list changes its order: the gate, its holds, and the
+/// "Sorted by ..." line. Shared with the 1 s timer and the focus/pointer
+/// handlers, which hold it weakly.
+struct Order {
+    gate: RefCell<reorder::Gate>,
+    key: Rc<Cell<SortKey>>,
+    dialog: Cell<bool>,
+    operation: Cell<bool>,
+    pointer: gtk::EventControllerMotion,
+    focus: gtk::EventControllerFocus,
+    sorter: gtk::CustomSorter,
+    selection: gtk::SingleSelection,
+    view: gtk::ListView,
+    scroll: gtk::Adjustment,
+    note: gtk::Label,
+}
+
+impl Order {
+    fn holds(&self) -> reorder::Holds {
+        reorder::Holds {
+            pointer: self.pointer.contains_pointer(),
+            focus: self.focus.contains_focus(),
+            dialog: self.dialog.get(),
+            operation: self.operation.get(),
+        }
+    }
+
+    /// The order of the data differs from the screen: it applies at the next
+    /// moment the gate allows.
+    fn want(&self, now: u64) {
+        self.gate.borrow_mut().want();
+        self.poll(now);
+    }
+
+    fn poll(&self, now: u64) {
+        let go = self.gate.borrow_mut().poll(now, self.holds());
+        if go {
+            self.apply();
+        }
+        self.refresh_note(now);
+    }
+
+    /// An explicit choice (the sort menu, F5): applies now, whatever holds.
+    fn force(&self, now: u64) {
+        self.gate.borrow_mut().force(now);
+        self.apply();
+        self.refresh_note(now);
+    }
+
+    fn refresh_note(&self, now: u64) {
+        let text = self.note_text(now);
+        if self.note.label() != text {
+            self.note.set_label(&text);
+        }
+    }
+
+    fn note_text(&self, now: u64) -> String {
+        reorder::sorted_by_text(self.key.get().phrase(), self.gate.borrow().age_s(now))
+    }
+
+    /// The screen row of the selected session, from the list's own children.
+    fn selected_row_height(&self) -> Option<f64> {
+        let mut child = self.view.first_child();
+        while let Some(w) = child {
+            if w.state_flags().contains(gtk::StateFlags::SELECTED) && w.height() > 0 {
+                return Some(f64::from(w.height()));
+            }
+            child = w.next_sibling();
+        }
+        None
+    }
+
+    /// Re-sorts, numbers the rows, and keeps the selected session where it
+    /// was on screen: the selection follows the session, and the scroll
+    /// follows the selection.
+    fn apply(&self) {
+        let selected = self.selection.selected_item();
+        let old_pos = self.selection.selected();
+        let row_h = self.selected_row_height();
+        self.sorter.changed(gtk::SorterChange::Different);
+        if let Some(sel) = selected {
+            if self.selection.selected_item().as_ref() != Some(&sel) {
+                let n = self.selection.n_items();
+                if let Some(pos) = (0..n).find(|&i| self.selection.item(i).as_ref() == Some(&sel)) {
+                    self.selection.set_selected(pos);
+                }
+            }
+            let new_pos = self.selection.selected();
+            if let Some(h) = row_h
+                && new_pos != gtk::INVALID_LIST_POSITION
+                && old_pos != gtk::INVALID_LIST_POSITION
+            {
+                self.scroll.set_value(reorder::keep_position(
+                    self.scroll.value(),
+                    old_pos,
+                    new_pos,
+                    h,
+                ));
+            }
+        }
+        for i in 0..self.selection.n_items() {
+            if let Some(o) = self.selection.item(i).and_downcast::<SessionObject>()
+                && o.rank() != i + 1
+            {
+                o.set_rank(i + 1);
+            }
+        }
+    }
+}
 
 pub struct SessionList {
     root: adw::BreakpointBin,
     view: gtk::ListView,
     store: gio::ListStore,
-    sorter: gtk::CustomSorter,
     filter: gtk::CustomFilter,
-    active_filter: Rc<Cell<SessionFilter>>,
-    clear_filter: gtk::Button,
     selection: gtk::SingleSelection,
     key: Rc<Cell<SortKey>>,
+    metric: RowMetric,
     agents: gtk::StringList,
     agent_menu: gtk::DropDown,
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by tests"))]
+    axis: gtk::Box,
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by tests"))]
     sort_menu: gtk::DropDown,
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by tests"))]
+    heading: gtk::Label,
+    sub: gtk::Label,
+    sub_inline: gtk::Label,
+    choose: Rc<dyn Fn(SortKey)>,
+    on_sort: SortListeners,
+    row_handlers: session_row::RowHandlers,
     scroll: gtk::Adjustment,
+    order: Rc<Order>,
+    /// The one `changed` handler waiting for a layout, see [`scroll_when_laid_out`].
+    pending_scroll: PendingScroll,
 }
+
+type SortListeners = Rc<RefCell<Vec<Rc<dyn Fn(SortKey)>>>>;
 
 /// Um breakpoint por densidade, do mais largo ao mais estreito: com varios
 /// valendo, o libadwaita aplica o ultimo, entao cada um liga tambem as
@@ -386,7 +598,6 @@ impl SessionList {
     pub fn new(model: &SessionModel) -> Self {
         let key = Rc::new(Cell::new(SortKey::default()));
         let agent: Rc<RefCell<Option<String>>> = Rc::default();
-        let active_filter = Rc::new(Cell::new(SessionFilter::All));
 
         let k = key.clone();
         let sorter = gtk::CustomSorter::new(move |a, b| {
@@ -401,10 +612,9 @@ impl SessionList {
             })
         });
         let ag = agent.clone();
-        let named = active_filter.clone();
         let filter = gtk::CustomFilter::new(move |o| {
             o.downcast_ref::<SessionObject>()
-                .is_some_and(|o| shows(ag.borrow().as_deref(), o) && named.get().matches(o))
+                .is_some_and(|o| shows(ag.borrow().as_deref(), o))
         });
         let filtered = gtk::FilterListModel::new(Some(model.store().clone()), Some(filter.clone()));
         let sort = gtk::SortListModel::new(Some(filtered.clone()), Some(sorter.clone()));
@@ -414,15 +624,20 @@ impl SessionList {
         selection.set_can_unselect(true);
 
         let density = Density::default();
+        let metric = RowMetric::default();
+        metric.rescale(model.store());
         let rows = gtk::SignalListItemFactory::new();
-        let d = density.clone();
+        let row_handlers = session_row::RowHandlers::default();
+        let (d, m, h) = (density.clone(), metric.clone(), row_handlers.clone());
         rows.connect_setup(move |_, item| {
             if let Some(item) = item.downcast_ref::<gtk::ListItem>() {
-                session_row::setup(item, &d);
+                session_row::setup(item, &d, &m, &h);
             }
         });
         let view = gtk::ListView::new(Some(selection.clone()), Some(rows));
-        view.set_header_factory(Some(&header_factory(key.clone())));
+        if !flat(key.get()) {
+            view.set_header_factory(Some(&header_factory(key.clone())));
+        }
         view.add_css_class("session-rack");
         // Tab sai da lista; as setas andam entre as linhas.
         view.set_tab_behavior(gtk::ListTabBehavior::Item);
@@ -431,19 +646,68 @@ impl SessionList {
         view.update_property(&[gtk::accessible::Property::Label("Agent sessions")]);
 
         // Barra da lista: ordem e filtro por tipo de agente.
-        let labels: Vec<&str> = SortKey::ALL.iter().map(|k| k.label()).collect();
-        let (sort_menu, _) = dropdown(&labels, "Sort sessions by");
         let (agent_menu, agents) = dropdown(&[ALL_AGENTS], "Show agent type");
-        let caption = gtk::Label::new(Some("Sort"));
-        caption.add_css_class("session-caption");
-        let bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        // Heading, the CPU | Memory toggle that sets order and bar, and a
+        // sub line with the unit (and the agent filter when there is a choice).
+        let title = gtk::Label::new(Some(heading(key.get())));
+        title.add_css_class("list-heading");
+        title.set_xalign(0.0);
+        title.set_hexpand(true);
+        title.set_accessible_role(gtk::AccessibleRole::Heading);
+        let labels = SortKey::OPTIONS.map(SortKey::label);
+        let (sort_menu, _) = dropdown(&labels, "Sort sessions by");
+        sort_menu.add_css_class("order-menu");
+        sort_menu.set_valign(gtk::Align::Center);
+        sort_menu.set_halign(gtk::Align::End);
+        if let Some(i) = SortKey::OPTIONS.iter().position(|k| *k == key.get()) {
+            sort_menu.set_selected(i as u32);
+        }
+        let note = gtk::Label::new(None);
+        note.add_css_class("list-sub");
+        note.add_css_class("order-note");
+        note.set_xalign(0.0);
+        note.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        let sub = gtk::Label::new(None);
+        sub.add_css_class("list-sub");
+        sub.set_xalign(0.0);
+        sub.set_hexpand(true);
+        sub.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        // A wide list (the page below the map) has the unit on the heading's
+        // line; a compact one gives it a line of its own.
+        let sub_inline = gtk::Label::new(None);
+        sub_inline.add_css_class("list-sub");
+        sub_inline.set_xalign(0.0);
+        sub_inline.set_hexpand(true);
+        sub_inline.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        density
+            .bind_property("compact", &sub, "visible")
+            .sync_create()
+            .build();
+        density
+            .bind_property("compact", &sub_inline, "visible")
+            .invert_boolean()
+            .sync_create()
+            .build();
+        title.set_hexpand(false);
+        // Nothing to choose with one agent type: no control (see `refresh_agents`).
+        agent_menu.set_visible(false);
+        agent_menu.add_css_class("agent-filter");
+        let top = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        top.append(&title);
+        top.append(&sub_inline);
+        top.append(&sort_menu);
+        let under = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        under.append(&sub);
+        under.append(&agent_menu);
+        let note_line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        note_line.append(&note);
+        let axis = session_row::axis(&density);
+        let bar = gtk::Box::new(gtk::Orientation::Vertical, 4);
         bar.add_css_class("session-controls");
-        let spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-        spacer.set_hexpand(true);
-        bar.append(&spacer);
-        bar.append(&caption);
-        bar.append(&sort_menu);
-        bar.append(&agent_menu);
+        bar.append(&top);
+        bar.append(&under);
+        bar.append(&note_line);
+        bar.append(&axis);
 
         let scrolled = gtk::ScrolledWindow::builder()
             .child(&view)
@@ -452,59 +716,7 @@ impl SessionList {
             .build();
         let page = gtk::Box::new(gtk::Orientation::Vertical, 0);
         page.append(&bar);
-        let filter_bar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-        filter_bar.add_css_class("session-controls");
-        let filter_label = gtk::Label::builder()
-            .xalign(0.0)
-            .hexpand(true)
-            .wrap(true)
-            .wrap_mode(gtk::pango::WrapMode::WordChar)
-            .build();
-        filter_label.set_width_chars(1);
-        let clear_filter = gtk::Button::with_label("Clear");
-        clear_filter.set_size_request(44, 44);
-        clear_filter.update_property(&[gtk::accessible::Property::Label("Clear session filter")]);
-        filter_bar.append(&filter_label);
-        filter_bar.append(&clear_filter);
-        page.append(&filter_bar);
         page.append(&scrolled);
-        let refresh: Rc<dyn Fn()> = {
-            let (named, label, clear, filtered) = (
-                active_filter.clone(),
-                filter_label,
-                clear_filter.clone(),
-                filtered.downgrade(),
-            );
-            Rc::new(move || {
-                let Some(filtered) = filtered.upgrade() else {
-                    return;
-                };
-                let active = named.get();
-                label.set_label(&format!(
-                    "{} · {} results",
-                    active.label(),
-                    filtered.n_items()
-                ));
-                clear.set_visible(active != SessionFilter::All);
-            })
-        };
-        refresh();
-        let update_count = refresh.clone();
-        filtered.connect_items_changed(move |_, _, _, _| update_count());
-        let update_name = refresh.clone();
-        filter.connect_changed(move |_, _| update_name());
-        let (named, f, sel, view_for_clear) = (
-            active_filter.clone(),
-            filter.clone(),
-            selection.clone(),
-            view.clone(),
-        );
-        clear_filter.connect_clicked(move |_| {
-            sel.set_selected(gtk::INVALID_LIST_POSITION);
-            named.set(SessionFilter::All);
-            f.changed(gtk::FilterChange::Different);
-            view_for_clear.grab_focus();
-        });
         // A densidade segue a largura da lista, nao a da janela: ao lado do
         // detalhe a lista e estreita mesmo numa janela larga.
         let root = adw::BreakpointBin::builder()
@@ -516,19 +728,123 @@ impl SessionList {
             root.add_breakpoint(bp);
         }
 
-        let (k, s, v) = (key.clone(), sorter.clone(), view.clone());
-        sort_menu.connect_selected_notify(move |dd| {
-            let new = SortKey::ALL
-                .get(dd.selected() as usize)
-                .copied()
-                .unwrap_or_default();
-            if new == k.get() {
-                return;
+        // Pointer over the list and focus inside it hold the order still.
+        let pointer = gtk::EventControllerMotion::new();
+        scrolled.add_controller(pointer.clone());
+        let focus = gtk::EventControllerFocus::new();
+        scrolled.add_controller(focus.clone());
+        let order = Rc::new(Order {
+            gate: RefCell::default(),
+            key: key.clone(),
+            dialog: Cell::new(false),
+            operation: Cell::new(false),
+            pointer: pointer.clone(),
+            focus: focus.clone(),
+            sorter: sorter.clone(),
+            selection: selection.clone(),
+            view: view.clone(),
+            scroll: scrolled.vadjustment(),
+            note: note.clone(),
+        });
+        order.refresh_note(now_ms());
+        // A hold that ends lets the waiting reorder through.
+        let weak = Rc::downgrade(&order);
+        pointer.connect_leave(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.poll(now_ms());
             }
-            k.set(new);
-            s.changed(gtk::SorterChange::Different);
-            // Os titulos de secao dependem da ordem: refaz os cabecalhos.
-            v.set_header_factory(Some(&header_factory(k.clone())));
+        });
+        let weak = Rc::downgrade(&order);
+        focus.connect_leave(move |_| {
+            if let Some(o) = weak.upgrade() {
+                o.poll(now_ms());
+            }
+        });
+        // Also each second: the age in the note, and a hold that ended
+        // without an event.
+        let weak = Rc::downgrade(&order);
+        gtk::glib::timeout_add_seconds_local(1, move || match weak.upgrade() {
+            Some(o) => {
+                o.poll(now_ms());
+                gtk::glib::ControlFlow::Continue
+            }
+            None => gtk::glib::ControlFlow::Break,
+        });
+        // F5 reorders now, from anywhere in the list's region.
+        let f5 = gtk::ShortcutController::new();
+        f5.set_scope(gtk::ShortcutScope::Local);
+        let weak = Rc::downgrade(&order);
+        f5.add_shortcut(gtk::Shortcut::new(
+            Some(gtk::KeyvalTrigger::new(
+                gtk::gdk::Key::F5,
+                gtk::gdk::ModifierType::empty(),
+            )),
+            Some(gtk::CallbackAction::new(move |_, _| {
+                if let Some(o) = weak.upgrade() {
+                    o.force(now_ms());
+                }
+                gtk::glib::Propagation::Stop
+            })),
+        ));
+        root.add_controller(f5);
+
+        let on_sort: SortListeners = Rc::default();
+        let choose: Rc<dyn Fn(SortKey)> = {
+            let (k, o, v, m, h, a) = (
+                key.clone(),
+                order.clone(),
+                view.clone(),
+                metric.clone(),
+                title.clone(),
+                axis.clone(),
+            );
+            let callbacks = on_sort.clone();
+            Rc::new(move |new| {
+                if new == k.get() {
+                    return;
+                }
+                k.set(new);
+                m.follow(new);
+                o.force(now_ms());
+                h.set_label(heading(new));
+                a.set_visible(Metric::of(new) == Metric::Cpu);
+                // Section titles depend on the order; the flat orders have none.
+                v.set_header_factory(
+                    if flat(new) {
+                        None
+                    } else {
+                        Some(header_factory(k.clone()))
+                    }
+                    .as_ref(),
+                );
+                let callbacks = callbacks.borrow().clone();
+                for f in callbacks {
+                    f(new);
+                }
+            })
+        };
+        // `syncing`: set_sort_key moves the menu without the user's choice.
+        let syncing = Rc::new(Cell::new(false));
+        {
+            let (choose, syncing) = (choose.clone(), syncing.clone());
+            sort_menu.connect_selected_notify(move |dd| {
+                if let Some(k) = SortKey::OPTIONS.get(dd.selected() as usize)
+                    && !syncing.get()
+                {
+                    choose(*k);
+                }
+            });
+        }
+        let menu = (sort_menu.clone(), syncing);
+        let choose_for_key = choose.clone();
+        let press: Rc<dyn Fn(SortKey)> = Rc::new(move |new| {
+            let (dd, syncing) = &menu;
+            if let Some(i) = SortKey::OPTIONS.iter().position(|k| *k == new) {
+                syncing.set(true);
+                dd.set_selected(i as u32);
+                syncing.set(false);
+            }
+            choose_for_key(new);
         });
         let (ag, f) = (agent.clone(), filter.clone());
         agent_menu.connect_selected_notify(move |dd| {
@@ -545,56 +861,198 @@ impl SessionList {
             }
         });
 
+        // Under 1000 sp the rows are 44 px and the row menu stays visible.
+        {
+            let view = view.downgrade();
+            density.connect_touch_notify(move |d| {
+                if let Some(view) = view.upgrade() {
+                    if d.touch() {
+                        view.add_css_class("touch-rows");
+                    } else {
+                        view.remove_css_class("touch-rows");
+                    }
+                }
+            });
+        }
+        // End is the window's own `win.act` flow, the same dialog as the
+        // row menu's; the other operations are the window's to answer.
+        {
+            let (view, store) = (view.downgrade(), model.store().downgrade());
+            row_handlers.borrow_mut().push(Rc::new(move |pid, op| {
+                if op != crate::actions_ui::RowOp::End {
+                    return;
+                }
+                let (Some(view), Some(store)) = (view.upgrade(), store.upgrade()) else {
+                    return;
+                };
+                let name = (0..store.n_items())
+                    .filter_map(|i| store.item(i).and_downcast::<SessionObject>())
+                    .find(|o| o.pid() == pid)
+                    .map(|o| o.name())
+                    .unwrap_or_default();
+                let _ = view.activate_action(
+                    &format!("win.{}", crate::actions_ui::WIN_ACTION),
+                    Some(&crate::actions_ui::end_target(pid, &name)),
+                );
+            }));
+        }
+
         let scroll = scrolled.vadjustment();
         Self {
             root,
             view,
             store: model.store().clone(),
-            sorter,
             filter,
-            active_filter,
-            clear_filter,
             selection,
             key,
+            metric,
             agents,
             agent_menu,
+            axis,
             sort_menu,
+            heading: title,
+            sub,
+            sub_inline,
+            choose: press,
+            on_sort,
+            row_handlers,
             scroll,
+            order,
+            pending_scroll: PendingScroll::default(),
         }
     }
 
-    pub fn set_filter(&self, filter: SessionFilter) {
-        self.selection.set_selected(gtk::INVALID_LIST_POSITION);
-        self.active_filter.set(filter);
-        self.filter.changed(gtk::FilterChange::Different);
+    #[cfg_attr(not(test), expect(dead_code, reason = "read by tests"))]
+    /// A session row is selected.
+    pub fn has_selection(&self) -> bool {
+        self.selection.selected() != gtk::INVALID_LIST_POSITION
     }
 
-    pub fn has_filter(&self) -> bool {
-        self.active_filter.get() != SessionFilter::All
+    /// Spend of the same snapshot, for the spend orders and the share bar. The window calls it after each snapshot, after
+    /// `spend.update(now, spend::inputs(&snap))`. A new order of the data
+    /// reaches the screen through the 30 s gate.
+    pub fn set_spend(&self, spend: &crate::spend::SpendTracker) {
+        self.set_spend_now(spend, now_ms());
     }
 
-    pub fn focus_filtered(&self) {
-        if self.selection.n_items() == 0 && self.has_filter() {
-            self.clear_filter.grab_focus();
-        } else {
-            self.view.grab_focus();
-        }
-    }
-
-    /// Escolhe a ordem pelo menu (o mesmo caminho do clique).
-    pub fn set_sort_key(&self, key: SortKey) {
-        if let Some(pos) = SortKey::ALL.iter().position(|k| *k == key) {
-            self.sort_menu.set_selected(pos as u32);
-        }
-    }
-
-    /// `f` a cada ordem nova escolhida no menu.
-    pub fn connect_sort_changed(&self, f: impl Fn(SortKey) + 'static) {
-        self.sort_menu.connect_selected_notify(move |dd| {
-            if let Some(k) = SortKey::ALL.get(dd.selected() as usize) {
-                f(*k);
+    fn set_spend_now(&self, spend: &crate::spend::SpendTracker, now: u64) {
+        let mut changed = false;
+        for i in 0..self.store.n_items() {
+            let Some(o) = self.store.item(i).and_downcast::<SessionObject>() else {
+                continue;
+            };
+            let key = (o.pid(), u64::try_from(o.starttime()).ok());
+            let known = |v: Option<u64>| v.map_or(-1, |v| i64::try_from(v).unwrap_or(i64::MAX));
+            let (spend_30m, since) = (known(spend.spend_30m(key)), known(spend.since_start(key)));
+            if o.spend() != spend_30m {
+                o.set_spend(spend_30m);
+                changed = true;
             }
-        });
+            if o.since() != since {
+                o.set_since(since);
+                changed = true;
+            }
+            // The share bar reads these two; they are not an order key.
+            let share = spend.share(key).unwrap_or(-1.0);
+            let per_min = spend.per_min(key).unwrap_or(-1.0);
+            if o.share() != share {
+                o.set_share(share);
+            }
+            if o.per_min() != per_min {
+                o.set_per_min(per_min);
+            }
+            // The series moves once a minute: compare before notifying.
+            let spark = spend.series(key).map_or(String::new(), |s| {
+                s.iter().map(u64::to_string).collect::<Vec<_>>().join(",")
+            });
+            if o.spark() != spark {
+                o.set_spark(spark);
+            }
+        }
+        if changed && matches!(self.key.get(), SortKey::Spend | SortKey::SinceStart) {
+            self.order.gate.borrow_mut().want();
+        }
+        self.order.poll(now);
+    }
+
+    /// A dialog is open over the list: no reorder until it closes.
+    pub fn set_dialog_open(&self, open: bool) {
+        self.order.dialog.set(open);
+        self.order.poll(now_ms());
+    }
+
+    /// An operation runs on a session: no reorder until it ends.
+    #[allow(
+        dead_code,
+        reason = "the operation state is private to SessionControls (story 6bbb6431, frozen until the owner decides)"
+    )]
+    pub fn set_operation_running(&self, running: bool) {
+        self.order.operation.set(running);
+        self.order.poll(now_ms());
+    }
+
+    /// F5: the order refreshes now, whatever holds the list.
+    #[allow(
+        dead_code,
+        reason = "F5 is handled inside the list; kept for the window's menu"
+    )]
+    pub fn refresh_order(&self) {
+        self.order.force(now_ms());
+    }
+
+    #[cfg(test)]
+    fn set_spend_at(&self, spend: &crate::spend::SpendTracker, now_ms: u64) {
+        self.set_spend_now(spend, now_ms);
+    }
+
+    #[cfg(test)]
+    fn poll_at(&self, now_ms: u64) {
+        self.order.poll(now_ms);
+    }
+
+    #[cfg(test)]
+    fn refresh_order_at(&self, now_ms: u64) {
+        self.order.force(now_ms);
+    }
+
+    /// Pids in the order the list shows them.
+    #[cfg(test)]
+    fn shown_pids(&self) -> Vec<u32> {
+        (0..self.selection.n_items())
+            .filter_map(|i| self.selection.item(i).and_downcast::<SessionObject>())
+            .map(|o| o.pid())
+            .collect()
+    }
+
+    #[cfg(test)]
+    fn sorted_text(&self, now_ms: u64) -> String {
+        self.order.note_text(now_ms)
+    }
+
+    /// Picks the order the way a click on the toggle does.
+    pub fn set_sort_key(&self, key: SortKey) {
+        (self.choose)(key);
+    }
+
+    /// `f` with the pid and the operation of a row's Action button. End
+    /// (`win.act`) is wired by the list itself; the window answers the rest.
+    pub fn connect_row_action(&self, f: impl Fn(u32, crate::actions_ui::RowOp) + 'static) {
+        self.row_handlers.borrow_mut().push(Rc::new(f));
+    }
+
+    /// `f` for each new order, from the toggle or from `set_sort_key`.
+    pub fn connect_sort_changed(&self, f: impl Fn(SortKey) + 'static) {
+        self.on_sort.borrow_mut().push(Rc::new(f));
+    }
+
+    /// The sub line under the heading, from the latest snapshot.
+    pub fn describe(&self, snap: &Snapshot) {
+        let text = subheading(self.key.get(), snap);
+        for l in [&self.sub, &self.sub_inline] {
+            if l.label() != text {
+                l.set_label(&text);
+            }
+        }
     }
 
     /// Opcoes do filtro: os tipos de agente presentes, em ordem alfabetica.
@@ -616,7 +1074,10 @@ impl SessionList {
             .flatten();
         let new: Vec<&str> = present.iter().map(String::as_str).collect();
         self.agents.splice(1, self.agents.n_items() - 1, &new);
+        self.agent_menu.set_visible(new.len() > 1);
+        // With one type left the dropdown is hidden: its filter must not stay.
         let pos = chosen
+            .filter(|_| new.len() > 1)
             .and_then(|c| new.iter().position(|a| *a == c.as_str()))
             .map_or(0, |p| p as u32 + 1);
         self.agent_menu.set_selected(pos);
@@ -624,9 +1085,12 @@ impl SessionList {
         self.filter.changed(gtk::FilterChange::Different);
     }
 
-    /// Reordena so se alguma sessao mudou uma chave da ordem atual. A selecao
-    /// acompanha a sessao, nao a posicao.
+    /// Reorders, through the 30 s gate, only when a session changed a key of
+    /// the current order. The selection follows the session, not the position.
     pub fn update(&self, applied: &Applied) {
+        if !applied.is_empty() {
+            self.metric.rescale(&self.store);
+        }
         if applied.touches(Changed::of("group") | Changed::of("rec") | Changed::of("io-bound")) {
             self.filter.changed(gtk::FilterChange::Different);
         }
@@ -638,28 +1102,22 @@ impl SessionList {
             // cabecalho da primeira secao acima da dobra. Topo depois do layout,
             // ou a linha selecionada se ja houver uma (AGENTCENTER_DETAIL
             // seleciona no mesmo tick): o topo a deixaria fora da vista.
-            let (adj, view, sel) = (
+            let (adj, view, sel, pending) = (
                 self.scroll.clone(),
                 self.view.clone(),
                 self.selection.clone(),
+                self.pending_scroll.clone(),
             );
             gtk::glib::idle_add_local_once(move || match sel.selected() {
                 gtk::INVALID_LIST_POSITION => adj.set_value(adj.lower()),
-                pos => scroll_when_laid_out(&view, &adj, pos),
+                pos => scroll_when_laid_out(&view, &adj, pos, &pending),
             });
         }
         if applied.is_empty() || !applied.touches(self.key.get().props()) {
+            self.order.poll(now_ms());
             return;
         }
-        let selected = self.selection.selected_item();
-        self.sorter.changed(gtk::SorterChange::Different);
-        let Some(sel) = selected else { return };
-        if self.selection.selected_item().as_ref() != Some(&sel) {
-            let n = self.selection.n_items();
-            if let Some(pos) = (0..n).find(|&i| self.selection.item(i).as_ref() == Some(&sel)) {
-                self.selection.set_selected(pos);
-            }
-        }
+        self.order.want(now_ms());
     }
 }
 
@@ -729,7 +1187,7 @@ impl SessionList {
     }
 
     /// Open an explicitly validated navigation target even if a previous
-    /// alert or agent filter hides it. The caller must validate its identity.
+    /// agent filter hides it. The caller must validate its identity.
     pub fn reveal_pid(&self, pid: u32) -> bool {
         let present = (0..self.store.n_items()).any(|i| {
             self.store
@@ -744,7 +1202,6 @@ impl SessionList {
             return true;
         }
         self.agent_menu.set_selected(0);
-        self.set_filter(SessionFilter::All);
         self.select_pid(pid)
     }
 
@@ -768,7 +1225,7 @@ impl SessionList {
         let pos = self.selection.selected();
         if pos != gtk::INVALID_LIST_POSITION {
             self.view.scroll_to(pos, gtk::ListScrollFlags::FOCUS, None);
-            scroll_when_laid_out(&self.view, &self.scroll, pos);
+            scroll_when_laid_out(&self.view, &self.scroll, pos, &self.pending_scroll);
             // FOCUS so move o foco por dentro da lista quando ela ja o tem;
             // voltando do detalhe ele esta fora (no seletor de ordem). O
             // grab_focus da lista foca o item que o scroll_to acabou de marcar.
@@ -785,13 +1242,22 @@ impl SessionList {
 /// 360 px, ou antes do primeiro quadro) nao rola: a ancora se perde quando o
 /// layout chega e a linha fica fora da vista. Sem altura, refaz no idle depois
 /// da primeira configuracao da rolagem com conteudo.
-fn scroll_when_laid_out(view: &gtk::ListView, adj: &gtk::Adjustment, pos: u32) {
+fn scroll_when_laid_out(
+    view: &gtk::ListView,
+    adj: &gtk::Adjustment,
+    pos: u32,
+    pending: &PendingScroll,
+) {
+    // A list that stays hidden never emits `changed`: a handler per call would
+    // pile up. The newest position wins, so the older handler goes.
+    if let Some(old) = pending.take() {
+        adj.disconnect(old);
+    }
     if view.height() > 0 && adj.upper() > 0.0 {
         view.scroll_to(pos, gtk::ListScrollFlags::NONE, None);
         return;
     }
-    let id: Rc<RefCell<Option<gtk::glib::SignalHandlerId>>> = Rc::default();
-    let (v, slot) = (view.clone(), id.clone());
+    let (v, slot) = (view.clone(), pending.clone());
     let handler = adj.connect_changed(move |adj| {
         if adj.upper() <= 0.0 {
             return;
@@ -803,7 +1269,7 @@ fn scroll_when_laid_out(view: &gtk::ListView, adj: &gtk::Adjustment, pos: u32) {
         let v = v.clone();
         gtk::glib::idle_add_local_once(move || v.scroll_to(pos, gtk::ListScrollFlags::NONE, None));
     });
-    id.replace(Some(handler));
+    pending.replace(Some(handler));
 }
 
 /// O ponto (x, y) da lista cai dentro de uma linha (e nao num cabecalho de
@@ -935,33 +1401,6 @@ mod tests {
         assert_eq!(stable, m.store().item(0).unwrap());
     }
 
-    /// Zero results must retain a named filter; Clear must not choose an unrelated row.
-    #[test]
-    fn cc2_regression_counter_zero_and_clear_do_not_select_a_target() {
-        gtk::test_synced(|| {
-            adw::init().expect("isolated test display required");
-            let mut m = SessionModel::default();
-            m.apply(&snap(vec![(10, 1)]), None);
-            let list = SessionList::new(&m);
-            let opened = Rc::new(Cell::new(0));
-            let calls = opened.clone();
-            list.connect_open(move |_| calls.set(calls.get() + 1));
-            let filter = SessionFilter::Group(Group::Blocked);
-            list.set_filter(filter);
-            assert_eq!(list.selection.n_items(), 0);
-            assert_eq!(list.active_filter.get(), filter);
-            assert!(list.clear_filter.is_visible());
-            assert!(list.selection.selected_item().is_none());
-            assert!(!list.reveal_pid(999));
-            assert_eq!(list.active_filter.get(), filter);
-            list.clear_filter.emit_clicked();
-            assert_eq!(list.active_filter.get(), SessionFilter::All);
-            assert_eq!(list.selection.n_items(), 1);
-            assert!(list.selection.selected_item().is_none());
-            assert_eq!(opened.get(), 0);
-        });
-    }
-
     #[test]
     fn unchanged_tick_reports_no_change() {
         let mut m = SessionModel::default();
@@ -1073,14 +1512,12 @@ mod tests {
     }
 
     #[test]
-    fn flat_orders_keep_multiplexers_apart_at_the_end() {
-        assert_eq!(sorted(SortKey::Memory, &rack()), [1, 5, 3, 2, 6, 4]);
-        assert_eq!(sorted(SortKey::Cpu, &rack()), [3, 5, 2, 1, 6, 4]);
+    fn name_and_recommendation_orders_keep_multiplexers_apart_at_the_end() {
         // Sem diferenciar maiusculas: Alpha, s1, s2, s3, s6.
         assert_eq!(sorted(SortKey::Name, &rack()), [5, 1, 2, 3, 6, 4]);
         // HANDOFF primeiro, depois contexto maior primeiro, ausente no fim.
         assert_eq!(sorted(SortKey::Recommendation, &rack()), [5, 2, 3, 1, 6, 4]);
-        assert_eq!(section_title(SortKey::Cpu, &rack()[0]).0, "Agent sessions");
+        assert_eq!(section_title(SortKey::Name, &rack()[0]).0, "Agent sessions");
     }
 
     #[test]
@@ -1088,76 +1525,6 @@ mod tests {
         let a = obj(9, "claude", Group::Idle, |r| r.mem = 5);
         let b = obj(8, "claude", Group::Idle, |r| r.mem = 5);
         assert_eq!(sorted(SortKey::Memory, &[a, b]), [8, 9]);
-    }
-
-    #[test]
-    fn named_filters_match_and_compose_with_agent_type() {
-        let rows = rack();
-        let pids = |filter: SessionFilter, agent: Option<&str>| -> Vec<u32> {
-            rows.iter()
-                .filter(|o| shows(agent, o) && filter.matches(o))
-                .map(|o| o.pid())
-                .collect()
-        };
-        assert_eq!(pids(SessionFilter::Group(Group::Busy), None), [3, 5]);
-        assert_eq!(pids(SessionFilter::Group(Group::Busy), Some("pi")), [5]);
-        assert!(pids(SessionFilter::Group(Group::Blocked), Some("pi")).is_empty());
-        assert_eq!(pids(SessionFilter::Recommendation(REC_HANDOFF), None), [5]);
-        let io = obj(7, "pi", Group::Busy, |r| r.io_bound = true);
-        assert!(SessionFilter::IoBound.matches(&io));
-        assert!(!SessionFilter::IoBound.matches(&rows[0]));
-        assert_eq!(pids(SessionFilter::All, None).len(), rows.len());
-    }
-
-    /// Refiltering live rows and clearing a zero-result filter must not keep stale membership.
-    #[test]
-    fn named_filter_updates_and_clear_zero_results() {
-        let o = obj(8, "pi", Group::Busy, |_| ());
-        let mut row = Row {
-            pid: 8,
-            agent: "pi".into(),
-            name: "s8".into(),
-            group: Group::Busy.rank(),
-            ..Row::default()
-        };
-        let accepts = |f: SessionFilter, agent: Option<&str>| shows(agent, &o) && f.matches(&o);
-        assert!(accepts(SessionFilter::Group(Group::Busy), Some("pi")));
-        assert!(!accepts(SessionFilter::IoBound, Some("pi")));
-        row.io_bound = true;
-        row.rec = REC_HANDOFF;
-        row.group = Group::Blocked.rank();
-        o.apply(&row);
-        assert!(!accepts(SessionFilter::Group(Group::Busy), Some("pi")));
-        assert!(accepts(SessionFilter::Group(Group::Blocked), Some("pi")));
-        assert!(accepts(SessionFilter::IoBound, Some("pi")));
-        assert!(!accepts(SessionFilter::IoBound, Some("claude")));
-        assert!(accepts(
-            SessionFilter::Recommendation(REC_HANDOFF),
-            Some("pi")
-        ));
-        assert!(!accepts(
-            SessionFilter::Recommendation(REC_HANDOFF),
-            Some("claude")
-        ));
-        assert!(!accepts(SessionFilter::Group(Group::Busy), None));
-        assert!(
-            accepts(SessionFilter::All, None),
-            "Clear recovers from zero results"
-        );
-        row.io_bound = false;
-        row.rec = 0;
-        o.apply(&row);
-        assert!(!accepts(SessionFilter::IoBound, Some("pi")));
-        assert!(!accepts(
-            SessionFilter::Recommendation(REC_HANDOFF),
-            Some("pi")
-        ));
-        row.group = Group::Multiplexer.rank();
-        row.io_bound = true;
-        row.rec = REC_HANDOFF;
-        o.apply(&row);
-        assert!(!accepts(SessionFilter::IoBound, None));
-        assert!(!accepts(SessionFilter::Recommendation(REC_HANDOFF), None));
     }
 
     #[test]
@@ -1240,5 +1607,474 @@ mod tests {
             (section(SortKey::State, &o), o.status().as_str()),
             (Group::Blocked.rank(), "Blocked")
         );
+    }
+
+    #[test]
+    fn cpu_and_memory_orders_are_flat_and_interleave_multiplexers() {
+        // Direction B: one line per session, the multiplexer among them.
+        assert_eq!(sorted(SortKey::Memory, &rack()), [4, 1, 5, 3, 2, 6]);
+        assert_eq!(sorted(SortKey::Cpu, &rack()), [4, 3, 5, 2, 1, 6]);
+        for o in rack() {
+            assert_eq!(section(SortKey::Cpu, &o), 0);
+            assert_eq!(section(SortKey::Memory, &o), 0);
+        }
+        // The other orders keep the multiplexers apart.
+        assert_eq!(section(SortKey::Name, &rack()[3]), 1);
+    }
+
+    fn tipico() -> Snapshot {
+        serde_json::from_str(include_str!("../tests/fixtures/snapshots/tipico-40.json")).unwrap()
+    }
+
+    #[test]
+    fn heading_and_subheading_follow_the_order() {
+        assert_eq!(heading(SortKey::Cpu), "CPU by session");
+        assert_eq!(heading(SortKey::Memory), "Memory by session");
+        assert_eq!(heading(SortKey::State), "CPU by session");
+        let snap = tipico();
+        assert_eq!(
+            subheading(SortKey::Cpu, &snap),
+            "% of one core \u{b7} sessions use 6.2 of 16 cores"
+        );
+        assert_eq!(
+            subheading(SortKey::Memory, &snap),
+            "PSS + swap \u{b7} 28.6 GiB"
+        );
+        let mut bare = snap;
+        bare.summary.sessions_cpu_pct = None;
+        assert_eq!(subheading(SortKey::Cpu, &bare), "% of one core");
+    }
+
+    /// The sort menu sets the order, and `set_sort_key` moves it.
+    #[test]
+    fn the_sort_menu_sets_the_order_and_follows_set_sort_key() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let list = SessionList::new(&SessionModel::default());
+            let seen = Rc::new(RefCell::new(Vec::new()));
+            let s = seen.clone();
+            list.connect_sort_changed(move |k| s.borrow_mut().push(k));
+            // The list opens on the spend, so choosing it again is no change.
+            list.set_sort_key(SortKey::Spend);
+            assert_eq!(list.sort_menu.selected(), 0);
+            let at = |k: SortKey| SortKey::OPTIONS.iter().position(|o| *o == k).unwrap() as u32;
+            list.sort_menu.set_selected(at(SortKey::Memory));
+            assert_eq!(list.key.get(), SortKey::Memory);
+            assert_eq!(list.heading.label(), "Memory by session");
+            list.sort_menu.set_selected(at(SortKey::Cpu));
+            assert_eq!(list.key.get(), SortKey::Cpu);
+            assert_eq!(list.heading.label(), "CPU by session");
+            assert_eq!(*seen.borrow(), vec![SortKey::Memory, SortKey::Cpu]);
+            list.set_sort_key(SortKey::Name);
+            assert_eq!(list.sort_menu.selected(), at(SortKey::Name));
+            assert_eq!(*seen.borrow().last().unwrap(), SortKey::Name);
+        });
+    }
+
+    /// Two agent types and a multiplexer; `drop_first` leaves only the codex one.
+    fn mixed(drop_first: bool) -> Snapshot {
+        let mut s = snap(vec![(1, 5), (2, 6)]);
+        s.sessions[1].agent = "codex".into();
+        let mut mux = Session::aggregate("herdr".into(), AgentRole::Multiplexer, 3, 16, Vec::new());
+        mux.pss_bytes = Some(7);
+        s.sessions.push(mux);
+        if drop_first {
+            s.sessions.remove(0);
+        }
+        s
+    }
+
+    /// The agent dropdown hides when one type is left: the filter goes with it,
+    /// or the multiplexers stay hidden behind a control nobody can reach.
+    #[test]
+    fn filter_resets_when_the_agent_dropdown_hides() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let mut m = SessionModel::default();
+            let list = SessionList::new(&m);
+            list.update(&m.apply(&mixed(false), None));
+            assert!(list.agent_menu.is_visible());
+            list.agent_menu.set_selected(2);
+            assert_eq!(list.selection.n_items(), 1, "codex only");
+            list.update(&m.apply(&mixed(true), None));
+            assert!(!list.agent_menu.is_visible());
+            assert_eq!(list.agent_menu.selected(), 0, "back on All");
+            assert_eq!(list.selection.n_items(), 2, "codex and the multiplexer");
+        });
+    }
+
+    /// Handlers on the vertical adjustment currently connected to `changed`.
+    fn changed_handlers(adj: &gtk::Adjustment) -> u32 {
+        use gtk::glib::object::ObjectType;
+        use gtk::glib::translate::IntoGlib;
+        // SAFETY: a live adjustment; the matched handlers are only counted by
+        // the return of the disconnect, which the test does last.
+        unsafe {
+            let id = gtk::glib::gobject_ffi::g_signal_lookup(
+                c"changed".as_ptr(),
+                gtk::Adjustment::static_type().into_glib(),
+            );
+            gtk::glib::gobject_ffi::g_signal_handlers_disconnect_matched(
+                adj.as_ptr() as *mut _,
+                gtk::glib::gobject_ffi::G_SIGNAL_MATCH_ID,
+                id,
+                0,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+            )
+        }
+    }
+
+    /// A list nobody laid out yet keeps one pending scroll, not one per call.
+    #[test]
+    fn scrolling_a_hidden_list_keeps_one_pending_handler() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let mut m = SessionModel::default();
+            let list = SessionList::new(&m);
+            m.apply(&snap(vec![(1, 5)]), None);
+            list.selection.set_selected(0);
+            assert_eq!(list.scroll.upper(), 0.0, "no layout in this test");
+            // The scrolled window has handlers of its own: a fresh list is the baseline.
+            let base = changed_handlers(&SessionList::new(&SessionModel::default()).scroll);
+            for _ in 0..3 {
+                list.focus_selected();
+            }
+            assert_eq!(changed_handlers(&list.scroll), base + 1);
+        });
+    }
+}
+
+/// The order of the list by spend, and when it may change (REVIEW_RR1).
+#[cfg(test)]
+mod order_tests {
+    use super::*;
+    use crate::spend::{self, SpendTracker};
+
+    const S: u64 = 1000;
+
+    fn fixture(name: &str) -> Snapshot {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("tests/fixtures/snapshots")
+            .join(format!("{name}.json"));
+        serde_json::from_str(&std::fs::read_to_string(path).expect("fixture")).expect("snapshot")
+    }
+
+    fn obj(pid: u32, name: &str, f: impl FnOnce(&SessionObject)) -> SessionObject {
+        let o = SessionObject::new(&Row {
+            pid,
+            agent: "claude".into(),
+            name: name.into(),
+            group: Group::Busy.rank(),
+            ..Row::default()
+        });
+        f(&o);
+        o
+    }
+
+    fn sorted(key: SortKey, objs: &[SessionObject]) -> Vec<u32> {
+        let mut v: Vec<_> = objs.iter().collect();
+        v.sort_by(|a, b| order(key, a, b));
+        v.iter().map(|o| o.pid()).collect()
+    }
+
+    /// Spend inputs for the first sessions of `snap`, in order, others unknown.
+    fn spends(snap: &Snapshot, values: &[Option<u64>]) -> Vec<spend::Input> {
+        let mut inputs = spend::inputs(snap);
+        for (i, input) in inputs.iter_mut().enumerate() {
+            input.spend_30m = values.get(i).copied().flatten();
+            input.since_start = input.spend_30m.map(|v| v * 3);
+        }
+        inputs
+    }
+
+    fn tracker(now_ms: u64, inputs: Vec<spend::Input>) -> SpendTracker {
+        let mut t = SpendTracker::default();
+        t.update(now_ms, inputs);
+        t
+    }
+
+    #[test]
+    fn the_default_order_is_the_30_minute_spend() {
+        assert_eq!(SortKey::default(), SortKey::Spend);
+        assert_eq!(
+            SortKey::OPTIONS.map(SortKey::label),
+            [
+                "30-min spend",
+                "Since start",
+                "Context",
+                "Name",
+                "CPU",
+                "Memory"
+            ]
+        );
+        assert_eq!(SortKey::Spend.phrase(), "30-min spend");
+        assert_eq!(SortKey::from_id("spend"), Some(SortKey::Spend));
+    }
+
+    #[test]
+    fn spend_order_is_spend_then_memory_then_pid_with_unknown_last() {
+        let objs = [
+            obj(1, "a", |o| {
+                o.set_spend(10);
+                o.set_mem(5);
+            }),
+            obj(2, "b", |o| {
+                o.set_spend(50);
+                o.set_mem(1);
+            }),
+            // Same spend as 1, more memory: first of the two.
+            obj(3, "c", |o| {
+                o.set_spend(10);
+                o.set_mem(9);
+            }),
+            // Unknown spend sinks below a known zero.
+            obj(4, "d", |o| o.set_mem(99)),
+            obj(5, "e", |o| o.set_spend(0)),
+            // Same spend and memory as 1: the pid decides.
+            obj(6, "f", |o| {
+                o.set_spend(10);
+                o.set_mem(5);
+            }),
+        ];
+        assert_eq!(sorted(SortKey::Spend, &objs), [2, 3, 1, 6, 5, 4]);
+    }
+
+    #[test]
+    fn since_start_context_name_cpu_and_memory_orders() {
+        let objs = [
+            obj(1, "Bravo", |o| {
+                o.set_since(5);
+                o.set_ctx(10.0);
+                o.set_cpu(3.0);
+                o.set_mem(30);
+            }),
+            obj(2, "alpha", |o| {
+                o.set_since(50);
+                o.set_ctx(90.0);
+                o.set_cpu(1.0);
+                o.set_mem(10);
+            }),
+            obj(3, "charlie", |o| {
+                o.set_since(50);
+                o.set_ctx(90.0);
+                o.set_cpu(3.0);
+                o.set_mem(20);
+            }),
+        ];
+        // Equal since-start: memory, then pid.
+        assert_eq!(sorted(SortKey::SinceStart, &objs), [3, 2, 1]);
+        // Equal context: the pid keeps the order stable.
+        assert_eq!(sorted(SortKey::Context, &objs), [2, 3, 1]);
+        assert_eq!(sorted(SortKey::Name, &objs), [2, 1, 3]);
+        assert_eq!(sorted(SortKey::Cpu, &objs), [1, 3, 2]);
+        assert_eq!(sorted(SortKey::Memory, &objs), [1, 3, 2]);
+        for k in [SortKey::Spend, SortKey::SinceStart, SortKey::Context] {
+            assert_eq!(section(k, &objs[0]), 0, "{k:?} is one flat list");
+        }
+    }
+
+    #[test]
+    fn unknown_since_start_sinks_below_a_known_zero() {
+        let objs = [obj(1, "a", |_| ()), obj(2, "b", |o| o.set_since(0))];
+        assert_eq!(sorted(SortKey::SinceStart, &objs), [2, 1]);
+    }
+
+    #[test]
+    fn the_model_keys_each_object_by_pid_and_start_time() {
+        let mut snap = fixture("cockpit");
+        snap.sessions[0].starttime = Some(77);
+        let mut model = SessionModel::default();
+        model.apply(&snap, None);
+        let by_pid = |pid| {
+            (0..model.store().n_items())
+                .filter_map(|i| model.store().item(i).and_downcast::<SessionObject>())
+                .find(|o| o.pid() == pid)
+                .unwrap()
+        };
+        assert_eq!(by_pid(snap.sessions[0].pid).starttime(), 77);
+        assert_eq!(by_pid(snap.sessions[1].pid).starttime(), -1);
+    }
+
+    /// A list with the `cockpit` sessions; the first three get the spends.
+    fn cockpit_list() -> (SessionModel, SessionList, Snapshot) {
+        let snap = fixture("cockpit");
+        let mut model = SessionModel::default();
+        model.apply(&snap, None);
+        let list = SessionList::new(&model);
+        (model, list, snap)
+    }
+
+    fn pid(snap: &Snapshot, i: usize) -> u32 {
+        snap.sessions[i].pid
+    }
+
+    #[test]
+    fn set_spend_orders_the_list_by_spend_and_numbers_the_rows() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let (_m, list, snap) = cockpit_list();
+            let t = tracker(0, spends(&snap, &[Some(10), Some(300), Some(20)]));
+            list.set_spend_at(&t, 0);
+            let shown = list.shown_pids();
+            assert_eq!(
+                shown[..3],
+                [pid(&snap, 1), pid(&snap, 2), pid(&snap, 0)],
+                "spend 300, 20, 10 first"
+            );
+            let ranks: Vec<u32> = (0..list.selection.n_items())
+                .filter_map(|i| list.selection.item(i).and_downcast::<SessionObject>())
+                .map(|o| o.rank())
+                .collect();
+            assert_eq!(ranks, (1..=snap.sessions.len() as u32).collect::<Vec<_>>());
+        });
+    }
+
+    #[test]
+    fn a_new_spend_order_waits_for_the_thirty_second_gate() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let (_m, list, snap) = cockpit_list();
+            list.set_spend_at(
+                &tracker(0, spends(&snap, &[Some(10), Some(300), Some(20)])),
+                0,
+            );
+            let first = list.shown_pids();
+            // Session 0 now spends the most: the data changes, the screen does not.
+            let t = tracker(10 * S, spends(&snap, &[Some(900), Some(300), Some(20)]));
+            list.set_spend_at(&t, 10 * S);
+            assert_eq!(list.shown_pids(), first, "10 s after the last reorder");
+            list.poll_at(29 * S);
+            assert_eq!(list.shown_pids(), first);
+            list.poll_at(30 * S);
+            assert_eq!(list.shown_pids()[0], pid(&snap, 0));
+        });
+    }
+
+    #[test]
+    fn a_dialog_or_a_running_operation_holds_the_reorder_until_it_ends() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            for operation in [false, true] {
+                let (_m, list, snap) = cockpit_list();
+                list.set_spend_at(
+                    &tracker(0, spends(&snap, &[Some(10), Some(300), Some(20)])),
+                    0,
+                );
+                let first = list.shown_pids();
+                let hold = |on| {
+                    if operation {
+                        list.set_operation_running(on)
+                    } else {
+                        list.set_dialog_open(on)
+                    }
+                };
+                hold(true);
+                let t = tracker(100 * S, spends(&snap, &[Some(900), Some(300), Some(20)]));
+                list.set_spend_at(&t, 100 * S);
+                list.poll_at(200 * S);
+                assert_eq!(list.shown_pids(), first, "held (operation: {operation})");
+                hold(false);
+                assert_ne!(list.shown_pids(), first, "applies when the hold ends");
+                assert_eq!(list.shown_pids()[0], pid(&snap, 0));
+            }
+        });
+    }
+
+    #[test]
+    fn f5_reorders_now_and_restarts_the_age() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let (_m, list, snap) = cockpit_list();
+            list.set_spend_at(
+                &tracker(0, spends(&snap, &[Some(10), Some(300), Some(20)])),
+                0,
+            );
+            list.set_dialog_open(true);
+            let t = tracker(5 * S, spends(&snap, &[Some(900), Some(300), Some(20)]));
+            list.set_spend_at(&t, 5 * S);
+            assert_eq!(
+                list.sorted_text(5 * S),
+                "Sorted by 30-min spend - updated 5 s ago"
+            );
+            list.refresh_order_at(6 * S);
+            assert_eq!(
+                list.shown_pids()[0],
+                pid(&snap, 0),
+                "dialog does not stop F5"
+            );
+            assert_eq!(
+                list.sorted_text(6 * S),
+                "Sorted by 30-min spend - updated 0 s ago"
+            );
+            assert_eq!(
+                list.sorted_text(18 * S),
+                "Sorted by 30-min spend - updated 12 s ago"
+            );
+        });
+    }
+
+    #[test]
+    fn the_selected_session_stays_selected_when_the_order_changes() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let (_m, list, snap) = cockpit_list();
+            list.set_spend_at(
+                &tracker(0, spends(&snap, &[Some(10), Some(300), Some(20)])),
+                0,
+            );
+            assert!(list.select_pid(pid(&snap, 0)));
+            let t = tracker(40 * S, spends(&snap, &[Some(900), Some(300), Some(20)]));
+            list.set_spend_at(&t, 40 * S);
+            let sel = list
+                .selection
+                .selected_item()
+                .and_downcast::<SessionObject>();
+            assert_eq!(sel.map(|o| o.pid()), Some(pid(&snap, 0)));
+            assert_eq!(
+                list.shown_pids()[0],
+                pid(&snap, 0),
+                "and it moved to the top"
+            );
+        });
+    }
+
+    #[test]
+    fn forty_sessions_change_order_at_most_once_per_thirty_seconds() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated test display required");
+            let snap = fixture("tipico-40");
+            let mut model = SessionModel::default();
+            model.apply(&snap, None);
+            let list = SessionList::new(&model);
+            assert_eq!(snap.sessions.len(), 40);
+            let mut seed = 0x2545_F491_4F6C_DD1Du64;
+            let mut last = list.shown_pids();
+            let mut changes = 0;
+            // Two minutes of one-second ticks, every spend moving every tick.
+            for t in 0..120u64 {
+                let values: Vec<Option<u64>> = (0..40)
+                    .map(|_| {
+                        seed ^= seed << 13;
+                        seed ^= seed >> 7;
+                        seed ^= seed << 17;
+                        Some(seed % 100_000)
+                    })
+                    .collect();
+                list.set_spend_at(&tracker(t * S, spends(&snap, &values)), t * S);
+                let now = list.shown_pids();
+                if now != last {
+                    changes += 1;
+                    last = now;
+                }
+            }
+            // At 0, 30, 60 and 90 s.
+            assert!(changes <= 4, "{changes} reorders in 120 s");
+            assert!(
+                changes >= 3,
+                "the gate must also let reorders through: {changes}"
+            );
+        });
     }
 }

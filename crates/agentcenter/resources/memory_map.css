@@ -1,0 +1,71 @@
+/* Memory map (direction B). GTK paints each tile's fill and radius from
+ * here; the tile draws its glyph and labels in its own `color`, and the
+ * hatch child strokes its stripes in its `color`.
+ * Tokens only: every colour comes from tokens.css. */
+
+/* The map's colour is the selection ring around the selected tile. */
+memorymap {
+  color: var(--ac-text-primary);
+}
+
+/* Font carriers, measured by Pango; never shown. */
+memorymap > label.name {
+  font-family: "Ubuntu Sans", sans-serif;
+  font-weight: 700;
+  font-size: 0.86em;
+}
+memorymap > label.name-big {
+  font-family: "Ubuntu Sans", sans-serif;
+  font-weight: 700;
+  font-size: 0.93em;
+}
+memorymap > label.value {
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-feature-settings: "tnum";
+  font-size: 0.86em;
+}
+
+memorymap > tile {
+  border-radius: 4px;
+}
+
+/* State fills and the text drawn on them. */
+memorymap > tile.busy {
+  background-color: var(--ac-mark-fill-busy);
+  color: var(--ac-on-mark-fill-busy-text);
+}
+memorymap > tile.waiting {
+  background-color: var(--ac-mark-fill-waiting);
+  color: var(--ac-on-mark-fill-waiting-text);
+}
+memorymap > tile.idle {
+  background-color: var(--ac-mark-fill-idle);
+  color: var(--ac-on-mark-fill-idle-text);
+}
+memorymap > tile.multiplexer {
+  background-color: var(--ac-mark-fill-mux);
+  color: var(--ac-on-mark-fill-mux-text);
+}
+
+/* Reclaim mode: idle sessions are the teal targets, the rest is context. */
+memorymap > tile.reclaim {
+  background-color: var(--ac-mark-fill-free);
+  color: var(--ac-on-mark-fill-free-text);
+}
+memorymap > tile.dim {
+  background-color: var(--ac-tile-dim);
+}
+
+/* Swapped-out share: stripes in the on-fill text colour, see-through. */
+memorymap > tile > hatch {
+  opacity: var(--ac-hatch-opacity);
+}
+memorymap > tile.dim > hatch {
+  opacity: 0;
+}
+
+/* Keyboard focus: the focus mark just outside the tile. */
+memorymap > tile:focus-visible {
+  outline: 2px solid var(--ac-mark-focus);
+  outline-offset: 1px;
+}

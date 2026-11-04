@@ -39,6 +39,10 @@ STATES = (
     "--ac-text-rec-ok", "--ac-mark-rec-ok",
     "--ac-text-rec-compact", "--ac-mark-rec-compact",
     "--ac-rec-handoff", "--ac-on-rec-handoff-text",
+    # RFC-AC-003: the green of a machine chart under its limit and the idle
+    # blue of tiles, dots and legends (with its white on-text).
+    "--ac-mark-ok",
+    "--ac-mark-fill-idle", "--ac-on-mark-fill-idle-text",
 )
 
 

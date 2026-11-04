@@ -17,9 +17,11 @@
 
 pub mod handoff;
 pub mod session;
+pub mod spend;
 
 pub use handoff::{Handoff, HandoffIndex, latest_handoff};
 pub use session::{Cockpit, Loops, Tokens, clean_name};
+pub use spend::{SPEND_WINDOW_MIN, SpendWindow};
 
 use serde::{Deserialize, Serialize};
 
@@ -29,6 +31,14 @@ pub const W_WRITE: f64 = 1.25;
 pub const W_READ: f64 = 0.1;
 /// Peso de um token de saida.
 pub const W_OUT: f64 = 5.0;
+
+/// Cost-weighted tokens, the `burn` of [`Thresholds::contas`]: input,
+/// cache write, cache read and output by their weights. The one formula the
+/// spend window and the cockpit share.
+pub fn weighted(inp: u64, wr: u64, rd: u64, out: u64) -> f64 {
+    // Same order of operations as the script's `novo + relei`.
+    (inp as f64 + wr as f64 * W_WRITE + out as f64 * W_OUT) + rd as f64 * W_READ
+}
 /// % da janela a partir do qual o veredito sobe para COMPACTAR.
 pub const HANDOFF_SHOW: u32 = 50;
 /// Tokens de saida para escrever o handoff.
@@ -390,4 +400,18 @@ fn canonical(declared: &str) -> Option<String> {
             b.is_ascii_lowercase() || b.is_ascii_digit() || matches!(b, b'.' | b'_' | b'-')
         });
     valid.then_some(id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn weighted_uses_the_cockpit_weights_and_matches_the_burn() {
+        assert_eq!(weighted(1_000, 1_000, 1_000, 1_000), 7_350.0);
+        assert_eq!(weighted(0, 0, 0, 0), 0.0);
+        let th = Thresholds::default();
+        let c = th.contas(123_457, 9_999, 4_000_001, 777, 50_000, 200_000);
+        assert_eq!(weighted(123_457, 9_999, 4_000_001, 777) as u64, c.burn);
+    }
 }

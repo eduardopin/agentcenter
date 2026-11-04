@@ -103,6 +103,13 @@ for fx in "${fixtures[@]}"; do
             if [[ -n $PAGE ]] && ! grep -q '^reclaim_pids=' "$OUT/.stdout"; then
                 err+="${err:+; }agentcenter: overflow: the reclaim window never filled (no reclaim_pids=)"
             fi
+            # detail_px=0: o detalhe nao foi desenhado (a captura so tem a faixa).
+            if [[ -n $DETAIL && ${DETAIL_BACK:-} != 1 ]]; then
+                detail_px=$(sed -n 's/^detail_px=//p' "$OUT/.stdout")
+                if [[ ${detail_px:-0} -le 0 ]]; then
+                    err+="${err:+; }agentcenter: overflow: the detail never showed (detail_px=${detail_px:-none})"
+                fi
+            fi
             if [[ -n $DETAIL && ${DETAIL_BACK:-} == 1 && $back != GtkListItemWidget\ in=GtkListView* ]]; then
                 err+="${err:+; }agentcenter: overflow: back from the detail left the focus on ${back:-nothing}"
             fi

@@ -43,16 +43,60 @@ pub fn label(a: Action) -> &'static str {
     match a {
         Action::Stop => "Suspend",
         Action::Cont => "Resume",
-        Action::Term => "Terminate",
+        Action::Term => "End",
         Action::Kill => "Kill",
     }
+}
+
+/// What the Action column of a list row can do for a verdict.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RowOp {
+    Compact,
+    Handoff,
+    End,
+}
+
+impl RowOp {
+    /// The operation for a cockpit code (`format::rec_code`); `None` leaves
+    /// the cell empty (OK, no data, still reading, and Loop: Interrupt has no
+    /// control to run yet, and a control that cannot run is not shown).
+    pub fn for_rec(code: u32) -> Option<RowOp> {
+        match code {
+            3 => Some(RowOp::Compact),
+            crate::format::REC_HANDOFF => Some(RowOp::Handoff),
+            5 => Some(RowOp::End),
+            _ => None,
+        }
+    }
+
+    /// The one label set; End asks for confirmation, hence the ellipsis.
+    pub fn label(self) -> &'static str {
+        match self {
+            RowOp::Compact => "Compact context",
+            RowOp::Handoff => "Write handoff",
+            RowOp::End => "End\u{2026}",
+        }
+    }
+
+    pub fn icon(self) -> &'static str {
+        match self {
+            RowOp::Compact => "view-restore-symbolic",
+            RowOp::Handoff => "document-save-symbolic",
+            RowOp::End => "window-close-symbolic",
+        }
+    }
+}
+
+/// Parameter of [`WIN_ACTION`] for the row's End button.
+pub fn end_target(pid: u32, name: &str) -> glib::Variant {
+    action_target(Action::Term, Target::Session(pid), name)
 }
 
 fn lower(a: Action) -> &'static str {
     match a {
         Action::Stop => "suspend",
         Action::Cont => "resume",
-        Action::Term => "terminate",
+        Action::Term => "end",
         Action::Kill => "kill",
     }
 }
@@ -61,7 +105,7 @@ fn past(a: Action) -> &'static str {
     match a {
         Action::Stop => "Suspended",
         Action::Cont => "Resumed",
-        Action::Term => "Terminated",
+        Action::Term => "Ended",
         Action::Kill => "Killed",
     }
 }
@@ -672,7 +716,7 @@ mod tests {
         );
         assert_eq!(
             ask(Action::Term, "x", Err(Refusal::Init)).unwrap_err(),
-            "Cannot terminate: pid 1 (init) is never signalled"
+            "Cannot end: pid 1 (init) is never signalled"
         );
     }
 
@@ -739,7 +783,7 @@ mod tests {
                 "kiln",
                 &[o(1, Delivery::Sent), o(2, Delivery::Gone)]
             ),
-            "Terminated kiln: 1 process, 1 had already exited"
+            "Ended kiln: 1 process, 1 had already exited"
         );
         assert_eq!(
             outcome_toast(Action::Kill, "kiln", &[o(1, Delivery::Gone)]),
@@ -798,6 +842,65 @@ mod tests {
         assert_eq!(
             parse_action_target(&("bogus".to_string(), true, 1u32, String::new()).to_variant()),
             None
+        );
+    }
+
+    // ---- RR1 list: the Action column's operations and the label set -------------
+
+    #[test]
+    fn the_five_verdicts_map_to_an_operation_or_an_empty_cell() {
+        use crate::format::{REC_NONE, REC_PENDING, rec_code};
+        use agentcenter_core::cockpit::Recommendation as R;
+        let op = |v| RowOp::for_rec(rec_code(v));
+        assert_eq!(op(R::Compactar), Some(RowOp::Compact));
+        assert_eq!(op(R::Handoff), Some(RowOp::Handoff));
+        assert_eq!(op(R::Loop), None, "Interrupt has no control yet");
+        assert_eq!(op(R::Ociosa), Some(RowOp::End));
+        assert_eq!(op(R::Continuar), None, "OK asks for nothing");
+        assert_eq!(RowOp::for_rec(REC_NONE), None, "no data, no button");
+        assert_eq!(RowOp::for_rec(REC_PENDING), None, "still reading");
+    }
+
+    #[test]
+    fn the_row_operations_use_the_one_label_set_and_distinct_icons() {
+        assert_eq!(RowOp::Compact.label(), "Compact context");
+        assert_eq!(RowOp::Handoff.label(), "Write handoff");
+        assert_eq!(RowOp::End.label(), "End\u{2026}");
+        let icons: std::collections::HashSet<_> = [RowOp::Compact, RowOp::Handoff, RowOp::End]
+            .map(RowOp::icon)
+            .into_iter()
+            .collect();
+        assert_eq!(icons.len(), 3, "each operation has its own icon");
+        assert!(icons.iter().all(|i| i.ends_with("-symbolic")));
+    }
+
+    #[test]
+    fn terminate_is_called_end_everywhere() {
+        assert_eq!(label(Action::Term), "End");
+        let menu = menu(Target::Session(7), "kiln");
+        let mut labels = Vec::new();
+        for s in 0..menu.n_items() {
+            let Some(section) = menu.item_link(s, "section").and_downcast::<gio::Menu>() else {
+                continue;
+            };
+            for i in 0..section.n_items() {
+                let l = section.item_attribute_value(i, "label", None);
+                labels.push(l.and_then(|v| v.get::<String>()).unwrap_or_default());
+            }
+        }
+        assert!(labels.contains(&"End\u{2026}".to_string()), "{labels:?}");
+        assert!(
+            labels.iter().all(|l| !l.contains("Terminate")),
+            "{labels:?}"
+        );
+    }
+
+    #[test]
+    fn the_end_button_opens_the_end_dialog_of_its_session() {
+        let v = end_target(4242, "kiln");
+        assert_eq!(
+            parse_action_target(&v),
+            Some((Action::Term, Target::Session(4242), "kiln".to_string()))
         );
     }
 }

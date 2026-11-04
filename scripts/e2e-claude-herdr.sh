@@ -11,8 +11,10 @@
 #     accepted; HOME/.claude/settings.json allowing Read/Write/Skill;
 #   - `herdr integration install claude` into that HOME (SessionStart hook,
 #     so Herdr knows the agent_session_id, also after /clear);
-#   - the clear-pickup skill copied from CLEAR_PICKUP_SKILL (default
-#     ~/.claude/skills/clear-pickup, read only) into HOME/.claude/skills;
+#   - the handoff skill copied from CLEAR_PICKUP_SKILL (default: the first of
+#     ~/.claude/skills/clear-pickup, ~/.claude/skills/handoff; read only, a
+#     symlink is followed) into HOME/.claude/skills under its own name, which
+#     is the one the controller then types;
 #   - a git repo as cwd; `herdr server` headless; one workspace whose root
 #     pane runs `herdr agent start ... --kind claude`.
 # Then the #[ignore] Rust drivers of the test target E2E_TEST (default
@@ -28,7 +30,14 @@ set -euo pipefail
 
 repo_root=$(cd "$(dirname "$0")/.." && pwd)
 orig_home=$HOME orig_path=$PATH
-skill_src=${CLEAR_PICKUP_SKILL:-$HOME/.claude/skills/clear-pickup}
+skill_src=${CLEAR_PICKUP_SKILL:-}
+if [[ -z $skill_src ]]; then
+  for name in clear-pickup handoff; do
+    [[ -f $HOME/.claude/skills/$name/SKILL.md ]] && { skill_src=$HOME/.claude/skills/$name; break; }
+  done
+fi
+skill_src=${skill_src:-$HOME/.claude/skills/clear-pickup}
+skill_name=$(basename "$(readlink -f "$skill_src")")
 test_name=${E2E_TEST:-control_claude_pickup_e2e}
 claude_bin=$(command -v claude) || { echo "e2e: claude not on PATH" >&2; exit 2; }
 herdr_bin=$(command -v herdr) || { echo "e2e: herdr not on PATH" >&2; exit 2; }
@@ -91,7 +100,7 @@ export STUB_GRANT_PATH=$repo/.claude/e2e-grant.md
 unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CACHE_HOME
 
 git -C "$repo" init -q
-cp -r "$skill_src" "$home/.claude/skills/clear-pickup"
+cp -rL "$skill_src" "$home/.claude/skills/$skill_name"
 version=$("$claude_bin" --version | awk '{print $1}')
 python3 - "$home" "$repo" "$key" "$version" <<'PY'
 import json, sys
@@ -102,8 +111,12 @@ json.dump({
     "theme": "dark",
     "autoUpdates": False,
     "customApiKeyResponses": {"approved": [key[-20:]], "rejected": []},
+    # Claude Code 2.1.3xx asks about CLAUDE.md external imports at start-up
+    # unless the project entry has already answered it.
     "projects": {repo: {"hasTrustDialogAccepted": True,
-                        "hasCompletedProjectOnboarding": True, "allowedTools": []}},
+                        "hasCompletedProjectOnboarding": True, "allowedTools": [],
+                        "hasClaudeMdExternalIncludesApproved": False,
+                        "hasClaudeMdExternalIncludesWarningShown": True}},
 }, open(f"{home}/.claude.json", "w"))
 # Auto mode off: with a custom ANTHROPIC_BASE_URL it opens a billing notice
 # over the first tool call, and Herdr still reports the pane idle.

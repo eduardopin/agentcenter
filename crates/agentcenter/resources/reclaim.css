@@ -1,0 +1,122 @@
+/* Reclaim page (direction B): the map in reclaim mode beside the idle
+ * checklist, and the action bar under it. Tokens only. */
+
+.reclaim-main {
+  padding: var(--ac-space-4);
+}
+
+/* The page's readout: 28 px bold, the reclaim teal. */
+.reclaim-page .reclaim-header {
+  font-family: "Ubuntu Sans", sans-serif;
+  font-feature-settings: "tnum";
+  font-weight: 700;
+  color: var(--ac-text-reclaim);
+  font-size: 28px;
+}
+
+.reclaim-page .reclaim-content.narrow .reclaim-header {
+  font-size: 20px;
+}
+
+.reclaim-page .reclaim-note,
+.reclaim-page .reclaim-legend,
+.reclaim-page .reclaim-count {
+  font-size: 12px;
+  color: var(--ac-text-secondary);
+}
+
+.reclaim-page .reclaim-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ac-text-primary);
+}
+
+/* The list column: a panel with a rule against the map. */
+.reclaim-side {
+  padding: var(--ac-space-4) 0 0 0;
+  border-left: 1px solid var(--ac-track);
+  background-color: var(--ac-surface-panel);
+}
+.reclaim-content.narrow .reclaim-side {
+  border-left: none;
+  border-top: 1px solid var(--ac-track);
+}
+.reclaim-side > box,
+.reclaim-side > label {
+  margin: 0 var(--ac-space-4);
+}
+
+.reclaim-page list.reclaim-list {
+  background-color: transparent;
+}
+.reclaim-page list.reclaim-list > row {
+  padding: 0;
+  border-bottom: none;
+}
+.reclaim-page list.reclaim-list > row:focus-visible {
+  outline: 2px solid var(--ac-mark-focus);
+  outline-offset: -2px;
+}
+
+.reclaim-line {
+  min-height: 34px;
+  padding: 0 var(--ac-space-4);
+}
+.reclaim-line .reclaim-name {
+  font-size: 13px;
+  color: var(--ac-text-primary);
+}
+.reclaim-line .reclaim-value {
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-feature-settings: "tnum";
+  font-size: 13px;
+  color: var(--ac-text-primary);
+  min-width: 64px;
+}
+.reclaim-content.narrow .reclaim-line {
+  padding: 0 var(--ac-space-3);
+}
+
+/* Bar: track, PSS in the free fill, swap hatched over the same fill. */
+.reclaim-bar {
+  background-color: var(--ac-track);
+  border-radius: 2px;
+}
+.reclaim-bar > .fill,
+.reclaim-bar > .swap {
+  background-color: var(--ac-mark-fill-free);
+}
+.reclaim-page drawingarea.hatch {
+  color: alpha(var(--ac-on-mark-fill-free-text), var(--ac-hatch-opacity));
+}
+
+/* Legend swatches: the target fill, the dimmed context, the hatch. */
+.reclaim-swatch {
+  border-radius: 4px;
+}
+.reclaim-swatch.target,
+.reclaim-swatch.swapped {
+  background-color: var(--ac-mark-fill-free);
+}
+.reclaim-swatch.context {
+  background-color: var(--ac-tile-dim);
+}
+.reclaim-legend-check {
+  color: var(--ac-text-primary);
+}
+
+.reclaim-side > .reclaim-actionbar {
+  padding: var(--ac-space-3) var(--ac-space-4);
+  border-top: 1px solid var(--ac-track);
+  margin: 0;
+}
+.reclaim-actionbar button {
+  border-radius: 8px;
+  font-weight: 700;
+}
+
+.reclaim-page .reclaim-empty {
+  font-size: 15px;
+  color: var(--ac-text-secondary);
+  margin: var(--ac-space-6);
+}

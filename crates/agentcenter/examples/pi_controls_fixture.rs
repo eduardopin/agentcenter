@@ -467,7 +467,6 @@ mod scenario {
         follow(&provider, style);
         provider.load_from_string(concat!(
             include_str!("../resources/tokens.css"),
-            include_str!("../resources/summary.css"),
             include_str!("../resources/sessions.css"),
         ));
         gtk::style_context_add_provider_for_display(

@@ -17,24 +17,37 @@
         <choice value="cpu"/>
         <choice value="name"/>
         <choice value="recommendation"/>
+        <choice value="spend"/>
+        <choice value="since-start"/>
+        <choice value="context"/>
       </choices>
-      <default>'state'</default>
+      <default>'spend'</default>
       <summary>Session list order</summary>
       <description>The last order chosen in the session list.</description>
     </key>
     <key name="window-width" type="i">
       <range min="360" max="32767"/>
-      <default>1180</default>
+      <default>1280</default>
       <summary>Window width</summary>
     </key>
     <key name="window-height" type="i">
       <range min="294" max="32767"/>
-      <default>720</default>
+      <default>800</default>
       <summary>Window height</summary>
     </key>
     <key name="window-maximized" type="b">
       <default>false</default>
       <summary>Window maximized</summary>
+    </key>
+    <key name="color-scheme" type="s">
+      <choices>
+        <choice value="system"/>
+        <choice value="light"/>
+        <choice value="dark"/>
+      </choices>
+      <default>'system'</default>
+      <summary>Theme</summary>
+      <description>View > Theme: follow the system style, or force light or dark.</description>
     </key>
   </schema>
 </schemalist>

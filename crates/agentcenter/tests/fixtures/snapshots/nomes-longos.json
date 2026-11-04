@@ -79,6 +79,7 @@
     "subagents_total": null,
     "provider": null,
     "cockpit": null,
+    "spend_30m": null,
     "cockpit_pending": false
    },
    "processes": [
@@ -271,6 +272,7 @@
     "subagents_total": null,
     "provider": "anthropic",
     "cockpit": null,
+    "spend_30m": null,
     "cockpit_pending": false
    },
    "processes": [
@@ -547,6 +549,7 @@
     "subagents_total": null,
     "provider": "anthropic",
     "cockpit": null,
+    "spend_30m": null,
     "cockpit_pending": false
    },
    "processes": [
@@ -697,6 +700,7 @@
     "subagents_total": null,
     "provider": "anthropic",
     "cockpit": null,
+    "spend_30m": null,
     "cockpit_pending": false
    },
    "processes": [
@@ -889,6 +893,7 @@
     "subagents_total": null,
     "provider": "openai",
     "cockpit": null,
+    "spend_30m": null,
     "cockpit_pending": false
    },
    "processes": [
@@ -1060,6 +1065,7 @@
     "subagents_total": null,
     "provider": "openai",
     "cockpit": null,
+    "spend_30m": null,
     "cockpit_pending": false
    },
    "processes": [

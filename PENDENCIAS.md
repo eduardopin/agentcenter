@@ -140,6 +140,8 @@ via Herdr (CC4), gauges por linha (CC8) e gráficos de cockpit no detalhe (CC9).
   empacotar as licenças e avisos das dependências efetivamente distribuídas.
   Os binários atuais são apenas locais.
 
+- [ ] Handoff permission dialogs: `permission_prompt` covers only a pending Write under the accepted roots. A Handoff stuck on a Bash permission dialog (the handoff skill runs git and agenfk) still ends Unknown/timeout 600 s after the send.
+
 ## Evidências locais, não publicadas
 
 - `target/cc123-resume-status-20261021.md`: testes, revisões e gates CC1/2/3.

@@ -1,0 +1,129 @@
+/* Token map (RFC-AC-002). The fill is the violet heat of the 30-minute
+ * spend, five fixed bins, a lightness ramp; GTK paints it and the radius,
+ * the tile draws glyph, name, value, tag and context bar in its own `color`
+ * (the on-fill text of the same table). Tiles never use the memory map's
+ * state fills: the state is the glyph's shape.
+ * Palette from REVIEW_RR1.md "Heat palette"; the on-fill text meets 4.5:1 on
+ * every fill, and b0/b1 get a 1 px inset border so they hold against the
+ * panel. */
+
+@media (prefers-color-scheme: dark) {
+  @define-color ac_heat_0 #443a5e;
+  @define-color ac_heat_0_text #ffffff;
+  @define-color ac_heat_1 #51406d;
+  @define-color ac_heat_1_text #ffffff;
+  @define-color ac_heat_2 #7857ab;
+  @define-color ac_heat_2_text #ffffff;
+  @define-color ac_heat_3 #a47de3;
+  @define-color ac_heat_3_text #15161c;
+  @define-color ac_heat_4 #ccb1fe;
+  @define-color ac_heat_4_text #15161c;
+  @define-color ac_heat_edge #77738a;
+}
+
+@media (prefers-color-scheme: light) {
+  @define-color ac_heat_0 #eae5f4;
+  @define-color ac_heat_0_text #15161c;
+  @define-color ac_heat_1 #c7b8e5;
+  @define-color ac_heat_1_text #15161c;
+  @define-color ac_heat_2 #a486d7;
+  @define-color ac_heat_2_text #15161c;
+  @define-color ac_heat_3 #7d4dbe;
+  @define-color ac_heat_3_text #ffffff;
+  @define-color ac_heat_4 #57288f;
+  @define-color ac_heat_4_text #ffffff;
+  @define-color ac_heat_edge #8a8698;
+}
+
+/* The map's colour is the selection ring around the selected tile. */
+tokenmap {
+  color: var(--ac-text-primary);
+}
+
+/* Font carriers, measured by Pango; never shown. Sizes in em so text
+ * scaling carries through: 12 px bold below 96 px tiles, 13 px above. */
+tokenmap > label.name {
+  font-family: "Ubuntu Sans", sans-serif;
+  font-weight: 700;
+  font-size: 0.86em;
+}
+tokenmap > label.name-big {
+  font-family: "Ubuntu Sans", sans-serif;
+  font-weight: 700;
+  font-size: 0.93em;
+}
+tokenmap > label.value {
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-feature-settings: "tnum";
+  font-size: 0.86em;
+}
+tokenmap > label.tag {
+  font-family: "Ubuntu Sans", sans-serif;
+  font-weight: 700;
+  font-size: 0.79em;
+}
+
+tokenmap > tile {
+  border-radius: 4px;
+}
+
+tokenmap > tile.heat-0 {
+  background-color: @ac_heat_0;
+  color: @ac_heat_0_text;
+  box-shadow: inset 0 0 0 1px @ac_heat_edge;
+}
+tokenmap > tile.heat-1 {
+  background-color: @ac_heat_1;
+  color: @ac_heat_1_text;
+  box-shadow: inset 0 0 0 1px @ac_heat_edge;
+}
+tokenmap > tile.heat-2 {
+  background-color: @ac_heat_2;
+  color: @ac_heat_2_text;
+}
+tokenmap > tile.heat-3 {
+  background-color: @ac_heat_3;
+  color: @ac_heat_3_text;
+}
+tokenmap > tile.heat-4 {
+  background-color: @ac_heat_4;
+  color: @ac_heat_4_text;
+}
+
+/* Spend unknown: not a heat, a plain panel with an edge. */
+tokenmap > tile.heat-none {
+  background-color: var(--ac-surface-panel);
+  color: var(--ac-text-primary);
+  box-shadow: inset 0 0 0 1px var(--ac-text-secondary);
+}
+
+/* Keyboard focus: the focus mark just outside the tile. */
+tokenmap > tile:focus-visible {
+  outline: 2px solid var(--ac-mark-focus);
+  outline-offset: 1px;
+}
+
+/* Legend: the same five fills as 12x12 swatches. */
+tokenlegend > .swatch {
+  border-radius: 2px;
+}
+tokenlegend > .swatch.heat-0 {
+  background-color: @ac_heat_0;
+  box-shadow: inset 0 0 0 1px @ac_heat_edge;
+}
+tokenlegend > .swatch.heat-1 {
+  background-color: @ac_heat_1;
+  box-shadow: inset 0 0 0 1px @ac_heat_edge;
+}
+tokenlegend > .swatch.heat-2 {
+  background-color: @ac_heat_2;
+}
+tokenlegend > .swatch.heat-3 {
+  background-color: @ac_heat_3;
+}
+tokenlegend > .swatch.heat-4 {
+  background-color: @ac_heat_4;
+}
+tokenlegend > label {
+  color: var(--ac-text-secondary);
+}

@@ -103,12 +103,18 @@ pub struct SamplerConfig {
     /// anda, e reler os ~290 processos de sessao custava 185 ms por passada.
     pub smaps_max_age: Duration,
     /// Bytes de transcript lidos por tick, somados todos os arquivos (overlay
-    /// de transcripts). O padrao, [`READ_BUDGET`], segura o tick do monitor; o
-    /// comando de um tiro (`snapshot`) usa [`READ_ALL`] para que os tokens e o
+    /// de transcripts), fora a primeira leitura de cada arquivo
+    /// ([`Self::transcript_first_read_all`]). O padrao, [`READ_BUDGET`], segura
+    /// o tick do monitor; o comando de um tiro (`snapshot`) usa [`READ_ALL`] para que os tokens e o
     /// cockpit saiam ja no segundo tick. [`READ_ALL`] tambem tira o teto da
     /// primeira leitura dos subagentes, para que `subagents_live` saia
     /// completo; qualquer outro valor deixa o teto proprio deles.
     pub transcript_read_budget: u64,
+    /// A primeira leitura de cada transcript (da primeira passada, ou de uma
+    /// sessao que aparece depois) e inteira e sem teto, para os tokens e o
+    /// cockpit de todas as sessoes sairem nos primeiros ticks. `false` so
+    /// para teste: o teto vale ate para a primeira leitura.
+    pub transcript_first_read_all: bool,
 }
 
 /// Sem teto de leitura de transcript por tick.
@@ -121,6 +127,7 @@ impl Default for SamplerConfig {
             smaps_idle_every: Duration::from_secs(5),
             smaps_max_age: Duration::from_secs(300),
             transcript_read_budget: READ_BUDGET,
+            transcript_first_read_all: true,
         }
     }
 }

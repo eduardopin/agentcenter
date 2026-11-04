@@ -1,0 +1,124 @@
+/* Direction B: the 10-minute Timeline (timeline.rs) and the machine strip
+ * (machine_strip.rs). Reads only semantic tokens from tokens.css.
+ *
+ * Timeline nodes: timeline > .pen.series|.grid|.alert carry the colours the
+ * chart draws with (they are never painted themselves), timeline > label.axis
+ * and label.ylabel are the axis texts. A series is ink; a chart with the ok
+ * class (the machine strip) draws green under its limit, and the alert pen
+ * is crimson over it. */
+
+timeline > .pen.series {
+  color: var(--ac-text-primary);
+}
+
+timeline > .pen.grid {
+  color: var(--ac-track);
+}
+
+timeline > .pen.ok {
+  color: var(--ac-mark-ok);
+}
+
+timeline > .pen.alert,
+timeline.alert > .pen.series {
+  color: var(--ac-mark-alert);
+}
+
+timeline > label.axis,
+timeline > label.ylabel {
+  color: var(--ac-text-secondary);
+  font-size: 11px;
+}
+
+timeline > label.ylabel {
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-feature-settings: "tnum";
+}
+
+/* Machine strip: four cells in one row, separated by a hairline; 2x2 under
+ * 600 px (.compact). */
+
+.machine-strip > .cell {
+  padding: 10px 12px;
+  border-right: 1px solid var(--ac-track);
+}
+
+.machine-strip > .cell.last,
+.machine-strip.compact > .cell {
+  border-right: none;
+}
+
+.machine-strip.compact > .cell {
+  padding: 6px 8px;
+}
+
+/* The two ring cells stack in the last column, two lines each; the readout
+ * shares the title's line, so it is smaller than the stat cells'. */
+.machine-strip > .cell.ring-cell {
+  padding: 3px 8px;
+}
+
+.machine-strip .ring-cell .value {
+  font-size: 14px;
+}
+
+.machine-strip .ring-cell button {
+  padding: 0 2px;
+  min-height: 0;
+  min-width: 0;
+}
+
+.machine-strip .title,
+.machine-strip .sub {
+  font-size: 12px;
+  color: var(--ac-text-secondary);
+}
+
+.machine-strip .value {
+  font-family: "Ubuntu Sans Mono", monospace;
+  font-feature-settings: "tnum";
+  font-size: 20px;
+  font-weight: 700;
+  color: var(--ac-text-primary);
+}
+
+.machine-strip.compact .value {
+  font-size: 15px;
+}
+
+/* The strip's charts are secondary ink, as in the B mockup's top band. */
+.machine-strip timeline > .pen.series {
+  color: var(--ac-text-secondary);
+}
+
+.machine-strip timeline.alert > .pen.series {
+  color: var(--ac-mark-alert);
+}
+
+.machine-strip .cell.over .value,
+.machine-strip .cell.over glyph {
+  color: var(--ac-text-alert);
+}
+
+/* RAM bar gauge: in use over total, green on a quiet track; alert
+ * while memory stall is over its limit. */
+.machine-strip levelbar.ram-gauge {
+  margin: 4px 0 2px 0;
+}
+.machine-strip levelbar.ram-gauge trough {
+  min-height: 6px;
+  border-radius: 3px;
+  background-color: var(--ac-track);
+}
+.machine-strip levelbar.ram-gauge block.filled {
+  min-height: 6px;
+  border-radius: 3px;
+  background-color: var(--ac-mark-ok);
+}
+.machine-strip levelbar.ram-gauge.pressure block.filled {
+  background-color: var(--ac-mark-alert);
+}
+.machine-strip levelbar.ram-gauge block.empty {
+  background: none;
+  border: none;
+}

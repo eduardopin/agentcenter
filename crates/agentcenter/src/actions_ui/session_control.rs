@@ -339,6 +339,8 @@ pub enum Status {
     /// Typed into the pane; waiting for transcript evidence (Claude).
     Sent,
     Running,
+    /// Running, held by the session's own permission dialog (Claude).
+    AwaitingPermission,
     Completed(Evidence),
     Refused(String),
     Failed(String),
@@ -352,11 +354,21 @@ impl Status {
             Self::Completed(_) | Self::Refused(_) | Self::Failed(_) | Self::Cancelled
         )
     }
+    /// Not terminal and not `Unknown`: the operation is polled for its next state.
+    pub fn polled(&self) -> bool {
+        matches!(
+            self,
+            Self::Accepted | Self::Running | Self::Sent | Self::AwaitingPermission
+        )
+    }
     pub fn text(&self) -> String {
         match self {
             Self::Requested => "Requested — completion not confirmed".into(),
             Self::Accepted => "Accepted — completion not confirmed".into(),
             Self::Running => "Running — completion not confirmed".into(),
+            Self::AwaitingPermission => {
+                "Waiting for your permission in the session — completion not confirmed".into()
+            }
             Self::Sent => {
                 "Sent to the pane — waiting for evidence, completion not confirmed".into()
             }
@@ -461,9 +473,9 @@ impl Controller {
             || matches!(
                 (&*previous, &status),
                 (
-                    Status::Running | Status::Sent | Status::Unknown,
+                    Status::Running | Status::Sent | Status::AwaitingPermission | Status::Unknown,
                     Status::Accepted
-                ) | (Status::Unknown, Status::Sent)
+                ) | (Status::Unknown, Status::Sent | Status::AwaitingPermission)
             )
         {
             return false;
@@ -520,6 +532,7 @@ pub enum Backend {
     Claude(agentcenter_core::control::herdr::Endpoint),
 }
 
+use agentcenter_core::control::claude::code::PERMISSION_PROMPT;
 pub use agentcenter_core::control::pickup::{Progress, Stage};
 
 /// Composite handoff-pickup adapter: CC5 (Pi inside a herdr pane) and CC6
@@ -536,20 +549,52 @@ pub trait PickupPort: Send {
 /// Builds the adapter for one confirmed pickup request. Build only, no I/O:
 /// it runs on the GTK thread; sockets and transcripts belong in start/status.
 ///
-/// Integration point for CC5/CC6: replace [`pickup_not_integrated`] in
-/// `SessionControls::new` with the real adapters and stop setting
-/// [`reason::PICKUP_NOT_INTEGRATED`] in `authenticated_session`/`claude_session`.
+/// Production: [`pickup_connect_default`]. CC5 (Pi) still answers
+/// [`reason::PICKUP_NOT_INTEGRATED`] from `authenticated_session`.
 pub type PickupConnect =
     fn(&Backend, &agentcenter_core::Session, &Request) -> Result<Box<dyn PickupPort>, &'static str>;
 
-/// Production default until CC5/CC6 are integrated: never reached, because
-/// discovery hides the pickup button with `pickup_not_integrated`.
+/// Pi's pickup until CC5 is integrated: never reached, because discovery
+/// hides that button with `pickup_not_integrated`.
 pub fn pickup_not_integrated(
     _: &Backend,
     _: &agentcenter_core::Session,
     _: &Request,
 ) -> Result<Box<dyn PickupPort>, &'static str> {
     Err("Pickup adapter is not integrated")
+}
+
+/// Production adapter: Claude Code in herdr (CC6). Pi pickup stays off
+/// (PENDENCIAS.md blockers); discovery hides its button as well.
+pub fn pickup_connect_default(
+    backend: &Backend,
+    native: &agentcenter_core::Session,
+    request: &Request,
+) -> Result<Box<dyn PickupPort>, &'static str> {
+    use agentcenter_core::control::claude;
+    let Backend::Claude(endpoint) = backend else {
+        return pickup_not_integrated(backend, native, request);
+    };
+    let subject = claude::Subject::from_session(native)
+        .map_err(|_| "Session changed; review a new confirmation")?;
+    let home = std::env::var_os("HOME").ok_or("Home directory unavailable")?;
+    Ok(Box::new(ClaudePickup {
+        controller: claude::Controller::new(endpoint.clone(), claude::Env::new(home.into())),
+        subject,
+    }))
+}
+/// One controller per pickup: start and every status read the same state.
+struct ClaudePickup {
+    controller: agentcenter_core::control::claude::Controller,
+    subject: agentcenter_core::control::claude::Subject,
+}
+impl PickupPort for ClaudePickup {
+    fn start(&mut self, operation_id: &str) -> Result<Progress, &'static str> {
+        Ok(self.controller.pickup_start(operation_id, &self.subject))
+    }
+    fn status(&mut self, operation_id: &str) -> Result<Progress, &'static str> {
+        self.controller.pickup_status(operation_id)
+    }
 }
 
 /// The six stages in their only order.
@@ -587,6 +632,7 @@ pub fn status_from_progress(request: &Request, p: &Progress) -> Status {
     }
     match p.state {
         State::Accepted => Status::Accepted,
+        State::Running if p.code == PERMISSION_PROMPT => Status::AwaitingPermission,
         State::Running => Status::Running,
         State::Rejected => Status::Refused(p.code.into()),
         State::Failed => Status::Failed(p.code.into()),
@@ -849,7 +895,7 @@ impl SessionControls {
             endpoint_key: RefCell::new(None),
             authenticate: Cell::new(authenticated_session),
             poll: Cell::new(std::time::Duration::from_millis(300)),
-            pickup_connect: Cell::new(pickup_not_integrated),
+            pickup_connect: Cell::new(pickup_connect_default),
             progress: RefCell::new(None),
             stages,
             announced: RefCell::new(None),
@@ -1089,7 +1135,9 @@ impl Panel {
         let queryable = open.is_some()
             && matches!(
                 status,
-                Some(Status::Unknown | Status::Accepted | Status::Sent)
+                Some(
+                    Status::Unknown | Status::Accepted | Status::Sent | Status::AwaitingPermission
+                )
             );
         self.query.set_visible(queryable);
         self.query.set_sensitive(queryable);
@@ -1512,7 +1560,7 @@ impl Panel {
             };
             match result {
                 Ok((mut op, status, date)) => {
-                    let poll = matches!(status, Status::Accepted | Status::Running | Status::Sent);
+                    let poll = status.polled();
                     let completed = matches!(status, Status::Completed(_));
                     let terminal = status.terminal();
                     if terminal {
@@ -1587,6 +1635,9 @@ fn pickup_lines(progress: &Progress, status: &Status, old: &Session) -> Vec<Stri
         Status::Completed(Evidence::Picked { .. }) if progress.stage == Stage::PickupLoaded => {
             vec![status.text()]
         }
+        Status::AwaitingPermission => vec![format!(
+            "Now at {at}; waiting for your permission in the session."
+        )],
         Status::Requested | Status::Accepted | Status::Running | Status::Sent => {
             vec![format!("Now at {at}; completion not confirmed.")]
         }
@@ -1874,6 +1925,7 @@ fn status_from_outcome(
     };
     match o.state {
         State::Accepted => (Status::Accepted, None),
+        State::Running if o.code == PERMISSION_PROMPT => (Status::AwaitingPermission, None),
         State::Running => (Status::Sent, None),
         State::Rejected => (Status::Refused(o.code.into()), None),
         State::Failed => (Status::Failed(o.code.into()), None),
@@ -1950,12 +2002,23 @@ fn authenticated_session(
 }
 /// Claude Code through the pinned herdr server (CC4 capability).
 fn claude_session(native: &agentcenter_core::Session) -> Result<(Backend, Session), &'static str> {
-    use agentcenter_core::control::{Capability, claude};
+    use agentcenter_core::control::claude;
     let subject = claude::Subject::from_session(native)?;
     let endpoint = herdr_server()?;
     let home = std::env::var_os("HOME").ok_or("no_home")?;
     let controller = claude::Controller::new(endpoint.clone(), claude::Env::new(home.into()));
     let caps = controller.capabilities(&subject);
+    let session = claude_ui_session(native, &subject, &caps)?;
+    Ok((Backend::Claude(endpoint), session))
+}
+/// The panel's view of one Claude Code session from its sampled identity
+/// and the adapter's capabilities. Pure: no herdr, no filesystem.
+fn claude_ui_session(
+    native: &agentcenter_core::Session,
+    subject: &agentcenter_core::control::claude::Subject,
+    caps: &agentcenter_core::control::claude::Capabilities,
+) -> Result<Session, &'static str> {
+    use agentcenter_core::control::{Capability, claude};
     let why = |c: &Capability| {
         (!c.enabled).then(|| {
             c.disabled_reason
@@ -1964,7 +2027,7 @@ fn claude_session(native: &agentcenter_core::Session) -> Result<(Backend, Sessio
         })
     };
     let start = native.starttime.ok_or(claude::code::IDENTITY)?;
-    let session = Session {
+    Ok(Session {
         agent: Agent::Claude,
         identity: serde_json::json!([
             "claude",
@@ -1980,11 +2043,10 @@ fn claude_session(native: &agentcenter_core::Session) -> Result<(Backend, Sessio
         expected: serde_json::json!({"sessionId": subject.session_id}),
         handoff_disabled: why(&caps.handoff),
         compact_disabled: why(&caps.compact),
-        // CC6 (Claude pickup) is not in this build yet.
-        pickup_disabled: Some(reason::PICKUP_NOT_INTEGRATED.into()),
+        // Handoff + new session starts with this same handoff.
+        pickup_disabled: why(&caps.handoff),
         cancel_supported: caps.handoff.cancel_supported && caps.compact.cancel_supported,
-    };
-    Ok((Backend::Claude(endpoint), session))
+    })
 }
 /// The one herdr server of this user, by /proc (off the GTK thread only).
 /// None or several: no target, never the first.

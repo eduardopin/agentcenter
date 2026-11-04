@@ -5,13 +5,15 @@
 //! Capability is enabled only when all hold: the agent is `claude`; the session
 //! maps to a Herdr pane with explicit workspace/tab/pane; `/proc` starttime,
 //! `pane.process_info` and `agent.get` agree on pid and `agent_session_id`; the
-//! agent is `idle`; the transcript resolves; no squad-vigia swap claim exists
+//! agent is `idle` (or `done`, Herdr's unseen idle); the transcript resolves; no squad-vigia swap claim exists
 //! for the session (`~/.claude/squad/trocas/<session>.claim`, stat only; only
 //! "not found" counts as no claim). Any failure is a closed code in
 //! `disabled_reason`.
 //!
-//! The text sent is closed here: Compact is `/compact`; Handoff is
-//! `/clear-pickup handoff agentcenter-op:<operation_id>`. Everything is
+//! The text sent is closed here: Compact is [`COMPACT_TEXT`] (`/compact` with
+//! fixed focus instructions, one line); Handoff is
+//! `/<skill> handoff agentcenter-op:<operation_id>`, `<skill>` the installed one of
+//! [`HANDOFF_SKILLS`]. Everything is
 //! revalidated by [`herdr::Endpoint`] immediately before the prompt. No queue:
 //! busy or another operation in flight for the session rejects.
 //!
@@ -27,6 +29,12 @@
 //! `~/.claude/squad/handoffs/`, with the file present, regular, reached without
 //! any symlink, owned by the UID and modified at or after the send. Its size
 //! and sha256 are recorded; its bytes are never kept or shown.
+//!
+//! A Handoff whose `Write` under an allowed root has no result yet while the
+//! Herdr pane reports `blocked` is waiting on Claude Code's permission dialog
+//! (`.claude` is a protected path, asked even under acceptEdits): it stays
+//! `running` with code `permission_prompt`, and its evidence timeout counts
+//! from the last time the dialog was seen, never from the send.
 //!
 //! Without evidence by `evidence_timeout` the operation is `unknown` and holds
 //! its session for `hold`, counted from when it became `unknown`; a later
@@ -63,8 +71,15 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-pub const COMPACT_TEXT: &str = "/compact";
+/// One line: a newline in `agent.prompt` would submit early.
+pub const COMPACT_TEXT: &str = "/compact Keep: decisions made and why; files touched, with paths; \
+    current task state and the next step; open errors and blockers; \
+    commands that worked. Drop: exploration dead ends and tool output bodies.";
 pub const HANDOFF_TEXT: &str = "/clear-pickup handoff";
+/// Skills that run the handoff and the pickup, in order of preference. Both take
+/// `handoff <args>` and `pickup <path>` and write under `<repo>/.claude/handoffs`:
+/// agenfk-squad ships `clear-pickup`, claude-squad ships `handoff`.
+pub const HANDOFF_SKILLS: [&str; 2] = ["clear-pickup", "handoff"];
 pub const MARK: &str = "agentcenter-op:";
 pub const CLEAR_TEXT: &str = "/clear";
 pub const PICKUP_TEXT: &str = "/clear-pickup pickup";
@@ -73,6 +88,10 @@ const SCAN_LIMIT: u64 = 256 << 20;
 const LINE_LIMIT: u64 = 16 << 20;
 /// Largest handoff file hashed.
 const ARTIFACT_LIMIT: u64 = 16 << 20;
+/// How far a handoff's mtime may trail `sent_ms`. The kernel stamps inodes
+/// from its coarse clock, up to one tick (10 ms at HZ=100) behind `now_ms()`,
+/// so a file written right after the send can look older than it.
+pub(crate) const MTIME_SLACK_MS: u64 = 10;
 const MAX_OPERATIONS: usize = 256;
 const TELEMETRY: usize = 128;
 
@@ -104,6 +123,8 @@ pub mod code {
     pub const TRANSCRIPT_UNREADABLE: &str = "transcript_unreadable";
     pub const COMPACTED: &str = "compacted";
     pub const PERSISTED: &str = "persisted";
+    /// Running: the handoff's Write waits on the session's permission dialog.
+    pub const PERMISSION_PROMPT: &str = "permission_prompt";
     pub const UNKNOWN_OPERATION: &str = "unknown_operation";
     // Handoff-pickup (CC6). Running codes name the stage just reached.
     /// Private copy written and verified; waiting for `idle` to `/clear`.
@@ -173,6 +194,21 @@ impl Subject {
     }
 }
 
+/// The first of [`HANDOFF_SKILLS`] installed under `<home>/.claude/skills`; the
+/// first one when none is, so a missing skill shows as the session's own
+/// "unknown command" instead of a guess.
+pub fn handoff_skill(home: &Path) -> &'static str {
+    HANDOFF_SKILLS
+        .into_iter()
+        .find(|s| {
+            home.join(".claude/skills")
+                .join(s)
+                .join("SKILL.md")
+                .is_file()
+        })
+        .unwrap_or(HANDOFF_SKILLS[0])
+}
+
 /// Filesystem roots of the user running the monitor.
 #[derive(Debug, Clone)]
 pub struct Env {
@@ -182,6 +218,8 @@ pub struct Env {
     /// AgentCenter handoffs directory, where pickup copies go:
     /// `<state>/agentcenter/handoffs`, `<state>` as in [`Env::with_state_home`].
     pub handoffs: PathBuf,
+    /// The installed skill of [`HANDOFF_SKILLS`] the commands invoke.
+    pub skill: &'static str,
 }
 impl Env {
     /// Roots of `home`, `XDG_STATE_HOME` read from the process, as the
@@ -198,9 +236,18 @@ impl Env {
             .unwrap_or_else(|| home.join(".local/state"));
         Self {
             handoffs: state.join("agentcenter/handoffs"),
+            skill: handoff_skill(&home),
             home,
             uid: super::pi::getuid(),
         }
+    }
+    /// `/<skill> handoff`, the head of the Handoff prompt.
+    pub fn handoff_text(&self) -> String {
+        format!("/{} handoff", self.skill)
+    }
+    /// `/<skill> pickup`, the head of the pickup prompt.
+    pub fn pickup_text(&self) -> String {
+        format!("/{} pickup", self.skill)
     }
     fn claim(&self, session_id: &str) -> PathBuf {
         self.home
@@ -260,6 +307,9 @@ struct Operation {
     sent_at: Option<Instant>,
     /// When the operation last became `unknown`; `hold` counts from here.
     unknown_at: Option<Instant>,
+    /// Last time the permission dialog was seen; the evidence timeout counts
+    /// from here once set.
+    asked_at: Option<Instant>,
     state: State,
     code: &'static str,
     evidence: Option<Evidence>,
@@ -272,6 +322,9 @@ pub struct Controller {
     pub io_timeout: Duration,
     /// After the send, how long evidence may take before `unknown`.
     pub evidence_timeout: Duration,
+    /// Ceiling, counted from the send, on waiting for the permission dialog:
+    /// seeing it resets `evidence_timeout`, never this.
+    pub permission_timeout: Duration,
     /// How long an `unknown` operation still blocks new ones on its session,
     /// counted from when it became `unknown` (not from the send).
     pub hold: Duration,
@@ -317,6 +370,7 @@ impl Controller {
             env,
             io_timeout: Duration::from_secs(3),
             evidence_timeout: Duration::from_secs(600),
+            permission_timeout: Duration::from_secs(1800),
             hold: Duration::from_secs(600),
             ops: HashMap::new(),
             telemetry: VecDeque::new(),
@@ -441,6 +495,7 @@ impl Controller {
             sent_ms: 0,
             sent_at: None,
             unknown_at: None,
+            asked_at: None,
             state: State::Rejected,
             code: code::INVALID,
             evidence: None,
@@ -452,7 +507,7 @@ impl Controller {
             op.transcript = Some(transcript);
             let text = match action {
                 Action::Compact => COMPACT_TEXT.to_string(),
-                Action::Handoff => format!("{HANDOFF_TEXT} {MARK}{operation_id}"),
+                Action::Handoff => format!("{} {MARK}{operation_id}", self.env.handoff_text()),
             };
             // A swap may have been claimed while Herdr was probed.
             self.env.no_claim(&s.session_id)?;
@@ -487,7 +542,9 @@ impl Controller {
 
     /// Re-reads the evidence of this operation; `unknown` may still complete.
     pub fn status(&mut self, operation_id: &str) -> Result<Outcome, &'static str> {
-        let timeout = self.evidence_timeout;
+        let (timeout, io) = (self.evidence_timeout, self.io_timeout);
+        let ceiling = self.permission_timeout;
+        let endpoint = &self.endpoint;
         let o = self
             .ops
             .get_mut(operation_id)
@@ -499,7 +556,7 @@ impl Controller {
             return Ok(Self::outcome(operation_id, o));
         }
         let before = (o.state, o.code);
-        match evidence(
+        match scan(
             o.action,
             &transcript,
             o.offset,
@@ -509,7 +566,7 @@ impl Controller {
             &o.roots,
             self.env.uid,
         ) {
-            Ok(Some(e)) => {
+            Ok((Some(e), _)) => {
                 o.state = State::Completed;
                 o.code = match e {
                     Evidence::Compacted { .. } => code::COMPACTED,
@@ -517,10 +574,28 @@ impl Controller {
                 };
                 o.evidence = Some(e);
             }
-            Ok(None) if sent_at.elapsed() >= timeout => {
+            // Asked only while running: a dialog never revives an unknown.
+            Ok((None, true))
+                if o.state == State::Running
+                    && sent_at.elapsed() < ceiling
+                    && endpoint
+                        .pane_session(&o.subject.target, io)
+                        .is_ok_and(|(_, status)| status.as_deref() == Some("blocked")) =>
+            {
+                o.asked_at = Some(Instant::now());
+                o.code = code::PERMISSION_PROMPT;
+            }
+            Ok((None, _))
+                if o.asked_at.unwrap_or(sent_at).elapsed() >= timeout
+                    || (o.asked_at.is_some() && sent_at.elapsed() >= ceiling) =>
+            {
                 (o.state, o.code) = (State::Unknown, code::TIMEOUT)
             }
-            Ok(None) => {}
+            Ok((None, _)) => {
+                if o.code == code::PERMISSION_PROMPT {
+                    o.code = code::SENT;
+                }
+            }
             Err(c) => (o.state, o.code) = (State::Unknown, c),
         }
         if o.state == State::Unknown && (o.state, o.code) != before {
@@ -800,7 +875,7 @@ impl Controller {
         let Some(path) = copy.path.to_str() else {
             return self.pickup_set(id, State::Failed, stage, code::COPY_FAILED);
         };
-        let text = format!("{PICKUP_TEXT} {path}");
+        let text = format!("{} {path}", self.env.pickup_text());
         let sent_ms = now_ms();
         let r = self
             .endpoint
@@ -835,7 +910,7 @@ impl Controller {
         ) else {
             return Ok(false);
         };
-        pickup_loaded(&transcript, p.pickup_ms, new, &copy.path)
+        pickup_loaded(&transcript, p.pickup_ms, new, &copy.path, self.env.skill)
     }
 }
 
@@ -908,6 +983,7 @@ fn entries(
 
 /// Evidence for one operation, reading the transcript from `offset`.
 /// `Ok(None)`: not (yet) there. Nothing read is kept beyond the result.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn evidence(
     action: Action,
@@ -919,11 +995,38 @@ pub(crate) fn evidence(
     roots: &[PathBuf],
     uid: u32,
 ) -> Result<Option<Evidence>, &'static str> {
+    scan(
+        action,
+        transcript,
+        offset,
+        sent_ms,
+        session_id,
+        operation_id,
+        roots,
+        uid,
+    )
+    .map(|(e, _)| e)
+}
+
+/// As [`evidence`], plus whether a handoff `Write` to a path under `roots`
+/// has no result yet (what a permission dialog holds back).
+#[allow(clippy::too_many_arguments)]
+fn scan(
+    action: Action,
+    transcript: &Path,
+    offset: u64,
+    sent_ms: u64,
+    session_id: &str,
+    operation_id: &str,
+    roots: &[PathBuf],
+    uid: u32,
+) -> Result<(Option<Evidence>, bool), &'static str> {
     let mark = format!("{MARK}{operation_id}");
     let mut command_ms: Option<u64> = None;
     let mut boundaries = Vec::new();
     let mut writes: HashMap<String, String> = HashMap::new();
     let mut written = Vec::new();
+    let mut answered: std::collections::HashSet<String> = Default::default();
     entries(transcript, offset, session_id, sent_ms, |v, ts| {
         match (action, v["type"].as_str()) {
             (Action::Compact, Some("user")) => {
@@ -951,6 +1054,11 @@ pub(crate) fn evidence(
                     return;
                 };
                 for b in blocks {
+                    if b["type"] == "tool_result"
+                        && let Some(id) = b["tool_use_id"].as_str()
+                    {
+                        answered.insert(id.to_string());
+                    }
                     if b["type"] != "tool_result" || b["is_error"] == true {
                         continue;
                     }
@@ -979,19 +1087,29 @@ pub(crate) fn evidence(
             _ => {}
         }
     })?;
+    let pending = writes.iter().any(|(id, path)| {
+        !answered.contains(id) && roots.iter().any(|r| Path::new(path).starts_with(r))
+    });
     Ok(match action {
-        Action::Compact => command_ms
-            .and_then(|c| boundaries.into_iter().filter(|b| *b >= c).min())
-            .map(|boundary_ms| Evidence::Compacted { boundary_ms }),
-        Action::Handoff => written
-            .iter()
-            .find_map(|p| artifact(Path::new(p), roots, sent_ms, uid))
-            .map(Evidence::Persisted),
+        Action::Compact => (
+            command_ms
+                .and_then(|c| boundaries.into_iter().filter(|b| *b >= c).min())
+                .map(|boundary_ms| Evidence::Compacted { boundary_ms }),
+            false,
+        ),
+        Action::Handoff => (
+            written
+                .iter()
+                .find_map(|p| artifact(Path::new(p), roots, sent_ms, uid))
+                .map(Evidence::Persisted),
+            pending,
+        ),
     })
 }
 
 /// The handoff file, if it is under an allowed root, reached without any
-/// symlink, a regular file owned by `uid`, modified at or after `sent_ms`.
+/// symlink, a regular file owned by `uid`, modified at or after `sent_ms`
+/// (less [`MTIME_SLACK_MS`]).
 pub(crate) fn artifact(path: &Path, roots: &[PathBuf], sent_ms: u64, uid: u32) -> Option<Artifact> {
     let mut parts = path.components();
     if parts.next() != Some(Component::RootDir)
@@ -1023,7 +1141,7 @@ pub(crate) fn artifact(path: &Path, roots: &[PathBuf], sent_ms: u64, uid: u32) -
         || m.dev() != before.dev()
         || m.ino() != before.ino()
         || m.uid() != uid
-        || modified_ms < sent_ms
+        || modified_ms + MTIME_SLACK_MS < sent_ms
         || m.len() > ARTIFACT_LIMIT
     {
         return None;
@@ -1158,7 +1276,7 @@ pub(crate) fn pickup_arg_safe(path: &Path) -> bool {
 }
 
 /// Pickup evidence in the new session's transcript: a user entry with the
-/// `/clear-pickup` command whose argument is `pickup <copy>`, then a `Read`
+/// `/<skill>` command whose argument is `pickup <copy>`, then a `Read`
 /// of exactly `copy` whose result succeeded for that file. Entries of other
 /// sessions, before `sent_ms`, or of another path never count.
 pub(crate) fn pickup_loaded(
@@ -1166,7 +1284,9 @@ pub(crate) fn pickup_loaded(
     sent_ms: u64,
     session_id: &str,
     copy: &Path,
+    skill: &str,
 ) -> Result<bool, &'static str> {
+    let command = format!("/{skill}");
     let Some(copy) = copy.to_str() else {
         return Ok(false);
     };
@@ -1181,9 +1301,14 @@ pub(crate) fn pickup_loaded(
         let blocks = v["message"]["content"].as_array();
         match v["type"].as_str() {
             Some("user") if !prompted => {
+                // The command is a whole `<command-name>` part, never a prefix of
+                // another command or a substring of the copy's own path (which
+                // sits under a `handoffs` directory).
                 prompted = texts(&v["message"]).iter().any(|t| {
-                    t.contains("/clear-pickup")
-                        && t.split(['\n', '<', '>']).any(|part| part.trim() == arg)
+                    let parts = || t.split(['\n', '<', '>']).map(str::trim);
+                    let plain = format!("{command} {arg}");
+                    parts().any(|part| part == plain)
+                        || (parts().any(|part| part == command) && parts().any(|part| part == arg))
                 });
             }
             Some("assistant") if prompted => {

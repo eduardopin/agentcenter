@@ -107,6 +107,9 @@ fn config(budget: Option<&str>) -> SamplerConfig {
     let mut c = super::snapshot::one_shot_config();
     if let Some(b) = budget.and_then(|b| b.trim().parse::<u64>().ok()) {
         c.transcript_read_budget = b;
+        // O teto de teste vale ate para a primeira leitura: e como o timeout
+        // com transcript ainda lendo e provocado.
+        c.transcript_first_read_all = false;
     }
     c
 }
@@ -510,9 +513,15 @@ mod tests {
         assert_eq!(config(None).transcript_read_budget, READ_ALL);
         assert_eq!(config(Some("x")).transcript_read_budget, READ_ALL);
         assert_eq!(config(Some(" 1 ")).transcript_read_budget, 1);
+        assert!(config(None).transcript_first_read_all);
+        assert!(
+            !config(Some("1")).transcript_first_read_all,
+            "teto vale ate na 1a leitura"
+        );
         assert_eq!(
             SamplerConfig {
                 transcript_read_budget: READ_ALL,
+                transcript_first_read_all: true,
                 ..config(Some("1"))
             },
             super::super::snapshot::one_shot_config()

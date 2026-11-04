@@ -237,6 +237,36 @@ fn handoff_negatives_never_complete() {
     assert_eq!(late.run(OP, &r, false), None, "mtime before send");
 }
 
+/// The kernel stamps mtime from its coarse clock, up to one tick behind
+/// `now_ms()`: a handoff written right after the send can carry an mtime a
+/// few ms before `sent_ms` and must still count. A second before does not.
+#[test]
+fn handoff_mtime_one_coarse_tick_before_send_still_counts() {
+    let h = Handoff::new();
+    let p = h.file("h.md");
+    let m = fs::metadata(&p).unwrap();
+    let mtime_ms = m.mtime() as u64 * 1000 + m.mtime_nsec() as u64 / 1_000_000;
+    let mut tick = Handoff {
+        dir: tmp(),
+        sent: mtime_ms + MTIME_SLACK_MS,
+        uid: h.uid,
+    };
+    let q = tick.dir.join("handoffs/h.md");
+    fs::copy(&p, &q).unwrap();
+    fs::File::options()
+        .write(true)
+        .open(&q)
+        .unwrap()
+        .set_modified(m.modified().unwrap())
+        .unwrap();
+    assert!(
+        matches!(tick.run(OP, &q, false), Some(Evidence::Persisted(_))),
+        "mtime within one coarse tick of the send"
+    );
+    tick.sent = mtime_ms + 1_000;
+    assert_eq!(tick.run(OP, &q, false), None, "mtime a second before send");
+}
+
 #[test]
 fn write_without_matching_result_path_is_not_evidence() {
     let h = Handoff::new();
@@ -353,7 +383,7 @@ fn pickup_loaded_needs_own_session_prompt_then_successful_read() {
     let read = |ts: u64, sid: &str, error: bool| read_of(ts, sid, error, &copy, &copy);
     let check = |lines: Vec<String>| {
         let t = transcript(&d, &lines);
-        pickup_loaded(&t, 1_000, new, &copy).unwrap()
+        pickup_loaded(&t, 1_000, new, &copy, "clear-pickup").unwrap()
     };
     let ok = [vec![prompt(new, 2_000)], read(2_001, new, false).to_vec()].concat();
     assert!(check(ok));
@@ -442,5 +472,125 @@ fn copy_directory_behind_a_symlink_is_a_failed_copy() {
         !d.join("real/state").exists(),
         "nothing created through the link"
     );
+    let _ = fs::remove_dir_all(&d);
+}
+
+/// Compact sends `/compact` with focus instructions, one line (a newline in
+/// `agent.prompt` would submit early), pinned here word for word.
+#[test]
+fn compact_text_carries_focus_instructions_on_one_line() {
+    assert_eq!(
+        COMPACT_TEXT,
+        "/compact Keep: decisions made and why; files touched, with paths; \
+         current task state and the next step; open errors and blockers; \
+         commands that worked. Drop: exploration dead ends and tool output bodies."
+    );
+    assert!(!COMPACT_TEXT.chars().any(|c| c.is_control()));
+    // The evidence still recognises the command when it carries arguments.
+    let sent = now_ms();
+    let args = COMPACT_TEXT.strip_prefix("/compact ").unwrap();
+    let cmd = format!("<command-name>/compact</command-name>\n<command-args>{args}</command-args>");
+    assert_eq!(
+        compact(
+            &[
+                boundary(sent + 20, SID, "manual"),
+                user(sent + 5, SID, &cmd)
+            ],
+            sent
+        ),
+        Some(Evidence::Compacted {
+            boundary_ms: sent + 20
+        })
+    );
+}
+
+#[test]
+fn handoff_skill_is_the_installed_one_clear_pickup_first() {
+    let home = tmp();
+    let skill = |name: &str| {
+        let d = home.join(".claude/skills").join(name);
+        fs::create_dir_all(&d).unwrap();
+        fs::write(d.join("SKILL.md"), "---\nname: x\n---\n").unwrap();
+    };
+    // Neither installed: the first name, so the session itself reports the miss.
+    assert_eq!(handoff_skill(&home), "clear-pickup");
+    skill("handoff");
+    let env = Env::with_state_home(home.clone(), None);
+    assert_eq!(env.skill, "handoff");
+    assert_eq!(env.handoff_text(), "/handoff handoff");
+    assert_eq!(env.pickup_text(), "/handoff pickup");
+    skill("clear-pickup");
+    assert_eq!(handoff_skill(&home), "clear-pickup");
+    // A directory without SKILL.md is not a skill.
+    let bare = tmp();
+    fs::create_dir_all(bare.join(".claude/skills/clear-pickup")).unwrap();
+    assert_eq!(handoff_skill(&bare), "clear-pickup");
+    fs::create_dir_all(bare.join(".claude/skills/handoff")).unwrap();
+    fs::write(bare.join(".claude/skills/handoff/SKILL.md"), "x").unwrap();
+    assert_eq!(handoff_skill(&bare), "handoff");
+}
+
+#[test]
+fn pickup_loaded_follows_the_skill_the_prompt_was_sent_with() {
+    let d = tmp();
+    let copy = d.join("handoffs/s-copy.md");
+    let new = "22222222-2222-4333-8444-555555555555";
+    let lines = vec![
+        user(
+            2_000,
+            new,
+            &format!(
+                "<command-name>/handoff</command-name>\n<command-args>pickup {}</command-args>",
+                copy.display()
+            ),
+        ),
+        serde_json::json!({"type":"assistant","sessionId":new,"timestamp":iso(2_001),"message":{"content":[
+            {"type":"tool_use","id":"toolu_r","name":"Read","input":{"file_path":copy}}]}})
+        .to_string(),
+        serde_json::json!({"type":"user","sessionId":new,"timestamp":iso(2_002),"message":{"content":[
+            {"type":"tool_result","tool_use_id":"toolu_r","is_error":false,"content":"x"}]},
+            "toolUseResult":{"type":"text","file":{"filePath":copy}}})
+        .to_string(),
+    ];
+    let t = transcript(&d, &lines);
+    assert!(pickup_loaded(&t, 1_000, new, &copy, "handoff").unwrap());
+    assert!(!pickup_loaded(&t, 1_000, new, &copy, "clear-pickup").unwrap());
+}
+
+#[test]
+fn pickup_loaded_rejects_another_command_whose_args_carry_the_copy() {
+    let d = tmp();
+    let copy = d.join("handoffs/s-copy.md");
+    let new = "22222222-2222-4333-8444-555555555555";
+    let read = [
+        serde_json::json!({"type":"assistant","sessionId":new,"timestamp":iso(2_001),"message":{"content":[
+            {"type":"tool_use","id":"toolu_r","name":"Read","input":{"file_path":copy}}]}})
+        .to_string(),
+        serde_json::json!({"type":"user","sessionId":new,"timestamp":iso(2_002),"message":{"content":[
+            {"type":"tool_result","tool_use_id":"toolu_r","is_error":false,"content":"x"}]},
+            "toolUseResult":{"type":"text","file":{"filePath":copy}}})
+        .to_string(),
+    ];
+    let check = |prompt: String, skill: &str| {
+        let lines = [vec![user(2_000, new, &prompt)], read.to_vec()].concat();
+        pickup_loaded(&transcript(&d, &lines), 1_000, new, &copy, skill).unwrap()
+    };
+    let args = format!("pickup {}", copy.display());
+    // The copy path contains "/handoff" (its directory is `handoffs`), so a
+    // substring test on the command name would accept any command.
+    assert!(!check(
+        format!("<command-name>/other</command-name>\n<command-args>{args}</command-args>"),
+        "handoff"
+    ));
+    assert!(!check(
+        format!("<command-name>/handoffs</command-name>\n<command-args>{args}</command-args>"),
+        "handoff"
+    ));
+    assert!(check(
+        format!("<command-name>/handoff</command-name>\n<command-args>{args}</command-args>"),
+        "handoff"
+    ));
+    assert!(check(format!("/handoff {args}"), "handoff"));
+    assert!(!check(format!("/other {args}"), "handoff"));
     let _ = fs::remove_dir_all(&d);
 }

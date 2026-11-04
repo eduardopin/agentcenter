@@ -102,6 +102,34 @@ mod imp {
         sub_tooltip: RefCell<String>,
         #[property(get, set)]
         a11y_label: RefCell<String>,
+        /// Why the cockpit asks for the action, short: `ctx 92 %`.
+        #[property(get, set)]
+        reason: RefCell<String>,
+        /// Weighted tokens of the last 30 minutes; -1 unknown. Set by the
+        /// list from the spend tracker, not by `apply`.
+        #[property(get, set, default = -1)]
+        spend: Cell<i64>,
+        /// Weighted tokens since start; -1 unknown.
+        #[property(get, set, default = -1)]
+        since: Cell<i64>,
+        /// Kernel start time with the pid, the spend tracker's key; -1 none.
+        #[property(get, set, default = -1)]
+        starttime: Cell<i64>,
+        /// The session's part of the 30-minute spend, 0..=1; -1 unknown.
+        /// Set by the list from the spend tracker, not by `apply`.
+        #[property(get, set, default = -1.0)]
+        share: Cell<f64>,
+        /// Weighted tokens per minute over the window; -1 unknown.
+        #[property(get, set, default = -1.0)]
+        per_min: Cell<f64>,
+        /// Tokens per minute of the last 30 minutes, comma separated, oldest
+        /// first; empty when there is no series. Set by the list from the
+        /// spend tracker, not by `apply`.
+        #[property(get, set)]
+        spark: RefCell<String>,
+        /// Position in the list as sorted, 1-based; 0 before the first sort.
+        #[property(get, set)]
+        rank: Cell<u32>,
     }
 
     #[glib::object_subclass]
@@ -120,7 +148,7 @@ glib::wrapper! {
 
 /// Propriedades do objeto, na ordem dos bits de [`Changed`] e das chamadas
 /// de `sync!` em [`SessionObject::apply`] (conferido em build de debug).
-pub const PROPS: [&str; 44] = [
+pub const PROPS: [&str; 45] = [
     "pid",
     "agent",
     "name",
@@ -165,6 +193,7 @@ pub const PROPS: [&str; 44] = [
     "sub-text",
     "sub-tooltip",
     "a11y-label",
+    "reason",
 ];
 
 /// Conjunto de propriedades que mudaram num `apply`, um bit por [`PROPS`].
@@ -211,6 +240,12 @@ impl std::ops::BitOrAssign for Changed {
 impl SessionObject {
     pub fn new(row: &Row) -> Self {
         let obj: Self = glib::Object::new();
+        // The cells start at 0; these three mean "unknown" at -1.
+        obj.set_spend(-1);
+        obj.set_since(-1);
+        obj.set_starttime(-1);
+        obj.set_share(-1.0);
+        obj.set_per_min(-1.0);
         obj.apply(row);
         obj
     }
@@ -281,6 +316,7 @@ impl SessionObject {
         sync!(sub_text, set_sub_text, row.sub_text.as_str());
         sync!(sub_tooltip, set_sub_tooltip, row.sub_tooltip.as_str());
         sync!(a11y_label, set_a11y_label, row.a11y_label.as_str());
+        sync!(reason, set_reason, row.reason.as_str());
         debug_assert_eq!(i, PROPS.len());
         changed
     }

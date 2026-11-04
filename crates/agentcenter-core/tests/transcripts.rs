@@ -33,7 +33,7 @@ use agentcenter_core::overlay::transcript::{Format, READ_BUDGET, Roots, Transcri
 use agentcenter_core::overlay::{self, HerdrOverlay, Overlay, OverlayStatus, SessionOverlay};
 use agentcenter_core::session::Session;
 use agentcenter_core::summary::session_state;
-use agentcenter_core::{Registry, Sampler, SessionState, Snapshot, Summary};
+use agentcenter_core::{Registry, Sampler, SamplerConfig, SessionState, Snapshot, Summary};
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -166,6 +166,10 @@ impl Overlay for Shared {
 
     fn enrich(&self, session: &Session, overlay: &mut SessionOverlay) {
         self.0.enrich(session, overlay);
+    }
+
+    fn begin_tick(&self) {
+        self.0.begin_tick();
     }
 }
 
@@ -642,72 +646,44 @@ fn transcript_appended_tool_call_opens_then_closes_reading_only_new_bytes() {
 }
 
 #[test]
-fn transcript_read_budget_caps_each_tick_and_resumes_mid_line() {
+fn transcript_read_budget_caps_growth_after_the_first_reading_and_resumes_mid_line() {
     const BUDGET: u64 = 200;
     let t = TempDir::new("ac-transcript-budget").unwrap();
     let Writable {
         fp, file, ov, tr, ..
     } = writable_with(&t, |tr| tr.with_read_budget(BUDGET));
-    let text = fs::read_to_string(&file).unwrap();
-    let size = text.len() as u64;
-    assert!(
-        text.lines().any(|l| l.len() as u64 > 2 * BUDGET),
-        "alguma linha atravessa mais de um tick"
-    );
-    // Bytes da varredura incremental: o total menos o fim lido de tras para
-    // frente (que tem teto proprio, por arquivo).
-    let scanned = |tr: &Transcripts| tr.bytes_read() - tr.tail_bytes_read();
+    let size = fs::metadata(&file).unwrap().len();
+    assert!(size > 2 * BUDGET, "o arquivo passa do teto do tick");
+    // A primeira leitura nao tem teto: um tick, numeros completos, fim nao lido.
+    let snap = tick(&fp, &ov);
+    assert_eq!(numbers(&by_pid(&snap, 100)), want(Format::Claude));
+    assert_eq!(tr.bytes_read(), size, "primeira leitura: o arquivo todo");
+    assert_eq!(tr.tail_bytes_read(), 0, "lida inteira: sem leitura do fim");
+    // Uma linha maior que dois tetos: o acrescimo e lido sob o teto, no meio
+    // de uma linha, e os numeros ja publicados ficam ate ela completar.
+    let big = assistant("req_04", 500_000).replace(CANARY, &CANARY.repeat(30));
+    assert!(big.len() as u64 > 2 * BUDGET);
+    append(&file, &big);
     let mut ticks = 0;
-    let mut before = 0;
-    let mut tail = None;
+    let mut before = tr.bytes_read();
     loop {
         let snap = tick(&fp, &ov);
         ticks += 1;
-        let read = scanned(&tr) - before;
-        before = scanned(&tr);
+        let read = tr.bytes_read() - before;
+        before = tr.bytes_read();
         assert!(read <= BUDGET, "tick {ticks}: {read} bytes");
-        // O fim e lido uma vez so: o arquivo nao cresceu.
-        let t = *tail.get_or_insert(tr.tail_bytes_read());
-        assert_eq!(tr.tail_bytes_read(), t, "tick {ticks}: fim relido");
-        if before < size {
+        let o = by_pid(&snap, 100);
+        if before < size + big.len() as u64 {
             assert_eq!(read, BUDGET, "tick {ticks}: teto inteiro enquanto falta");
-            let o = by_pid(&snap, 100);
-            assert_eq!(
-                (o.tokens_in, o.tokens_out),
-                (None, None),
-                "tick {ticks}: leitura incompleta nao publica acumulados"
-            );
-            assert_eq!(
-                (o.context_pct, o.model.as_deref()),
-                (Some(12.2), Some("claude-opus-5-5")),
-                "tick {ticks}: contexto e modelo vem do fim"
-            );
+            assert_eq!(numbers(&o), want(Format::Claude), "tick {ticks}");
         } else {
-            assert_eq!(numbers(&by_pid(&snap, 100)), want(Format::Claude));
+            assert_eq!(o.context_pct, Some(50.0));
             break;
         }
         assert!(ticks < 1000);
     }
-    assert_eq!(before, size, "nenhum byte lido duas vezes");
-    assert_eq!(ticks, size.div_ceil(BUDGET));
-    // Depois da primeira leitura completa, o acrescimo tambem respeita o teto
-    // e os numeros ja publicados ficam ate a linha nova completar.
-    let line = assistant("req_04", 500_000);
-    append(&file, &line);
-    for _ in 1..(line.len() as u64).div_ceil(BUDGET) {
-        let snap = tick(&fp, &ov);
-        assert_eq!(by_pid(&snap, 100).context_pct, Some(12.2));
-    }
-    let snap = tick(&fp, &ov);
-    assert_eq!(by_pid(&snap, 100).context_pct, Some(50.0));
-    assert_eq!(scanned(&tr), size + line.len() as u64);
-    let t = tail.unwrap();
-    assert!(t > 0 && t <= size, "fim lido: {t} de {size}");
-    assert_eq!(
-        tr.tail_bytes_read(),
-        t,
-        "depois de pronto, nada de tras para frente"
-    );
+    assert_eq!(ticks, (big.len() as u64).div_ceil(BUDGET));
+    assert_eq!(tr.tail_bytes_read(), 0, "nada de tras para frente");
 }
 
 /// Copia `src` em `dst` com linhas sem uso (e com o `CANARY`) logo depois da
@@ -729,49 +705,72 @@ fn padded(src: &Path, dst: &Path, min: u64) {
 }
 
 #[test]
-fn transcript_bigger_than_read_budget_shows_context_on_first_refresh() {
+fn transcript_bigger_than_read_budget_is_read_whole_on_first_refresh_then_capped() {
     let t = TempDir::new("ac-transcript-tail").unwrap();
     let data = t.path().join("data");
     let min = READ_BUDGET + READ_BUDGET / 2;
+    let mut total = 0;
     for file in [claude_file, codex_file, pi_file] {
         padded(&file(&fixtures()), &file(&data), min);
-        assert!(fs::metadata(file(&data)).unwrap().len() > READ_BUDGET);
+        let len = fs::metadata(file(&data)).unwrap().len();
+        assert!(len > READ_BUDGET);
+        total += len;
     }
     let (fp, sessions) = world(&t, &data);
     let tr = Transcripts::new(roots(&data), fp.proc_root()).with_refresh(Duration::ZERO);
     let (ov, tr) = stack(&fp, sessions, tr);
-    let early = |f: Format| {
-        let (_, _, c, m) = expected(f);
-        (None, None, Some(c), Some(m))
-    };
-    // Primeiro tick: o claude gasta o teto do tick e o codex nao le nada da
-    // varredura, mas os dois ja tem modelo e contexto %; o pi so casa no tick
-    // seguinte (desempate).
+    // Primeiro tick: claude e codex lidos inteiros, apesar do teto, com os
+    // acumulados; o pi so casa no tick seguinte (desempate).
     let snap = tick(&fp, &ov);
-    assert_eq!(numbers(&by_pid(&snap, 100)), early(Format::Claude));
-    assert_eq!(numbers(&by_pid(&snap, 120)), early(Format::Codex));
+    assert_eq!(numbers(&by_pid(&snap, 100)), want(Format::Claude));
+    assert_eq!(numbers(&by_pid(&snap, 120)), want(Format::Codex));
     assert_eq!(by_pid(&snap, 130), SessionOverlay::default());
     let snap = tick(&fp, &ov);
-    assert_eq!(numbers(&by_pid(&snap, 130)), early(Format::Pi));
+    assert_eq!(numbers(&by_pid(&snap, 130)), want(Format::Pi));
     assert!(!serde_json::to_string(&snap).unwrap().contains(CANARY));
-    // A varredura termina e os acumulados aparecem, com os mesmos numeros.
-    let mut ticks = 2;
-    let snap = loop {
+    // Os cabecalhos do pi e do codex (casamento por cwd) tambem contam.
+    let base = scanned(&tr);
+    assert!(
+        (total..=total + (64 << 10)).contains(&base),
+        "{base} de {total}"
+    );
+    assert_eq!(
+        tr.tail_bytes_read(),
+        0,
+        "lidos inteiros: sem leitura do fim"
+    );
+    // Depois da primeira leitura, o acrescimo (mais de um teto) e lido aos
+    // poucos e os numeros publicados ficam ate a linha final completar.
+    let file = claude_file(&data);
+    let pad = format!(
+        "{{\"type\":\"padding\",\"text\":\"{}\"}}\n",
+        CANARY.repeat(400)
+    );
+    let mut grown = 0;
+    while grown <= READ_BUDGET + READ_BUDGET / 2 {
+        append(&file, &pad);
+        grown += pad.len() as u64;
+    }
+    let last = assistant("req_04", 500_000);
+    append(&file, &last);
+    grown += last.len() as u64;
+    let mut before = scanned(&tr);
+    let mut ticks = 0;
+    loop {
         let snap = tick(&fp, &ov);
         ticks += 1;
-        if by_pid(&snap, 130).tokens_in.is_some() {
-            break snap;
+        let read = scanned(&tr) - before;
+        before += read;
+        assert!(read <= READ_BUDGET, "tick {ticks}: {read} bytes");
+        if before < base + grown {
+            assert_eq!(numbers(&by_pid(&snap, 100)), want(Format::Claude));
+        } else {
+            assert_eq!(by_pid(&snap, 100).context_pct, Some(50.0));
+            break;
         }
-        assert!(ticks < 20, "varredura nao terminou");
-    };
-    for (pid, f) in [
-        (100, Format::Claude),
-        (120, Format::Codex),
-        (130, Format::Pi),
-    ] {
-        assert_eq!(numbers(&by_pid(&snap, pid)), want(f), "{f:?}");
+        assert!(ticks < 20, "acrescimo nao terminou");
     }
-    assert!(tr.tail_bytes_read() > 0);
+    assert!(ticks >= 2, "mais de um teto: {ticks} ticks");
 }
 
 #[test]
@@ -1278,5 +1277,252 @@ fn transcript_loop_key_is_cut_at_400_characters_not_bytes() {
             max_streak: 2,
             repeated_max: 2
         }
+    );
+}
+
+// Primeira leitura sem teto (card e84b26c9): com dezenas de sessoes vivas, o
+// teto por tick fazia os tokens e o cockpit chegarem uma sessao a cada ~7 s.
+// Aqui a primeira leitura de cada transcript ignora `READ_BUDGET`; depois
+// dela, o teto por tick volta.
+
+/// Id de sessao valido e distinto para o claude `pid`.
+fn crowd_sid(pid: u32) -> String {
+    format!("0b6f4a52-9c1e-4d7a-8f3b-{pid:012x}")
+}
+
+fn crowd_file(data: &Path, pid: u32) -> PathBuf {
+    data.join("claude/-home-dev-app")
+        .join(format!("{}.jsonl", crowd_sid(pid)))
+}
+
+/// Liga o claude `pid` ao seu transcript, `min` bytes ou mais; devolve o tamanho.
+fn crowd_session(fp: &FakeProc, sessions: &Path, data: &Path, pid: u32, min: u64) -> u64 {
+    let mut p = FakeProcess::new(pid, 1, "claude");
+    p.starttime = START;
+    p.cwd = Some(CWD.to_string());
+    fp.add(&p).unwrap();
+    fs::write(
+        sessions.join(format!("{pid}.json")),
+        format!(
+            "{{\"pid\":{pid},\"sessionId\":\"{}\",\"procStart\":\"{START}\",\"status\":\"busy\"}}",
+            crowd_sid(pid)
+        ),
+    )
+    .unwrap();
+    let file = crowd_file(data, pid);
+    padded(&claude_file(&fixtures()), &file, min);
+    fs::metadata(file).unwrap().len()
+}
+
+/// `n` claudes (pids 200..) com transcript de `min` bytes cada, sem o teto de
+/// leitura trocado: o padrao, `READ_BUDGET`.
+fn crowd(t: &TempDir, n: u32, min: u64) -> (FakeProc, PathBuf, PathBuf, u64) {
+    let data = t.path().join("data");
+    let fp = FakeProc::create(t.path().join("proc")).unwrap();
+    let mut init = FakeProcess::new(1, 0, "systemd");
+    init.uid = 0;
+    fp.add(&init).unwrap();
+    let sessions = t.path().join("sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let total = (200..200 + n)
+        .map(|pid| crowd_session(&fp, &sessions, &data, pid, min))
+        .sum();
+    (fp, sessions, data, total)
+}
+
+fn spend_and_cockpit(snap: &Snapshot, pid: u32) -> (bool, bool, bool) {
+    let o = by_pid(snap, pid);
+    (
+        o.tokens_in.is_some(),
+        o.spend_30m.is_some(),
+        o.cockpit.is_some(),
+    )
+}
+
+/// Bytes da varredura incremental, sem o fim lido de tras para frente.
+fn scanned(tr: &Transcripts) -> u64 {
+    tr.bytes_read() - tr.tail_bytes_read()
+}
+
+#[test]
+fn transcript_first_tick_reads_every_session_past_the_budget() {
+    let t = TempDir::new("ac-transcript-warm-first").unwrap();
+    let (fp, sessions, data, total) = crowd(&t, 6, 400 << 10);
+    assert!(total > 2 * READ_BUDGET, "juntos passam do teto: {total}");
+    let tr = Transcripts::new(roots(&data), fp.proc_root()).with_refresh(Duration::ZERO);
+    let (ov, tr) = stack(&fp, sessions, tr);
+    // O claude casa pelo sessionId no primeiro tick: um tick basta, o mesmo
+    // que o `snapshot` (READ_ALL) precisa para eles.
+    let snap = tick(&fp, &ov);
+    for pid in 200..206 {
+        assert_eq!(
+            spend_and_cockpit(&snap, pid),
+            (true, true, true),
+            "sessao {pid}: tokens, spend_30m e cockpit no primeiro tick"
+        );
+    }
+    assert_eq!(scanned(&tr), total, "cada transcript lido inteiro, uma vez");
+}
+
+#[test]
+fn transcript_steady_state_ticks_keep_the_read_budget_after_the_first_pass() {
+    let t = TempDir::new("ac-transcript-warm-steady").unwrap();
+    let (fp, sessions, data, total) = crowd(&t, 6, 400 << 10);
+    let tr = Transcripts::new(roots(&data), fp.proc_root()).with_refresh(Duration::ZERO);
+    let (ov, tr) = stack(&fp, sessions, tr);
+    let snap = tick(&fp, &ov);
+    assert!(
+        (200..206).all(|pid| spend_and_cockpit(&snap, pid) == (true, true, true)),
+        "primeira passada completa"
+    );
+    assert_eq!(scanned(&tr), total);
+    // Cada transcript cresce 400 KiB (linhas completas): 2,4 MiB para ler, mais
+    // que o teto de um tick. O acrescimo e lido sob o teto.
+    let pad = format!(
+        "{{\"type\":\"padding\",\"text\":\"{}\"}}\n",
+        "x".repeat(4000)
+    );
+    let grown = 6 * ((400 << 10) / pad.len() as u64 * pad.len() as u64);
+    for pid in 200..206 {
+        for _ in 0..(400 << 10) / pad.len() {
+            append(&crowd_file(&data, pid), &pad);
+        }
+    }
+    let mut before = scanned(&tr);
+    let mut ticks = 0;
+    while scanned(&tr) < total + grown {
+        tick(&fp, &ov);
+        ticks += 1;
+        let read = scanned(&tr) - before;
+        before = scanned(&tr);
+        assert!(read <= READ_BUDGET, "tick {ticks}: {read} bytes");
+        assert!(ticks < 100);
+    }
+    assert!(ticks >= 3, "2,4 MiB sob 1 MiB por tick: {ticks} ticks");
+}
+
+#[test]
+fn transcript_session_appearing_later_gets_its_first_reading_unbudgeted() {
+    let t = TempDir::new("ac-transcript-warm-late");
+    let t = t.unwrap();
+    // Os antigos sao os pids 200, 300 e 301; o novo e o 250, entre o primeiro
+    // e os outros dois na ordem do tick.
+    let (fp, sessions, data, first) = crowd(&t, 1, 400 << 10);
+    let total = first
+        + [300, 301]
+            .map(|pid| crowd_session(&fp, &sessions, &data, pid, 400 << 10))
+            .iter()
+            .sum::<u64>();
+    let tr = Transcripts::new(roots(&data), fp.proc_root()).with_refresh(Duration::ZERO);
+    let (ov, tr) = stack(&fp, sessions.clone(), tr);
+    tick(&fp, &ov);
+    assert_eq!(scanned(&tr), total);
+    // Uma sessao nova, com transcript maior que o teto do tick, e as antigas
+    // crescendo ao mesmo tempo: a leitura sem teto da nova gasta o teto do tick
+    // antes de as antigas (300 e 301) lerem o acrescimo.
+    let late = crowd_session(&fp, &sessions, &data, 250, READ_BUDGET + READ_BUDGET / 2);
+    assert!(late > READ_BUDGET);
+    let pad = format!(
+        "{{\"type\":\"padding\",\"text\":\"{}\"}}\n",
+        "x".repeat(4000)
+    );
+    for pid in [300, 301] {
+        for _ in 0..(400 << 10) / pad.len() {
+            append(&crowd_file(&data, pid), &pad);
+        }
+    }
+    let before = scanned(&tr);
+    let snap = tick(&fp, &ov);
+    assert_eq!(
+        spend_and_cockpit(&snap, 250),
+        (true, true, true),
+        "a sessao nova tem a primeira leitura inteira no tick em que aparece"
+    );
+    // A primeira leitura (maior que o teto) gastou o teto do tick: o acrescimo
+    // das sessoes ja lidas espera o tick seguinte.
+    let read = scanned(&tr) - before;
+    assert!(read >= late, "a sessao nova foi lida inteira: {read}");
+    assert_eq!(
+        read - late,
+        0,
+        "o acrescimo das antigas nao le nada neste tick"
+    );
+    // No seguinte, o teto volta e vale.
+    let before = scanned(&tr);
+    tick(&fp, &ov);
+    let read = scanned(&tr) - before;
+    assert!(read > 0 && read <= READ_BUDGET, "tick seguinte: {read}");
+}
+
+#[test]
+fn transcript_budgeted_first_reading_resumes_mid_line_when_first_read_all_is_off() {
+    const BUDGET: u64 = 200;
+    let t = TempDir::new("ac-transcript-strict").unwrap();
+    let Writable {
+        fp, file, ov, tr, ..
+    } = writable(&t);
+    // O gancho do teste do cockpit: o teto vale ate para a primeira leitura.
+    tr.configure(&SamplerConfig {
+        transcript_read_budget: BUDGET,
+        transcript_first_read_all: false,
+        ..SamplerConfig::default()
+    });
+    let text = fs::read_to_string(&file).unwrap();
+    let size = text.len() as u64;
+    assert!(
+        text.lines().any(|l| l.len() as u64 > 2 * BUDGET),
+        "alguma linha atravessa mais de um tick"
+    );
+    let mut ticks = 0;
+    let mut before = 0;
+    loop {
+        let snap = tick(&fp, &ov);
+        ticks += 1;
+        let read = scanned(&tr) - before;
+        before = scanned(&tr);
+        assert!(read <= BUDGET, "tick {ticks}: {read} bytes");
+        let o = by_pid(&snap, 100);
+        if before < size {
+            assert_eq!(read, BUDGET, "tick {ticks}");
+            assert_eq!((o.tokens_in, o.tokens_out), (None, None), "tick {ticks}");
+        } else {
+            assert_eq!(numbers(&o), want(Format::Claude));
+            break;
+        }
+        assert!(ticks < 1000);
+    }
+    assert_eq!(before, size, "nenhum byte lido duas vezes");
+    assert_eq!(ticks, size.div_ceil(BUDGET));
+}
+
+#[test]
+fn transcript_session_first_in_a_tick_gets_the_whole_budget_after_a_tick_that_spent_it() {
+    let t = TempDir::new("ac-transcript-tick-start").unwrap();
+    // O pid 200 tem mais que o teto: le o teto no primeiro tick e o esgota.
+    let (fp, sessions, data, big) = crowd(&t, 1, 3 * READ_BUDGET);
+    let tr = Transcripts::new(roots(&data), fp.proc_root()).with_refresh(Duration::ZERO);
+    // Teto valendo ate para a primeira leitura, como no comando do cockpit.
+    tr.configure(&SamplerConfig {
+        transcript_first_read_all: false,
+        ..SamplerConfig::default()
+    });
+    let (ov, tr) = stack(&fp, sessions.clone(), tr);
+    tick(&fp, &ov);
+    assert_eq!(scanned(&tr), READ_BUDGET, "o primeiro tick gasta o teto");
+    // Uma sessao nova, menor que o teto, que vem antes do 200 na ordem do tick:
+    // ela abre o tick seguinte e tem o teto inteiro, nao a sobra (zero) do anterior.
+    let small = crowd_session(&fp, &sessions, &data, 150, 0);
+    assert!(small < READ_BUDGET && big > 2 * READ_BUDGET);
+    let before = scanned(&tr);
+    let snap = tick(&fp, &ov);
+    assert_eq!(
+        spend_and_cockpit(&snap, 150),
+        (true, true, true),
+        "a primeira sessao do tick le com o teto renovado"
+    );
+    assert_eq!(
+        scanned(&tr) - before,
+        READ_BUDGET,
+        "o tick inteiro le o teto, nem mais nem menos"
     );
 }
