@@ -12,10 +12,9 @@ attacker gains. A log or a proof of concept helps. AgentCenter runs on your
 machine and reads the process table and agent transcripts, so say whether the
 issue exposes that data, runs code, or sends signals to processes.
 
-The project is maintained by one person in spare time. Expect an
-acknowledgement within a week, not a fix timetable. When a report is
-confirmed, the fix and the advisory are published together, and the reporter
-is credited unless they ask not to be.
+When a report is confirmed, the fix and the advisory are published together,
+and the reporter is credited unless they ask not to be. The project makes no
+promise of a response time or a fix date.
 
 ## Supported versions
 

@@ -1,3 +1,4 @@
+# Weekly, so version bumps arrive as a small batch the CI gate can judge.
 version: 2
 updates:
   - package-ecosystem: cargo
