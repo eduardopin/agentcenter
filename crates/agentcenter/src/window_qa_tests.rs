@@ -1994,3 +1994,34 @@ fn at_360_the_memory_strip_is_visible() {
         settle();
     });
 }
+
+/// The strips' height follows the chips: a snapshot that brings three chips
+/// and an alert line after the window settled on a lighter one must still
+/// leave the memory strip whole (the capture's tipico-40 lost it).
+#[test]
+fn at_360_the_memory_strip_stays_visible_when_a_busier_snapshot_arrives() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let calm: Snapshot =
+            serde_json::from_str(include_str!("../tests/fixtures/snapshots/vazio.json")).unwrap();
+        let window = open("io.agentcenter.Narrow360BusyQA", 360, 640, &calm);
+        settle_paned(&window);
+        window.apply(Ok(Frame {
+            snapshot: Arc::new(tipico()),
+            history: None,
+        }));
+        settle_paned(&window);
+        let root = window.window.clone();
+        let region = bounds_in(&content_stack(&window), &root);
+        let bars = mapped_with_class(&window, "memory-bar");
+        assert_eq!(bars.len(), 1, "the memory strip is mapped");
+        let b = bounds_in(&bars[0], &root);
+        assert!(b.height() > 0.0, "the memory strip has a height");
+        assert!(
+            inside(&b, &region),
+            "memory strip {b:?} clipped by the maps region {region:?}"
+        );
+        window.window.close();
+        settle();
+    });
+}
