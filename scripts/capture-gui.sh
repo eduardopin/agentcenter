@@ -87,6 +87,7 @@ for fx in "${fixtures[@]}"; do
         for theme in $THEMES; do
             png=$OUT/$fx${DETAIL:+-detail}${PAGE:+-$PAGE}-$size-$theme.png
             rm -f "$png"
+            settled= detail_x=
             # 200 ms por tick: os 3 frames de dados da captura saem em ~0,5 s.
             err=$(AGENTCENTER_SNAPSHOT_JSON=$json AGENTCENTER_SNAPSHOT_INTERVAL_MS=$interval \
                 ADW_DEBUG_COLOR_SCHEME=prefer-$theme AGENTCENTER_NON_UNIQUE=1 \
@@ -127,7 +128,7 @@ for fx in "${fixtures[@]}"; do
                 echo "FAIL $png: size $got${err:+, stderr: $err}" >&2
                 failed=$((failed + 1))
             else
-                echo "ok   $png band_px=${band:-?}${PAGE:+ reclaim_pids=${pids:-none}}${back:+ back_focus=$back}${forced:+ forced=$forced}"
+                echo "ok   $png band_px=${band:-?}${settled:+ detail_settled=$settled detail_x=$detail_x}${PAGE:+ reclaim_pids=${pids:-none}}${back:+ back_focus=$back}${forced:+ forced=$forced}"
                 n=$((n + 1))
             fi
         done

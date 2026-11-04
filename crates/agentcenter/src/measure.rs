@@ -89,13 +89,39 @@ struct State {
 /// blanked screen; past the cap the capture goes ahead and `detail_px=` or the
 /// overflow check give the verdict, instead of the script's 30 s timeout.
 const DETAIL_SETTLE_TRIES: u32 = 600;
+/// Test-only, off by default: overrides [`DETAIL_SETTLE_TRIES`]. `0` turns the
+/// wait off, to show that capture-gui.sh catches a capture taken mid-slide.
+const SETTLE_MAX_ENV: &str = "AGENTCENTER_DETAIL_SETTLE_MAX";
+
+/// Test-only, off by default: the first N checks count as mid-slide whatever
+/// the page position, so a script run exercises the wait (`detail_settled=N`)
+/// even when the push never animates.
+const SETTLE_HOLD_ENV: &str = "AGENTCENTER_DETAIL_SETTLE_HOLD";
+
+fn settle_hold() -> u32 {
+    std::env::var(SETTLE_HOLD_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(0)
+}
+
+fn settle_cap() -> u32 {
+    std::env::var(SETTLE_MAX_ENV)
+        .ok()
+        .and_then(|v| v.trim().parse().ok())
+        .unwrap_or(DETAIL_SETTLE_TRIES)
+}
 
 /// The detail page is at rest: its left edge is flush with the window (the
 /// header bar overhangs by [`OVERHANG_PX`]). Mid push the page spans x 67..907
 /// in an 840 window (bug 08da96cb). `None`: not drawn yet, wait for it.
 /// After `tries` paints without settling, give up waiting.
 fn detail_settled(left_edge: Option<f32>, tries: u32) -> bool {
-    tries >= DETAIL_SETTLE_TRIES || left_edge.is_some_and(|x| x.abs() <= OVERHANG_PX)
+    detail_settled_within(left_edge, tries, DETAIL_SETTLE_TRIES)
+}
+
+fn detail_settled_within(left_edge: Option<f32>, tries: u32, cap: u32) -> bool {
+    tries >= cap || left_edge.is_some_and(|x| x.abs() <= OVERHANG_PX)
 }
 
 /// Left edge of the detail view in window coordinates, if it is mapped.
@@ -222,7 +248,9 @@ fn on_paint(s: &Rc<State>, app: &adw::Application, window: &gtk::Window) {
         // after-paint asks again; no timer, no sleep.
         if detail_to_settle() {
             let tries = s.settle_tries.get();
-            if !detail_settled(detail_left_edge(window), tries) {
+            if tries < settle_hold()
+                || !detail_settled_within(detail_left_edge(window), tries, settle_cap())
+            {
                 s.settle_tries.set(tries + 1);
                 return;
             }
@@ -234,6 +262,9 @@ fn on_paint(s: &Rc<State>, app: &adw::Application, window: &gtk::Window) {
         // dela reentraria no frame clock. Prioridade alta: roda antes do
         // proximo tick do feed, que pediria nova alocacao.
         glib::idle_add_local_full(glib::Priority::HIGH, move || {
+            // Read in the same main-loop turn as the snapshot below, so it is
+            // the page position the PNG shows, not one read after it.
+            let x_at_capture = detail_left_edge(&window);
             let problems = overflow(&window, asked);
             match save_png(&window, &path) {
                 Err(e) if e == EMPTY && s.empty_tries.get() < EMPTY_RETRIES => {
@@ -255,7 +286,7 @@ fn on_paint(s: &Rc<State>, app: &adw::Application, window: &gtk::Window) {
                     if detail_requested() {
                         if detail_to_settle() {
                             println!("detail_settled={}", s.settle_tries.get());
-                            if let Some(x) = detail_left_edge(&window) {
+                            if let Some(x) = x_at_capture {
                                 println!("detail_x={x:.1}");
                             }
                         }
@@ -424,6 +455,11 @@ mod tests {
         // At rest: flush with the window, within the header-bar overhang.
         assert!(detail_settled(Some(0.0), 0));
         assert!(detail_settled(Some(0.4), 0));
+        // The edge of the overhang is at rest, one step past it is not.
+        assert!(detail_settled(Some(1.5), 0));
+        assert!(detail_settled(Some(-1.5), 0));
+        assert!(!detail_settled(Some(1.51), 0));
+        assert!(!detail_settled(Some(-1.51), 0));
         // Not drawn yet: wait for it, do not capture the strip alone.
         assert!(!detail_settled(None, 0));
     }
@@ -440,14 +476,32 @@ mod tests {
     #[test]
     fn capture_script_waits_on_the_app_signal_not_on_a_sleep() {
         let script = include_str!("../../../scripts/capture-gui.sh");
+        let code: Vec<&str> = script
+            .lines()
+            .map(|l| l.split('#').next().unwrap_or(""))
+            .collect();
+        let words = |l: &str| -> Vec<String> {
+            l.split(|c: char| !c.is_alphanumeric())
+                .map(str::to_owned)
+                .collect()
+        };
         assert!(
-            !script.lines().any(|l| {
-                let code = l.split('#').next().unwrap_or("");
-                code.split(|c: char| !c.is_alphanumeric()).any(|w| w == "sleep")
-            }),
+            !code
+                .iter()
+                .any(|l| words(l).iter().any(|w| w == "sleep" || w == "usleep")),
             "capture-gui.sh must not wait with a fixed sleep"
         );
-        // The app reports `detail_settled=`; the script fails without it.
-        assert!(script.contains("detail_settled"));
+        // The script reads the app's lines (code, not a comment) ...
+        assert!(code.iter().any(|l| l.contains("s/^detail_settled=//p")));
+        assert!(code.iter().any(|l| l.contains("s/^detail_x=//p")));
+        // ... and fails the capture when the wait is absent, capped, or the
+        // page is not at rest.
+        assert!(code.iter().any(|l| {
+            l.contains("-z $settled") && l.contains("-ge 600") && l.contains("at_rest")
+        }));
+        assert!(
+            code.iter()
+                .any(|l| l.contains("the detail transition never settled"))
+        );
     }
 }
