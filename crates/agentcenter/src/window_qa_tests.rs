@@ -1986,7 +1986,19 @@ fn at_360_the_detail_page_does_not_overflow_sideways() {
             settle_until(|| tb.is_mapped() && tb.height() > 100),
             "the detail is drawn"
         );
-        settle();
+        // The push slides the page in; checked mid-slide it lies off the edge.
+        let root = window.window.clone();
+        assert!(
+            settle_until(|| tb.compute_bounds(&root).is_some_and(|b| b.x().abs() < 0.5)),
+            "the detail page came to rest on the window"
+        );
+        // The bin lays the page out a frame after it comes to rest; until then
+        // everything in it is 0 px wide and the walk below sees nothing.
+        let page = descendants(tb.upcast_ref())
+            .into_iter()
+            .find(|w| w.is::<adw::BreakpointBin>())
+            .expect("the detail's breakpoint bin");
+        assert!(settle_until(|| page.width() > 0), "the detail page is laid out");
         let (least, _, _, _) = tb.measure(gtk::Orientation::Horizontal, -1);
         assert!(
             least <= 360,
