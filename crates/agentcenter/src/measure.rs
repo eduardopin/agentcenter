@@ -365,4 +365,40 @@ mod tests {
         // O primeiro tick nao tem taxas e nao entra na janela.
         assert!(RECLAIM_SCREENSHOT_FRAMES as usize > crate::reclaim_page::WINDOW_TICKS + 1);
     }
+
+    #[test]
+    fn detail_capture_waits_while_the_page_slides_in() {
+        // Mid push: the page spans x 67..907 in an 840 window (bug 08da96cb).
+        assert!(!detail_settled(Some(67.0), 0));
+        assert!(!detail_settled(Some(-47.0), 0));
+        assert!(!detail_settled(Some(840.0), 0));
+        // At rest: flush with the window, within the header-bar overhang.
+        assert!(detail_settled(Some(0.0), 0));
+        assert!(detail_settled(Some(0.4), 0));
+        // Not drawn yet: wait for it, do not capture the strip alone.
+        assert!(!detail_settled(None, 0));
+    }
+
+    #[test]
+    fn detail_capture_wait_is_bounded() {
+        // A detail that never settles must still end in a verdict (detail_px=0
+        // or an overflow), not in the script's 30 s timeout.
+        assert!(!detail_settled(Some(67.0), DETAIL_SETTLE_TRIES - 1));
+        assert!(detail_settled(Some(67.0), DETAIL_SETTLE_TRIES));
+        assert!(detail_settled(None, DETAIL_SETTLE_TRIES));
+    }
+
+    #[test]
+    fn capture_script_waits_on_the_app_signal_not_on_a_sleep() {
+        let script = include_str!("../../../scripts/capture-gui.sh");
+        assert!(
+            !script.lines().any(|l| {
+                let code = l.split('#').next().unwrap_or("");
+                code.split(|c: char| !c.is_alphanumeric()).any(|w| w == "sleep")
+            }),
+            "capture-gui.sh must not wait with a fixed sleep"
+        );
+        // The app reports `detail_settled=`; the script fails without it.
+        assert!(script.contains("detail_settled"));
+    }
 }
