@@ -432,14 +432,18 @@ impl Window {
         });
         window.add_breakpoint(bp_narrow);
 
-        // The maps' strips turn on at 560 sp of window height or less.
-        let (mp, last_h) = (map.clone(), Cell::new(0));
-        window.add_tick_callback(move |w, _| {
-            let h = w.height();
-            if last_h.replace(h) != h {
-                mp.set_height_sp(f64::from(h) / text_scale());
-            }
-            gtk::glib::ControlFlow::Continue
+        // The maps' strips turn on at 560 sp of window height or less. The
+        // surface notifies on every resize, so nothing runs while idle. Its
+        // height is read, not the widget's, which settles a frame later.
+        let mp = map.clone();
+        window.connect_realize(move |w| {
+            let Some(surface) = w.surface() else { return };
+            let feed = {
+                let mp = mp.clone();
+                move |s: &gtk::gdk::Surface| mp.set_height_sp(f64::from(s.height()) / text_scale())
+            };
+            feed(&surface);
+            surface.connect_height_notify(feed);
         });
 
         // Any dialog the window shows (confirmations, the delay-accounting
