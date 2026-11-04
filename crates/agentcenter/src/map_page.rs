@@ -711,7 +711,6 @@ pub struct Ui {
     tier: Cell<Tier>,
     shown: Cell<Shown>,
     height_sp: Cell<f64>,
-    was_strips: Cell<bool>,
     last: RefCell<(MapInput, Readout)>,
     /// The Reclaim page's own list for this tick, when the window has one.
     window_reclaim: RefCell<Option<core_reclaim::Reclaim>>,
@@ -955,7 +954,6 @@ impl Ui {
             tier: Cell::new(Tier::Wide),
             shown: Cell::new(Shown::Tokens),
             height_sp: Cell::new(f64::MAX),
-            was_strips: Cell::new(false),
             last: RefCell::default(),
             shared,
         }
@@ -1080,7 +1078,8 @@ impl Ui {
         self.shared.on_open.borrow_mut().push(Rc::new(f));
     }
 
-    /// The maps turned into strips or back (the paned re-clamps).
+    /// The page was rendered: maps turned into strips or back, or new chips and
+    /// lines (the paned re-clamps).
     pub fn connect_layout_changed(&self, f: impl Fn() + 'static) {
         self.shared.on_layout.borrow_mut().push(Rc::new(f));
     }
@@ -1341,11 +1340,11 @@ impl Ui {
         self.bar.widget.set_visible(strips);
         self.note.set_label(&legend_note(input, r));
         self.legend.set_visible(!strips && show_memory && !empty);
-        if self.was_strips.replace(strips) != strips {
-            let callbacks = self.shared.on_layout.borrow().clone();
-            for f in callbacks {
-                f();
-            }
+        // Every render, not only a flip: the chips and lines a snapshot brings
+        // change the height the strips need, and the paned follows it.
+        let callbacks = self.shared.on_layout.borrow().clone();
+        for f in callbacks {
+            f();
         }
     }
 }
