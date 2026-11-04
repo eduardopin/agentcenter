@@ -110,8 +110,11 @@ for fx in "${fixtures[@]}"; do
                 # push animation ends (measure.rs); no fixed sleep here. Absent, or at
                 # the cap (600), the capture may be mid-slide.
                 settled=$(sed -n 's/^detail_settled=//p' "$OUT/.stdout")
-                if [[ -z $settled || $settled -ge 600 ]]; then
-                    err+="${err:+; }agentcenter: overflow: the detail transition never settled (detail_settled=${settled:-none})"
+                # detail_x is the page's left edge at capture: 0 at rest, 67 mid push.
+                detail_x=$(sed -n 's/^detail_x=//p' "$OUT/.stdout")
+                at_rest() { awk -v x="$1" 'BEGIN { exit !(x != "" && x >= -1.5 && x <= 1.5) }'; }
+                if [[ -z $settled || $settled -ge 600 ]] || ! at_rest "$detail_x"; then
+                    err+="${err:+; }agentcenter: overflow: the detail transition never settled (detail_settled=${settled:-none} detail_x=${detail_x:-none})"
                 fi
                 if [[ ${detail_px:-0} -le 0 ]]; then
                     err+="${err:+; }agentcenter: overflow: the detail never showed (detail_px=${detail_px:-none})"

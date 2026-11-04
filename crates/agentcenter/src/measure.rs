@@ -255,6 +255,9 @@ fn on_paint(s: &Rc<State>, app: &adw::Application, window: &gtk::Window) {
                     if detail_requested() {
                         if detail_to_settle() {
                             println!("detail_settled={}", s.settle_tries.get());
+                            if let Some(x) = detail_left_edge(&window) {
+                                println!("detail_x={x:.1}");
+                            }
                         }
                         let px = find_by_class(window.upcast_ref(), "detail-view")
                             .filter(|d| d.is_mapped())
