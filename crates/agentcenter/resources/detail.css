@@ -149,3 +149,12 @@ procbar.mux > hatch {
   margin-left: var(--ac-space-2);
   margin-right: var(--ac-space-2);
 }
+
+/* The page header's Handoff and Compact copies sit beside Back and the window
+ * controls: at 360 px their default 10 px side padding is what keeps the
+ * header wider than the window. */
+.detail-view headerbar button.header-copy {
+  padding-left: var(--ac-space-1);
+  padding-right: var(--ac-space-1);
+  min-width: 0;
+}
