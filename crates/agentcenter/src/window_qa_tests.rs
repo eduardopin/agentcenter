@@ -1974,6 +1974,37 @@ fn at_360_the_waiting_chip_and_both_dropdowns_lie_inside_the_window() {
     });
 }
 
+/// The pushed detail page at 360 px: its least width is what the window asks
+/// for, so a minimum above 360 pushes the whole window past its edge.
+#[test]
+fn at_360_the_detail_page_does_not_overflow_sideways() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open_detail_at_start("io.agentcenter.Narrow360DetailQA", 360);
+        let tb = &window.detail.toolbar;
+        assert!(
+            settle_until(|| tb.is_mapped() && tb.height() > 100),
+            "the detail is drawn"
+        );
+        settle();
+        let (least, _, _, _) = tb.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            least <= 360,
+            "detail page needs {least} px at the least, 360 given"
+        );
+        let content = window.window.content().expect("window content");
+        let (least, _, _, _) = content.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            least <= 360,
+            "content needs {least} px at the least with the detail shown, 360 given"
+        );
+        let problems = crate::measure::overflow(window.window.upcast_ref(), Some(360));
+        assert!(problems.is_empty(), "overflow: {problems:?}");
+        window.window.close();
+        settle();
+    });
+}
+
 #[test]
 fn at_360_the_memory_strip_is_visible() {
     gtk::test_synced(|| {
