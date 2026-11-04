@@ -778,6 +778,54 @@ fn a_short_window_turns_the_maps_into_strips() {
     });
 }
 
+/// Resizes the open window to `height` and settles until the maps show
+/// `want` (tokens, memory), up to ~3.5 s.
+fn resize_until(window: &Window, height: i32, want: (bool, bool)) -> bool {
+    window.window.set_default_size(1280, height);
+    settle_until(|| mapped_tokens_and_memory(window) == want)
+}
+
+#[test]
+fn the_maps_follow_the_window_height_across_the_560_sp_threshold() {
+    gtk::test_synced(|| {
+        let window = open("io.agentcenter.LayoutHeightFollowQA", 1280, 800, &tipico());
+        assert_eq!(mapped_tokens_and_memory(&window), (true, true));
+        assert!(
+            resize_until(&window, 500, (false, false)),
+            "a window 500 px tall turns the maps into strips"
+        );
+        assert!(
+            resize_until(&window, 800, (true, true)),
+            "a window 800 px tall brings the maps back"
+        );
+        window.window.close();
+        settle();
+    });
+}
+
+/// The height reaches the maps from a signal, not from a callback run on
+/// every frame: that callback kept the GPU clock awake while idle (3.35 %
+/// of a core against a 2 % budget).
+#[test]
+fn the_height_check_registers_no_per_frame_tick_callback() {
+    let source = include_str!("window.rs");
+    let lines: Vec<&str> = source.lines().collect();
+    let sets: Vec<usize> = (0..lines.len())
+        .filter(|&i| {
+            lines[i].contains("set_height_sp(") && !lines[i].trim_start().starts_with("//")
+        })
+        .collect();
+    assert!(!sets.is_empty(), "window.rs still feeds the maps a height");
+    for i in sets {
+        let near = &lines[i.saturating_sub(8)..=i];
+        assert!(
+            !near.iter().any(|l| l.contains("add_tick_callback")),
+            "line {}: the height is fed from a per-frame tick callback",
+            i + 1
+        );
+    }
+}
+
 #[test]
 fn chips_verdict_and_reclaim_share_one_row_spanning_both_maps() {
     gtk::test_synced(|| {
