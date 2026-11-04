@@ -1026,6 +1026,9 @@ impl Ui {
         let child = self.bin.child().map_or(0, |c| {
             c.measure(gtk::Orientation::Vertical, width).1
         });
+        // The bin allocates its child no more than the reference layout's
+        // height and clips the rest; ask for what the child needs.
+        self.bin.set_size_request(280, child);
         page + (child - bin).max(0)
     }
 
@@ -1332,6 +1335,9 @@ impl Ui {
         // a row the memory strip needs more.
         let idle_tokens = strips && token_input.sessions.is_empty();
         self.tokens_col.set_visible(show_tokens && !idle_tokens);
+        if !strips {
+            self.bin.set_size_request(280, 1); // `needed_height` raised it
+        }
         self.memory_col.set_visible(show_memory);
         self.token_map.set_visible(!strips);
         self.token_legend.set_visible(!strips);
