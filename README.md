@@ -1,6 +1,49 @@
-# AgentCenter
+<p align="center">
+  <img src="data/icons/hicolor/scalable/apps/io.github.eduardopin.AgentCenter.svg" width="96" height="96" alt="AgentCenter icon">
+</p>
 
-A resource monitor for AI coding sessions — Mission Center for your agents.
+<h1 align="center">AgentCenter</h1>
+
+<p align="center"><strong>Know what every coding agent costs your machine.</strong></p>
+
+<p align="center">
+  <a href="https://github.com/eduardopin/agentcenter/actions/workflows/ci.yml"><img src="https://github.com/eduardopin/agentcenter/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-146c5b" alt="License: MIT"></a>
+  <a href="docs/KNOWN_LIMITATIONS.md"><img src="https://img.shields.io/badge/status-pre--alpha-b36b00" alt="Status: pre-alpha"></a>
+</p>
+
+<p align="center">
+  <a href="https://eduardopin.github.io/agentcenter/">Website</a> ·
+  <a href="docs/ARCHITECTURE.md">Architecture</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
+
+<p align="center">
+  <img src="site/img/cli-snapshot.svg" width="1100" alt="A real AgentCenter CLI snapshot showing one Codex session and live resource totals. The session name and working directory are anonymized.">
+</p>
+
+<p align="center"><sub>Real output from a release build. Session name and working directory anonymized.</sub></p>
+
+## Quick install
+
+```sh
+git clone https://github.com/eduardopin/agentcenter.git
+cd agentcenter
+bash install.sh
+```
+
+Linux only. This builds and installs the GTK desktop app and headless CLI for
+your user. See [install details](#install-details) for dependencies, paths, and
+uninstall options.
+
+> **Pre-alpha:** current validation has failing performance gates and incomplete
+> action acceptance. Read the [known limitations](docs/KNOWN_LIMITATIONS.md)
+> before relying on AgentCenter.
+
+**Help wanted:** follow [Your first contribution](CONTRIBUTING.md#your-first-contribution)
+or browse [good first issues](https://github.com/eduardopin/agentcenter/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22).
+
+## What it measures
 
 AgentCenter shows what each Claude Code, Codex, pi, Copilot, Kiro, Gemini or
 opencode session costs your machine: CPU, memory (PSS + swap), disk throughput
@@ -8,12 +51,10 @@ and I/O stall, per session and per child process (MCP servers, shells, builds),
 live, with a GTK4 + libadwaita interface. Its performance budgets are targets,
 not guarantees for the current build.
 
-Status: pre-alpha. Current validation has failing performance gates and
-incomplete action acceptance; see [known limitations](docs/KNOWN_LIMITATIONS.md).
 The desktop app is `agentcenter`; `agentcenter-cli` is the headless front end.
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
 
-## Install
+## Install details
 
 Linux only for now. From a checkout of this repository, one command builds
 both programs and installs them for your user, with an `AgentCenter` entry in
