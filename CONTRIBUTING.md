@@ -110,7 +110,7 @@ An end-to-end run with the real `claude` binary in an isolated Herdr (temporary
 socket and `HOME`, `ANTHROPIC_BASE_URL` pointing at a local stub) is not part
 of the suite yet.
 
-To install your build for daily use, see [Install](README.md#install):
+To install your build for daily use, see [Install details](README.md#install-details):
 `bash install.sh` from the checkout.
 
 ### Performance gate
@@ -290,7 +290,7 @@ Before opening the change, break the adapter on purpose (change `"goose"` in
 `comms`) and watch both tests fail.
 
 For a quick local try without writing code, the CLI also accepts extra agents
-by `comm`: `AGENTCENTER_EXTRA_AGENTS=goose agentcenter-cli snapshot`.
+by `comm`: `AGENTCENTER_EXTRA_AGENTS=my-agent agentcenter-cli snapshot`.
 
 ## Writing an overlay
 

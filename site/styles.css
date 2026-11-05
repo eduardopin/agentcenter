@@ -101,6 +101,18 @@ a {
   transform: translateY(0);
 }
 
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 .shell {
   width: var(--shell);
   margin-inline: auto;
@@ -521,6 +533,10 @@ pre {
   tab-size: 2;
 }
 
+pre:focus-visible {
+  outline-offset: -4px;
+}
+
 .install-note {
   max-width: 78ch;
   margin: 24px 0 0;
@@ -751,6 +767,10 @@ pre {
   .terminal-shot img {
     width: 180%;
     max-width: none;
+  }
+
+  .terminal-shot {
+    overflow-x: auto;
   }
 
   .feature-grid,

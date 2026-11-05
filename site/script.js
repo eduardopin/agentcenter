@@ -20,20 +20,39 @@
   };
 
   document.querySelectorAll("[data-copy-target]").forEach((button) => {
+    const label = button.querySelector(".copy-label");
+    if (!label) return;
+
+    const originalLabel = label.textContent;
+    const liveRegion = document.getElementById("copy-status");
+    const description = button.getAttribute("aria-label")?.replace(/^Copy /, "") || "text";
+    let copying = false;
+    let resetTimer;
+
     button.addEventListener("click", async () => {
+      if (copying) return;
+
       const target = document.getElementById(button.dataset.copyTarget);
-      const label = button.querySelector(".copy-label");
-      if (!target || !label) return;
+      if (!target) return;
+
+      copying = true;
+      if (resetTimer) window.clearTimeout(resetTimer);
+      if (liveRegion) liveRegion.textContent = "";
 
       try {
         await copyText(target.innerText);
         label.textContent = "Copied";
+        if (liveRegion) liveRegion.textContent = `Copied ${description}.`;
       } catch {
         label.textContent = "Select text";
+        if (liveRegion) liveRegion.textContent = `Copy unavailable. Select ${description} manually.`;
+      } finally {
+        copying = false;
       }
 
-      window.setTimeout(() => {
-        label.textContent = "Copy";
+      resetTimer = window.setTimeout(() => {
+        label.textContent = originalLabel;
+        resetTimer = undefined;
       }, 1800);
     });
   });

@@ -19,10 +19,10 @@
 </p>
 
 <p align="center">
-  <img src="site/img/cli-snapshot.svg" width="1100" alt="A real AgentCenter CLI snapshot showing one Codex session and live resource totals. The session name and working directory are anonymized.">
+  <img src="site/img/cli-snapshot.svg" width="960" alt="AgentCenter CLI output from a real release-build run. Session display names and working directories are replaced; PIDs and displayed measurements are unchanged. Machine CPU and PSI fields are omitted.">
 </p>
 
-<p align="center"><sub>Real output from a release build. Session name and working directory anonymized.</sub></p>
+<p align="center"><sub>Real release-build output, reformatted for legibility. Session display NAME and CWD replaced; PIDs and displayed values unchanged; machine CPU/PSI omitted.</sub></p>
 
 ## Quick install
 
@@ -36,23 +36,32 @@ Linux only. This builds and installs the GTK desktop app and headless CLI for
 your user. See [install details](#install-details) for dependencies, paths, and
 uninstall options.
 
-> **Pre-alpha:** current validation has failing performance gates and incomplete
-> action acceptance. Read the [known limitations](docs/KNOWN_LIMITATIONS.md)
-> before relying on AgentCenter.
+> **Pre-alpha: the current performance and GUI gates fail.** The 500-process
+> D-state fixture measured a 5.036 ms median against a budget below 5 ms. GUI
+> first frame measured 456.4 ms against 300 ms, and CPU measured 12.198% of one
+> core against 2%. Session actions still have incomplete acceptance evidence.
+> Read the [known limitations](docs/KNOWN_LIMITATIONS.md) before relying on
+> AgentCenter.
 
 **Help wanted:** follow [Your first contribution](CONTRIBUTING.md#your-first-contribution)
 or browse [good first issues](https://github.com/eduardopin/agentcenter/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22).
 
 ## What it measures
 
-AgentCenter shows what each Claude Code, Codex, pi, Copilot, Kiro, Gemini or
-opencode session costs your machine: CPU, memory (PSS + swap), disk throughput
-and I/O stall, per session and per child process (MCP servers, shells, builds),
-live, with a GTK4 + libadwaita interface. Its performance budgets are targets,
-not guarantees for the current build.
+AgentCenter shows what each Claude Code, Codex, pi, Copilot, Kiro, Gemini,
+OpenCode, Aider, Goose, or Cursor Agent session costs your machine: CPU, memory
+(PSS + swap), disk throughput and I/O stall, per session and per child process
+(MCP servers, shells, builds), live, with a GTK4 + libadwaita interface. Its
+performance budgets are targets, not guarantees for the current build.
 
 The desktop app is `agentcenter`; `agentcenter-cli` is the headless front end.
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the design.
+Resource sampling is local and read-only. Transcript overlays retain metadata
+and hashes: tool-call arguments are normalized, hashed, and immediately
+discarded. Handoff is a separate opt-in action that can send bounded projected
+session text to the provider selected in Pi. See the
+[architecture](docs/ARCHITECTURE.md#decisions) and
+[known limitations](docs/KNOWN_LIMITATIONS.md#session-actions) for the privacy
+boundary.
 
 ## Install details
 
@@ -93,7 +102,7 @@ agentcenter-cli` leaves both binaries in `target/release/`.
 agentcenter-cli snapshot                     # one row per AI session
 agentcenter-cli snapshot --json              # same snapshot as JSON
 agentcenter-cli snapshot --interval-ms 2000  # sample over 2 s instead of 1 s
-AGENTCENTER_EXTRA_AGENTS=aider,goose agentcenter-cli snapshot  # extra agents by comm
+AGENTCENTER_EXTRA_AGENTS=my-agent agentcenter-cli snapshot  # extra agents by comm
 ```
 
 `snapshot` takes two samples `--interval-ms` apart (default 1000) so CPU and
@@ -101,9 +110,9 @@ disk rates are real deltas, and prints one row per session: the agent
 process plus everything below it. `--proc-root PATH` reads a fixture instead
 of `/proc`. `agentcenter-cli snapshot --help` lists the options.
 
-I/O stall per session needs the kernel's task delay accounting. Without it
-AgentCenter falls back to counting threads in `D` state. To enable it until
-the next boot:
+I/O stall percentage per session needs `kernel.task_delayacct=1`. Without it,
+AgentCenter falls back to counting threads in `D` state. To enable it until the
+next boot:
 
 ```sh
 sudo sysctl kernel.task_delayacct=1

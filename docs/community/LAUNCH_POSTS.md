@@ -59,8 +59,8 @@ session is using my CPU, memory, swap, or disk right now?
 
 Instead of showing only individual processes, it groups each detected agent with
 its MCP servers, shells, builds, and other descendants. The GTK4 app and CLI
-show CPU, PSS plus swap, disk read/write rates, and I/O stall per session. It
-reads local procfs data; monitoring itself is read-only and does not need root.
+show CPU, PSS plus swap, disk read/write rates, and I/O stall per session.
+Monitoring reads local procfs data and does not modify the sampled processes.
 
 This is source-only, Linux-only, and pre-alpha. The documented performance and
 GUI validation gates currently do not all pass, so it is for testing and
@@ -76,15 +76,12 @@ Please scrub project paths, hostnames, credentials, and session identifiers.
 
 **Suggested title:** I made a Linux monitor that attributes Claude Code and other agent process trees to their sessions
 
-When Claude Code starts MCP servers, shells, or builds, those children can keep
-using resources even when the top-level process does not look busy. AgentCenter
-groups the whole tree under the coding session and reports CPU, proportional
-memory and swap, disk throughput, and I/O stall.
+Claude Code can start MCP servers, shells, or builds. AgentCenter groups that
+whole process tree under the coding session and reports CPU, proportional memory
+and swap, disk throughput, and I/O stall.
 
 Claude Code is one built-in adapter alongside Codex, pi, Copilot CLI, Gemini
-CLI, Kiro CLI, OpenCode, Aider, Goose, and Cursor Agent. Monitoring is local and
-read-only; transcript integrations are designed to read metadata, not prompt,
-answer, or tool content.
+CLI, Kiro CLI, OpenCode, Aider, Goose, and Cursor Agent.
 
 Honest status: Linux-only, source-only, and pre-alpha. Current documented
 performance and GUI gates fail, and control features still have incomplete
