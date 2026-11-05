@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="259" viewBox="0 0 1280 259" role="img" aria-labelledby="title desc">
+  <title id="title">AgentCenter CLI snapshot</title>
+  <desc id="desc">A real release-build snapshot. The session name and working directory have been anonymized.</desc>
+  <rect width="1280" height="259" fill="#07100c"/>
+  <style>
+    text { font: 18px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #dce8e0; white-space: pre; }
+    .summary { fill: #79e2c3; font-weight: 700; }
+    .header { fill: #8ea399; font-weight: 700; }
+    .total { fill: #ffbe63; }
+    .note { fill: #8ea399; font-size: 15px; }
+  </style>
+  <text class="summary" x="36" y="50">1 session (codex 1) | 1 busy, 0 blocked | 1 active process</text>
+  <text class="header" x="36" y="83">AGENT    PID  PROCS  CPU%   PSS  SWAP  READ/s  WRITE/s      STALL  FLAG  NAME  STATUS  CTX  CWD</text>
+  <text class="row" x="36" y="116">codex      1      3   0.0  9.9M    0B     32K       0B         0%  -     local busy    36%  ~/project</text>
+  <text class="total" x="36" y="149">TOTAL 1    -    3/3   0.0  9.9M    0B     32K       0B  delayacct  0</text>
+  <text class="row" x="36" y="182">  machine: 16 cores, 98.4% cpu, mem 27G/38G, swap 25G/27G, psi some10 cpu 55.9% mem 6.3% io 24.6%</text>
+  <line x1="36" y1="217" x2="1244" y2="217" stroke="#2a3a32"/>
+  <text class="note" x="36" y="244">Live capture · session name and working directory anonymized</text>
+</svg>
