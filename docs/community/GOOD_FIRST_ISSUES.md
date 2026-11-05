@@ -55,7 +55,7 @@ that test directory behind.
 
 ## 3. Make `herdr_server` testable with a synthetic environment and proc root
 
-**Suggested labels:** `good first issue`, `testing`, `refactor`, `rust`
+**Suggested labels:** `help wanted`, `testing`, `refactor`, `rust` (a refactor of a 2000+ line file: best taken with maintainer guidance, not as a first PR)
 
 `herdr_server` in `crates/agentcenter/src/actions_ui/session_control.rs`
 reads `std::env` and `/proc` directly, so its server-selection behavior cannot
@@ -76,7 +76,7 @@ small injected environment/proc-root boundary, preserving production behavior.
 
 ## 4. Add a file-descriptor leak regression test for task scanning
 
-**Suggested labels:** `good first issue`, `testing`, `performance`, `linux`
+**Suggested labels:** `good first issue`, `testing`, `linux`
 
 `count_d_threads` in `crates/agentcenter-core/src/procfs/task.rs` owns and
 closes the task-directory and per-thread descriptors internally, but CC10 in
@@ -91,4 +91,5 @@ closes the task-directory and per-thread descriptors internally, but CC10 in
   strict enough to catch growth per iteration.
 - Keep this tests-only: do not refactor the scanner's `openat`/`getdents64` hot
   path or change its production behavior.
+- Put the test in its own file: `crates/agentcenter-core/tests/dstate_scan.rs` installs a counting global allocator that can interfere with descriptor counting.
 - Run the focused test repeatedly and document the command in the pull request.

@@ -103,7 +103,7 @@ const text = lines.map((line, index) => (
 
 const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-labelledby="title desc">
   <title id="title">AgentCenter CLI snapshot</title>
-  <desc id="desc">Output from a real release-build run, reformatted for narrow screens. Session display names and working directories are replaced. PIDs and displayed measurements are unchanged. Machine CPU and PSI fields are omitted.</desc>
+  <desc id="desc">Output from a real release-build run, reformatted for narrow screens. Session display names and working directories are replaced. PIDs and displayed measurements are as printed by the tool. Machine CPU and PSI fields are omitted.</desc>
   <rect width="${width}" height="${height}" fill="#07100c"/>
   <style>
     text { font: 20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #dce8e0; white-space: pre; }
@@ -115,7 +115,7 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${
   </style>
 ${text}
   <line x1="32" y1="${height - 44}" x2="${width - 32}" y2="${height - 44}" stroke="#2a3a32"/>
-  <text class="note" x="32" y="${height - 16}">Real release run · display NAME/CWD replaced · PIDs/values unchanged · machine CPU/PSI omitted</text>
+  <text class="note" x="32" y="${height - 16}">Real release run · display NAME/CWD replaced · PIDs and values as printed · machine CPU/PSI omitted</text>
 </svg>
 `;
 

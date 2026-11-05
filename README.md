@@ -19,10 +19,10 @@
 </p>
 
 <p align="center">
-  <img src="site/img/cli-snapshot.svg" width="960" alt="AgentCenter CLI output from a real release-build run. Session display names and working directories are replaced; PIDs and displayed measurements are unchanged. Machine CPU and PSI fields are omitted.">
+  <img src="site/img/cli-snapshot.svg" width="960" alt="AgentCenter CLI output from a real release-build run. Session display names and working directories are replaced; PIDs and displayed measurements are as printed by the tool. Machine CPU and PSI fields are omitted.">
 </p>
 
-<p align="center"><sub>Real release-build output, reformatted for legibility. Session display NAME and CWD replaced; PIDs and displayed values unchanged; machine CPU/PSI omitted.</sub></p>
+<p align="center"><sub>Real release-build output, reformatted for legibility. Session display NAME and CWD replaced; PIDs and displayed values as printed by the tool; machine CPU/PSI omitted.</sub></p>
 
 ## Quick install
 
