@@ -762,6 +762,30 @@ mod tests {
         assert_eq!(grid_position(4, true), (0, 2), "sessions cell, 2x2");
     }
 
+    /// The layout tests assume a desktop-sized screen. A bare Broadway server is
+    /// 1024x768 and stalls frames, so fail here, naming the cause, rather than in
+    /// a width assertion elsewhere (scripts/broadway-browser.py fixes it in CI).
+    #[test]
+    fn the_test_display_is_at_least_1600_by_800() {
+        gtk::test_synced(|| {
+            adw::init().expect("isolated Broadway display required");
+            let monitors = gtk::gdk::Display::default().unwrap().monitors();
+            let m = monitors
+                .item(0)
+                .and_downcast::<gtk::gdk::Monitor>()
+                .expect("test display has no monitor");
+            let g = m.geometry();
+            assert!(
+                g.width() >= 1600 && g.height() >= 800,
+                "test display is {}x{}, GUI tests need >= 1600x800: run through \
+                 scripts/ci.sh (it attaches scripts/broadway-browser.py to Broadway) \
+                 or point DISPLAY at a larger screen",
+                g.width(),
+                g.height()
+            );
+        });
+    }
+
     fn history_of(snap: &Snapshot, n: usize) -> MachineHistory {
         let mut h = MachineHistory::new();
         let mut s = snap.clone();
