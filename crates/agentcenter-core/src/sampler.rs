@@ -54,9 +54,10 @@ use crate::history::History;
 use crate::machine::read_machine;
 use crate::overlay::transcript::READ_BUDGET;
 use crate::overlay::{self, Overlay};
-use crate::procfs::io::{IoCounters, read_io};
+use crate::procfs::fdcache::FdCache;
+use crate::procfs::io::IoCounters;
 use crate::procfs::smaps::{SmapsRollup, parse_smaps_rollup};
-use crate::procfs::stat::{Stat, parse_stat};
+use crate::procfs::stat::Stat;
 use crate::procfs::status::{Status, parse_status};
 use crate::procfs::system::{CpuTotals, delayacct_enabled, read_cpu_totals};
 use crate::procfs::task::count_d_threads;
@@ -215,6 +216,8 @@ pub struct Sampler {
     quiet: HashSet<u32>,
     /// Por pid de agente das sessoes do ultimo tick.
     agents: HashMap<u32, AgentInfo>,
+    /// Fds abertos de `stat` e `io` dos processos de sessao (ver `procfs::fdcache`).
+    fds: FdCache,
 }
 
 impl Default for Sampler {
@@ -245,6 +248,7 @@ impl Sampler {
             full_scan_at: 0,
             quiet: HashSet::new(),
             agents: HashMap::new(),
+            fds: FdCache::default(),
         };
         s.set_config(config);
         s
@@ -281,6 +285,18 @@ impl Sampler {
         self.selected
     }
 
+    /// Teto de fds de `stat`/`io` mantidos abertos entre ticks. O padrao e
+    /// metade do limite de fds do processo; 0 desliga o cache (cada leitura abre
+    /// e fecha o arquivo, como antes dele).
+    pub fn set_fd_budget(&mut self, budget: usize) {
+        self.fds.set_budget(budget);
+    }
+
+    /// O cache de fds, para testes e diagnostico.
+    pub fn fd_cache(&self) -> &FdCache {
+        &self.fds
+    }
+
     /// Series das sessoes vivas no ultimo tick.
     pub fn history(&self) -> &History {
         &self.history
@@ -315,6 +331,7 @@ impl Sampler {
         // de sessao que nao estava quieta (ver o topo do modulo).
         let pids = root.pids()?;
         let full = self.stats.is_empty() || self.tick_no - self.full_scan_at >= self.idle_every;
+        self.fds.begin_tick(pids.len());
         if full {
             self.full_scan_at = self.tick_no;
         }
@@ -337,10 +354,9 @@ impl Sampler {
                 stats.insert(pid, st);
                 continue;
             }
-            if root.read_pid(pid, "stat", &mut self.buf).is_err() {
-                continue;
-            }
-            if let Ok(st) = parse_stat(&self.buf) {
+            // Quem foi de sessao no tick anterior e lido de novo agora: fd guardado.
+            let keep = self.prev.contains_key(&pid);
+            if let Ok(st) = self.fds.read_stat(root, pid, keep, full, &mut self.buf) {
                 stats.insert(pid, st);
             }
         }
@@ -416,10 +432,10 @@ impl Sampler {
             let mut read_pids: Vec<u32> = Vec::with_capacity(pids.len());
             for pid in pids {
                 if stale.contains(&pid) {
-                    let fresh = root
-                        .read_pid(pid, "stat", &mut self.buf)
-                        .ok()
-                        .and_then(|()| parse_stat(&self.buf).ok());
+                    let fresh = self
+                        .fds
+                        .read_stat(root, pid, true, false, &mut self.buf)
+                        .ok();
                     match fresh {
                         Some(st) => stats.insert(pid, st),
                         None => {
@@ -491,6 +507,7 @@ impl Sampler {
         self.history
             .record(&sessions, |pid| stats.get(&pid).map_or(0, |s| s.starttime));
 
+        self.fds.retain_pids(|pid| next_prev.contains_key(&pid));
         self.prev = next_prev;
         self.quiet = quiet;
         self.prev_cpu = Some(cpu);
@@ -597,7 +614,9 @@ impl Sampler {
                 (smaps, tick, rss, swap)
             }
         };
-        let io = read_io(root, pid, buf);
+        let io = self
+            .fds
+            .read_io(root, pid, st.starttime, same.is_some(), full, buf);
 
         // Uma thread so: o estado do processo ja e o dela, sem ler task/.
         let (threads_d, d_at) = if delayacct {
