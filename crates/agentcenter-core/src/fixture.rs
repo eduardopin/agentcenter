@@ -208,7 +208,23 @@ impl FakeProc {
         let p = &p;
         let dir = self.root.join(p.pid.to_string());
         if dir.exists() {
-            fs::remove_dir_all(&dir)?;
+            // `stat` e `io` ficam (so o conteudo muda, abaixo): em `/proc` o
+            // arquivo de um processo e o mesmo a vida toda, e o sampler pode
+            // manter o fd aberto entre ticks. O resto e refeito.
+            for entry in fs::read_dir(&dir)? {
+                let entry = entry?;
+                if matches!(entry.file_name().to_str(), Some("stat" | "io")) {
+                    continue;
+                }
+                if entry.file_type()?.is_dir() {
+                    fs::remove_dir_all(entry.path())?;
+                } else {
+                    fs::remove_file(entry.path())?;
+                }
+            }
+            if p.io.is_none() {
+                let _ = fs::remove_file(dir.join("io"));
+            }
         }
         fs::create_dir_all(dir.join("task"))?;
         fs::write(dir.join("stat"), p.stat_line())?;
