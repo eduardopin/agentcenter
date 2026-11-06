@@ -285,9 +285,10 @@ impl Sampler {
         self.selected
     }
 
-    /// Teto de fds de `stat`/`io` mantidos abertos entre ticks. O padrao e
-    /// metade do limite de fds do processo; 0 desliga o cache (cada leitura abre
-    /// e fecha o arquivo, como antes dele).
+    /// Teto de fds de `stat`/`io` mantidos abertos entre ticks. O padrao e o
+    /// limite de fds do processo menos uma reserva (`max(256, limite/4)`), no
+    /// maximo 8192; 0 desliga o cache (cada leitura abre e fecha o arquivo,
+    /// como antes dele).
     pub fn set_fd_budget(&mut self, budget: usize) {
         self.fds.set_budget(budget);
     }
