@@ -20,13 +20,17 @@ command -v cargo >/dev/null 2>&1 || { echo "ci: cargo not found (install Rust wi
 step() { printf '\n==> %s\n' "$*"; }
 
 # One EXIT handler owns both temporary resources; never stop a caller's display.
-stamp="" broadway_pid="" broadway_log=""
+stamp="" broadway_pid="" browser_pid="" broadway_log=""
 cleanup() {
+    if [ -n "$browser_pid" ]; then
+        kill "$browser_pid" 2>/dev/null || true
+        wait "$browser_pid" 2>/dev/null || true
+    fi
     if [ -n "$broadway_pid" ]; then
         kill "$broadway_pid" 2>/dev/null || true
         wait "$broadway_pid" 2>/dev/null || true
     fi
-    [ -z "$broadway_log" ] || rm -f "$broadway_log"
+    [ -z "$broadway_log" ] || rm -f "$broadway_log" "$broadway_log.browser"
     [ -z "$stamp" ] || rm -f "$stamp"
     return 0
 }
@@ -45,8 +49,11 @@ prepare_test_display() {
     }
     broadway_log="$(mktemp)"
     export GDK_BACKEND=broadway BROADWAY_DISPLAY=":$$"
-    # PID-unique GTK socket; HTTP binds loopback on a kernel-selected port.
-    gtk4-broadwayd --address=127.0.0.1 --port=0 "$BROADWAY_DISPLAY" >"$broadway_log" 2>&1 &
+    # PID-unique GTK socket; HTTP binds loopback on a port picked here so the
+    # stand-in browser below knows where to connect.
+    local port
+    port="$(python3 -I -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')"
+    gtk4-broadwayd --address=127.0.0.1 --port="$port" "$BROADWAY_DISPLAY" >"$broadway_log" 2>&1 &
     broadway_pid=$!
     for ((attempt=0; attempt<100; attempt++)); do
         if ! kill -0 "$broadway_pid" 2>/dev/null; then
@@ -54,7 +61,19 @@ prepare_test_display() {
             return 2
         fi
         if grep -q '^Listening on ' "$broadway_log"; then
-            return 0
+            # Broadway with no browser is a 1024x768 screen whose frame clock
+            # stalls at ~1 frame/s; the GUI tests need wide windows and frames.
+            # scripts/broadway-browser.py plays the browser: 1920x1080, acks frames.
+            python3 -I scripts/broadway-browser.py "$port" 1920 1080 >"$broadway_log.browser" 2>&1 &
+            browser_pid=$!
+            for ((tries=0; tries<100; tries++)); do
+                grep -q '^ready' "$broadway_log.browser" && return 0
+                kill -0 "$browser_pid" 2>/dev/null || break
+                sleep 0.05
+            done
+            echo "ci: Broadway stand-in browser did not start" >&2
+            cat "$broadway_log.browser" >&2
+            return 2
         fi
         sleep 0.05
     done

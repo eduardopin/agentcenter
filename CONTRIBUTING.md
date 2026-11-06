@@ -67,9 +67,15 @@ Native GTK tests require a display; they must not be skipped on headless CI.
 `BROADWAY_DISPLAY`. Without one, it requires `gtk4-broadwayd` (the GTK stack's
 `libgtk-4-bin` package) and starts its own Broadway display, exporting
 `GDK_BACKEND=broadway` and a PID-unique `BROADWAY_DISPLAY` before `cargo test`.
-Its HTTP listener binds to `127.0.0.1` on an ephemeral port. The script stops
-only its own backend on exit, including test failures and INT/TERM; the same
-cleanup also removes the benchmark freshness stamp. It installs nothing.
+Its HTTP listener binds to `127.0.0.1` on a free port the script picks. A bare
+Broadway server is a 1024x768 screen with no browser to acknowledge frames, so
+the frame clock stalls and windows cannot grow; the script therefore attaches
+`scripts/broadway-browser.py`, a stand-in browser that reports a 1920x1080 screen,
+answers resize and roundtrip requests and draws nothing (python3 only). The
+test `the_test_display_is_at_least_1600_by_800` fails with a message naming this
+if the display is smaller. The script stops
+only its own backend and stand-in on exit, including test failures and INT/TERM;
+the same cleanup also removes the benchmark freshness stamp. It installs nothing.
 For a direct `cargo test --workspace`, provide a working display yourself;
 use `bash scripts/ci.sh` for automatic headless setup.
 
