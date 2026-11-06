@@ -27,7 +27,9 @@
 //! (`RLIMIT_NOFILE`, lido de `/proc/self/limits`) menos uma folga (ver
 //! [`default_budget`]), no maximo dois fds por pid vivo do tick, e as entradas
 //! de quem saiu da sessao fecham na hora. Alem disso, ou em EMFILE/ENFILE, a
-//! leitura segue o caminho `open`-`read`-`close` de sempre. Os fds sao do [`FdCache`], que
+//! leitura segue o caminho `open`-`read`-`close` de sempre. Em EMFILE o cache
+//! devolve metade do que tem e o orcamento volta, aos poucos, ao configurado
+//! depois de [`RECOVER_TICKS`] ticks sem EMFILE. Os fds sao do [`FdCache`], que
 //! e do `Sampler`: soltar o amostrador fecha todos.
 //!
 //! Sem `unsafe`: o `pread` e o `FileExt::read_at` da std.
@@ -53,6 +55,11 @@ const FALLBACK_BUDGET: usize = 256;
 /// resto do processo (sockets, arquivos de sessao, GTK, as aberturas
 /// transitorias do proprio tick).
 const MIN_SLACK: u64 = 256;
+
+/// Ticks seguidos sem EMFILE ate o orcamento reduzido voltar a crescer, e o
+/// menor passo de crescimento (o dobro de 0 ou de um orcamento minusculo).
+const RECOVER_TICKS: u32 = 64;
+const RECOVER_MIN_STEP: usize = 16;
 
 /// EMFILE e ENFILE: sem fd livre, no processo ou no sistema.
 const EMFILE: i32 = 24;
@@ -94,8 +101,12 @@ pub struct FdCacheStats {
 pub struct FdCache {
     tables: Vec<Table>,
     active: usize,
-    /// Teto configurado (do limite do processo); 0 desliga o cache.
+    /// Teto em vigor; 0 desliga o cache. Cai com o EMFILE e volta a `ceiling`.
     budget: usize,
+    /// Teto configurado (o padrao do limite do processo, ou o de `set_budget`).
+    ceiling: usize,
+    /// Ticks seguidos sem EMFILE desde que o orcamento foi reduzido.
+    calm: u32,
     /// Teto por raiz neste tick: dois fds (`stat` e `io`) por pid vivo.
     per_root: usize,
     /// Fds guardados, somados todas as raizes.
@@ -116,6 +127,8 @@ impl FdCache {
             tables: Vec::new(),
             active: 0,
             budget,
+            ceiling: budget,
+            calm: 0,
             per_root: usize::MAX,
             held: 0,
             clock: 0,
@@ -126,11 +139,19 @@ impl FdCache {
     /// Troca o teto de fds guardados; 0 desliga o cache e fecha tudo.
     pub fn set_budget(&mut self, budget: usize) {
         self.budget = budget;
+        self.ceiling = budget;
+        self.calm = 0;
         self.evict_to(budget);
     }
 
+    /// O teto em vigor agora (menor que [`FdCache::ceiling`] depois de um EMFILE).
     pub fn budget(&self) -> usize {
         self.budget
+    }
+
+    /// O teto configurado, ao qual o orcamento volta depois de um EMFILE.
+    pub fn ceiling(&self) -> usize {
+        self.ceiling
     }
 
     /// Fds guardados agora.
@@ -147,6 +168,17 @@ impl FdCache {
     pub fn begin_tick(&mut self, live: usize) {
         self.clock += 1;
         self.per_root = live.saturating_mul(2);
+        if self.budget < self.ceiling {
+            self.calm += 1;
+            if self.calm >= RECOVER_TICKS {
+                self.calm = 0;
+                self.budget = self
+                    .budget
+                    .saturating_mul(2)
+                    .max(RECOVER_MIN_STEP)
+                    .min(self.ceiling);
+            }
+        }
     }
 
     /// Solta as entradas da raiz ativa cujo pid `live` nega (processo que saiu
@@ -294,12 +326,19 @@ impl FdCache {
         let open = |root: &ProcRoot| root.with_pid_path(pid, file, |p| File::open(p));
         match open(root) {
             Err(e) if matches!(e.raw_os_error(), Some(EMFILE | ENFILE)) && self.held > 0 => {
-                self.budget = self.held / 2;
-                self.evict_to(self.budget);
+                self.shed();
                 open(root).map_err(ReadError::from_io)
             }
             r => r.map_err(ReadError::from_io),
         }
+    }
+
+    /// Devolve metade dos fds guardados e passa a valer so o que sobrou, ate o
+    /// orcamento recuperar (ver [`RECOVER_TICKS`]).
+    fn shed(&mut self) {
+        self.budget = self.held / 2;
+        self.calm = 0;
+        self.evict_to(self.budget);
     }
 
     /// Fecha entradas (das raizes menos usadas primeiro) ate sobrarem `n`.
@@ -426,6 +465,79 @@ mod tests {
         let limits = fs::read_to_string("/proc/self/limits").unwrap();
         let soft = nofile_soft_limit(&limits).unwrap();
         assert_eq!(FdCache::default().budget(), budget_for_limit(Some(soft)));
+    }
+
+    /// `EMFILE` simulado: devolve metade e zera a contagem de ticks calmos.
+    fn fill(c: &mut FdCache, root: &ProcRoot, pids: &[u32]) {
+        let mut buf = String::new();
+        c.begin_tick(pids.len());
+        for &pid in pids {
+            c.read_stat(root, pid, true, false, &mut buf).unwrap();
+        }
+    }
+
+    #[test]
+    fn shed_budget_grows_back_after_calm_ticks_up_to_the_configured_one() {
+        let dir = TempDir::new("ac-fd-recover").unwrap();
+        let pids: Vec<u32> = (10..110).collect();
+        let (_fp, root) = proc_with(&dir, &pids);
+        let mut c = FdCache::with_budget(100);
+        fill(&mut c, &root, &pids);
+        assert_eq!((c.held(), c.budget(), c.ceiling()), (100, 100, 100));
+        c.shed();
+        assert_eq!((c.held(), c.budget(), c.ceiling()), (50, 50, 100));
+        // Um tick a menos que o necessario: nada muda.
+        for _ in 0..RECOVER_TICKS - 1 {
+            c.begin_tick(100);
+        }
+        assert_eq!(c.budget(), 50);
+        c.begin_tick(100);
+        assert_eq!(c.budget(), 100, "dobra (50 -> 100) e para no configurado");
+        // No teto, o relogio nao anda: nada cresce alem do configurado.
+        for _ in 0..3 * RECOVER_TICKS {
+            c.begin_tick(100);
+        }
+        assert_eq!(c.budget(), 100);
+    }
+
+    #[test]
+    fn recovery_is_by_steps_and_an_emfile_in_between_restarts_the_clock() {
+        let dir = TempDir::new("ac-fd-steps").unwrap();
+        let pids: Vec<u32> = (10..110).collect();
+        let (_fp, root) = proc_with(&dir, &pids);
+        let mut c = FdCache::with_budget(100);
+        fill(&mut c, &root, &pids);
+        c.shed();
+        c.shed(); // 100 -> 50 -> 25
+        assert_eq!(c.budget(), 25);
+        let calm = |c: &mut FdCache, n: u32| {
+            for _ in 0..n {
+                c.begin_tick(100);
+            }
+        };
+        calm(&mut c, RECOVER_TICKS);
+        assert_eq!(c.budget(), 50, "um degrau por periodo calmo");
+        calm(&mut c, RECOVER_TICKS - 1);
+        c.shed(); // outro EMFILE: recomeca a contagem
+        assert_eq!(c.budget(), 12);
+        calm(&mut c, RECOVER_TICKS - 1);
+        assert_eq!(c.budget(), 12, "a espera de antes nao conta mais");
+        calm(&mut c, 1);
+        assert_eq!(c.budget(), 24);
+        calm(&mut c, 2 * RECOVER_TICKS);
+        assert_eq!(c.budget(), 96);
+        calm(&mut c, RECOVER_TICKS);
+        assert_eq!(c.budget(), 100);
+        // O orcamento zerado por um EMFILE com 1 fd tambem volta.
+        let mut tiny = FdCache::with_budget(100);
+        fill(&mut tiny, &root, &[10]);
+        tiny.shed();
+        assert_eq!(tiny.budget(), 0);
+        calm(&mut tiny, RECOVER_TICKS);
+        assert_eq!(tiny.budget(), RECOVER_MIN_STEP);
+        // `set_budget` do dono vale como novo teto e zera a espera.
+        tiny.set_budget(40);
+        assert_eq!((tiny.budget(), tiny.ceiling()), (40, 40));
     }
 
     #[test]
