@@ -94,12 +94,16 @@ via Herdr (CC4), gauges por linha (CC8) e gráficos de cockpit no detalhe (CC9).
     claude_40 2,939 ms e delayacct 2,757 ms, com load 3–7 e sem máquina
     parada; a folga-alvo de 1,3x não foi atingida. FIX_FIRST leve na revisão, não
     corrigido: `task/` aberto sem `O_DIRECTORY` (uma FIFO numa raiz de fixture
-    trava a varredura; não ocorre em `/proc` real), falta teste de vazamento
-    de fd e de `O_CLOEXEC`, teste de alocação falha com `TMPDIR` maior que
-    ~205 caracteres, comparação de caminho por `Path` e não por bytes, buffer
+    trava a varredura; não ocorre em `/proc` real), falta teste de
+    `O_CLOEXEC` (o de vazamento de fd entrou em
+    `crates/agentcenter-core/tests/fd_leak.rs`, commit f6fb449, PR #2),
+    teste de alocação falha com `TMPDIR` maior que ~205 caracteres,
+    comparação de caminho por `Path` e não por bytes, buffer
     do `getdents64` sem alinhamento explícito. Exige glibc 2.30 ou mais nova.
 - [ ] Fazer o gate integral passar sem afrouxar testes ou orçamentos.
-  O último gate local medido falhou: mediana D-state de 5,036 ms, limite <5 ms.
+  O gate de CI passou em 014a336 (run 42175066068): mediana D-state de
+  4,727 ms, limite <5 ms, folga de 1,06x. Medições anteriores falharam
+  (5,036 ms no gate local); a folga continua quase nula.
 - [ ] Resolver os gates da GUI. As últimas medições registraram:
 
   | Árvore | Primeiro frame, limite <300 ms | CPU, limite <2% de um core | PSS, limite <80 MiB |

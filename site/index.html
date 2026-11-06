@@ -188,7 +188,7 @@ AGENTCENTER_EXTRA_AGENTS=my-agent \
             <h2 id="status-title">Useful to try. Not ready to trust blindly.</h2>
           </div>
           <div>
-            <p>The current performance and GUI gates fail. The 500-process D-state fixture measured a 5.036 ms median against a budget below 5 ms. GUI first frame measured 456.4 ms against 300 ms, and CPU measured 12.198% of one core against 2%. Session actions still have incomplete acceptance evidence.</p>
+            <p>The D-state performance gate passes with almost no headroom, and the last GUI validation failed. In CI on commit 014a336 the 500-process D-state fixture measured a 4.727 ms median against a budget below 5 ms (1.06x headroom). The last recorded GUI validation measured a 456.4 ms first frame against 300 ms and 12.198% of one core against 2%. Session actions still have incomplete acceptance evidence.</p>
             <a class="text-link" href="https://github.com/eduardopin/agentcenter/blob/main/docs/KNOWN_LIMITATIONS.md">Read the known limitations and measurements <span aria-hidden="true">→</span></a>
           </div>
         </div>
