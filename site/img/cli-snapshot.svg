@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="368" viewBox="0 0 960 368" role="img" aria-labelledby="title desc">
+  <title id="title">AgentCenter CLI snapshot</title>
+  <desc id="desc">Output from a real release-build run, reformatted for narrow screens. Session display names and working directories are replaced. PIDs and displayed measurements are as printed by the tool. Machine CPU and PSI fields are omitted.</desc>
+  <rect width="960" height="368" fill="#07100c"/>
+  <style>
+    text { font: 20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #dce8e0; white-space: pre; }
+    .summary { fill: #79e2c3; font-weight: 700; }
+    .header { fill: #8ea399; font-weight: 700; }
+    .total { fill: #ffbe63; }
+    .machine { fill: #a8c5b6; }
+    .note { fill: #8ea399; font-size: 14px; }
+  </style>
+  <text class="summary" x="32" y="48">1 session (codex 1) | 1 busy, 0 blocked | 2 active processes</text>
+  <text class="header" x="32" y="82">AGENT  PID  PROCS  CPU%  PSS  SWAP  READ/s  WRITE/s  STALL</text>
+  <text class="row" x="32" y="116">codex  1    4      2.0   14M  0B    88K     0B       0%</text>
+  <text class="header" x="32" y="150">FLAG  NAME   STATUS  CTX  CWD</text>
+  <text class="row" x="32" y="184">-     local  busy    29%  ~/project</text>
+  <text class="total" x="32" y="218">TOTAL 1  PID -  PROCS 4/4  CPU% 2.0  PSS 14M  SWAP 0B</text>
+  <text class="total" x="32" y="252">         READ/s 88K  WRITE/s 0B  STALL delayacct  FLAG 0</text>
+  <text class="machine" x="32" y="286">machine: 16 cores, mem 27G/38G, swap 20G/27G</text>
+  <line x1="32" y1="324" x2="928" y2="324" stroke="#2a3a32"/>
+  <text class="note" x="32" y="352">Real release run · display NAME/CWD replaced · PIDs and values as printed · machine CPU/PSI omitted</text>
+</svg>
