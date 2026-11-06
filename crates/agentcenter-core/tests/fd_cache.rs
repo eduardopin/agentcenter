@@ -56,6 +56,12 @@ fn advance(procs: &mut [FakeProcess], t: u64) {
     }
 }
 
+/// Orcamento fixo dos samplers com cache. O padrao sai do limite de fds da
+/// maquina e vale 0 com `ulimit -n 256`: o cache desligaria e os testes
+/// abaixo passariam a medir o ambiente. 128 cobre com folga `stat` e `io` dos
+/// ~25 processos de sessao de [`world`].
+const TEST_BUDGET: usize = 128;
+
 fn zero_clock(mut s: Snapshot) -> Snapshot {
     s.taken_at_ms = 0;
     s
@@ -69,6 +75,7 @@ fn snapshots_match_the_uncached_sampler_through_churn_exits_and_pid_reuse() {
     let root = fp.proc_root();
     let mut procs = world();
     let mut cached = Sampler::new(Registry::default());
+    cached.set_fd_budget(TEST_BUDGET);
     let mut plain = Sampler::new(Registry::default());
     plain.set_fd_budget(0);
     for t in 1..=24u64 {
@@ -151,6 +158,7 @@ fn reused_pid_reads_its_own_io_not_the_old_process_through_a_kept_fd() {
     let agent = FakeProcess::new(20, 1, "claude");
     let mut child = FakeProcess::new(21, 20, "bash");
     let mut s = Sampler::new(Registry::default());
+    s.set_fd_budget(TEST_BUDGET);
     // Disco andando: a sessao e lida todo tick.
     for t in 0..3u64 {
         fp.set_cpu(16, 100 * t, 1500 * t).unwrap();

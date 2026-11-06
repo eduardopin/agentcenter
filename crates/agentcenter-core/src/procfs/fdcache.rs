@@ -444,6 +444,16 @@ mod tests {
         fs::rename(&tmp, path).unwrap();
     }
 
+    /// Orcamento fixo dos testes que exercitam o cache. O padrao sai do limite
+    /// de fds da maquina ([`default_budget`]) e vale 0 com `ulimit -n 256`: o
+    /// cache desligaria e o teste passaria a medir o ambiente, nao o cache.
+    /// Cada teste guarda poucos fds; 64 cobre todos com folga.
+    const TEST_BUDGET: usize = 64;
+
+    fn cache() -> FdCache {
+        FdCache::with_budget(TEST_BUDGET)
+    }
+
     #[test]
     fn nofile_soft_limit_reads_the_soft_column() {
         let text = "Limit                     Soft Limit           Hard Limit           Units\n\
@@ -567,7 +577,7 @@ mod tests {
             .unwrap();
         let pid = child.id();
         let live = ProcRoot::default();
-        let mut c = FdCache::default();
+        let mut c = cache();
         let mut buf = String::new();
         c.begin_tick(1);
         let first = c.read_stat(&live, pid, true, false, &mut buf).unwrap();
@@ -589,7 +599,7 @@ mod tests {
         // Fixture: o mesmo pedido reabre pelo caminho (`kept` sobe, `hits` nao).
         let dir = TempDir::new("ac-fd-fixture-refresh").unwrap();
         let (_fp, root) = proc_with(&dir, &[7]);
-        let mut f = FdCache::default();
+        let mut f = cache();
         f.begin_tick(1);
         f.read_stat(&root, 7, true, false, &mut buf).unwrap();
         f.begin_tick(1);
@@ -601,7 +611,7 @@ mod tests {
     fn cached_stat_rereads_fresh_content_each_time() {
         let dir = TempDir::new("ac-fd-stat").unwrap();
         let (fp, root) = proc_with(&dir, &[7]);
-        let mut c = FdCache::default();
+        let mut c = cache();
         let mut buf = String::new();
         c.begin_tick(1);
         let first = c.read_stat(&root, 7, true, false, &mut buf).unwrap();
@@ -628,7 +638,7 @@ mod tests {
     fn reused_pid_with_other_starttime_drops_the_stat_fd() {
         let dir = TempDir::new("ac-fd-reuse").unwrap();
         let (fp, root) = proc_with(&dir, &[7]);
-        let mut c = FdCache::default();
+        let mut c = cache();
         let mut buf = String::new();
         c.begin_tick(1);
         let old = c.read_stat(&root, 7, true, false, &mut buf).unwrap();
@@ -657,7 +667,7 @@ mod tests {
     fn stat_of_another_pid_in_the_file_is_not_served_from_the_fd() {
         let dir = TempDir::new("ac-fd-otherpid").unwrap();
         let (fp, root) = proc_with(&dir, &[7]);
-        let mut c = FdCache::default();
+        let mut c = cache();
         let mut buf = String::new();
         c.begin_tick(1);
         c.read_stat(&root, 7, true, false, &mut buf).unwrap();
@@ -678,7 +688,7 @@ mod tests {
     fn io_fd_opened_for_another_starttime_is_not_used() {
         let dir = TempDir::new("ac-fd-io-reuse").unwrap();
         let (_fp, root) = proc_with(&dir, &[7]);
-        let mut c = FdCache::default();
+        let mut c = cache();
         let mut buf = String::new();
         let path = root.pid_path(7, "io");
         fs::write(&path, io_text(111)).unwrap();
@@ -704,7 +714,7 @@ mod tests {
     fn empty_read_from_the_cached_fd_reopens_by_path_once() {
         let dir = TempDir::new("ac-fd-empty").unwrap();
         let (_fp, root) = proc_with(&dir, &[7]);
-        let mut c = FdCache::default();
+        let mut c = cache();
         let mut buf = String::new();
         let path = root.pid_path(7, "io");
         fs::write(&path, io_text(5)).unwrap();
@@ -726,7 +736,7 @@ mod tests {
     fn unreadable_io_is_none_and_holds_no_fd() {
         let dir = TempDir::new("ac-fd-io-denied").unwrap();
         let (_fp, root) = proc_with(&dir, &[7]);
-        let mut c = FdCache::default();
+        let mut c = cache();
         let mut buf = String::new();
         let path = root.pid_path(7, "io");
         // Ausente.
@@ -751,7 +761,7 @@ mod tests {
             .unwrap();
         let pid = child.id();
         let root = ProcRoot::default();
-        let mut c = FdCache::default();
+        let mut c = cache();
         let mut buf = String::new();
         c.begin_tick(1);
         let st = c.read_stat(&root, pid, true, false, &mut buf).unwrap();
@@ -809,7 +819,7 @@ mod tests {
     fn refresh_reopens_every_entry_by_path() {
         let dir = TempDir::new("ac-fd-refresh").unwrap();
         let (_fp, root) = proc_with(&dir, &[7]);
-        let mut c = FdCache::default();
+        let mut c = cache();
         let mut buf = String::new();
         c.begin_tick(1);
         c.read_stat(&root, 7, true, false, &mut buf).unwrap();
@@ -844,7 +854,7 @@ mod tests {
                 fp.proc_root()
             })
             .collect();
-        let mut c = FdCache::default();
+        let mut c = cache();
         let mut buf = String::new();
         for round in 0..3 {
             for (i, r) in roots.iter().enumerate() {
@@ -861,7 +871,7 @@ mod tests {
     fn retain_pids_closes_the_fds_of_the_rest() {
         let dir = TempDir::new("ac-fd-retain").unwrap();
         let (_fp, root) = proc_with(&dir, &[7, 8, 9]);
-        let mut c = FdCache::default();
+        let mut c = cache();
         let mut buf = String::new();
         c.begin_tick(3);
         for pid in [7, 8, 9] {
