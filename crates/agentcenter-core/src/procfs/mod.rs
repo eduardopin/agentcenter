@@ -1,6 +1,7 @@
 //! Leitor proprio de `/proc` (ADR-001 #4): le so o que o modelo de sessao usa,
 //! a partir de uma raiz configuravel para que os testes usem arvores falsas.
 
+pub mod fdcache;
 pub mod io;
 pub mod smaps;
 pub mod stat;
@@ -15,6 +16,7 @@ use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{ErrorKind, Read};
 use std::os::unix::ffi::OsStrExt;
+use std::os::unix::fs::FileExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -206,11 +208,33 @@ pub(crate) fn read_file_into(path: &Path, buf: &mut String) -> Result<(), ReadEr
 /// O mesmo que [`read_file_into`] sobre um arquivo ja aberto: le em blocos de
 /// [`CHUNK`] e para na primeira leitura curta. `buf` e limpo antes.
 pub(crate) fn read_open_into(f: &mut File, buf: &mut String) -> Result<(), ReadError> {
+    read_chunks_into(buf, |chunk| f.read(chunk))
+}
+
+/// O mesmo que [`read_open_into`] com `pread` a partir do deslocamento 0, sem
+/// mexer na posicao do arquivo: o arquivo pode ficar aberto entre leituras
+/// (ver [`fdcache`]) e cada chamada le o conteudo de novo, inteiro. Em `/proc`
+/// cada `pread` regenera o `seq_file`.
+pub(crate) fn pread_into(f: &File, buf: &mut String) -> Result<(), ReadError> {
+    let mut at = 0u64;
+    read_chunks_into(buf, |chunk| {
+        let n = f.read_at(chunk, at)?;
+        at += n as u64;
+        Ok(n)
+    })
+}
+
+/// Laco comum de [`read_open_into`] e [`pread_into`]: `read` enche o bloco e
+/// devolve quantos bytes trouxe.
+fn read_chunks_into(
+    buf: &mut String,
+    mut read: impl FnMut(&mut [u8]) -> std::io::Result<usize>,
+) -> Result<(), ReadError> {
     buf.clear();
     let mut bytes = std::mem::take(buf).into_bytes();
     let res = CHUNK_BUF.with_borrow_mut(|chunk| {
         loop {
-            match f.read(&mut chunk[..]) {
+            match read(&mut chunk[..]) {
                 Ok(n) => {
                     bytes.extend_from_slice(&chunk[..n]);
                     if n < CHUNK {
