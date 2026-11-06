@@ -20,8 +20,10 @@
 //! - Raiz que nao e procfs (fixture): um arquivo apagado e recriado continua
 //!   legivel pelo fd antigo, e nada no conteudo denuncia isso. Por isso, no
 //!   tick de varredura completa (`refresh`) toda entrada e reaberta pelo
-//!   caminho: o descompasso dura no maximo ate a proxima varredura, e em
-//!   `/proc` real nao existe.
+//!   caminho: o descompasso dura no maximo ate a proxima varredura. Na raiz
+//!   `/proc` real isso nao existe (o arquivo de um processo e o mesmo a vida
+//!   toda e o `struct pid` morre com ele), entao `refresh` e ignorado la e o fd
+//!   vive ate o processo sair da sessao.
 //!
 //! Custo limitado: o orcamento padrao e o limite de fds do processo
 //! (`RLIMIT_NOFILE`, lido de `/proc/self/limits`) menos uma folga (ver
@@ -39,7 +41,7 @@ use super::stat::{Stat, parse_stat};
 use super::{ProcRoot, ReadError, pread_into, read_open_into};
 use std::collections::HashMap;
 use std::fs::File;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Quantas raizes distintas o cache segura ao mesmo tempo (o benchmark do tick
 /// alterna duas; o sampler real usa uma). A menos usada cai para dar lugar.
@@ -192,7 +194,8 @@ impl FdCache {
     }
 
     /// `stat` do `pid` lido para `buf` e interpretado. `keep`: guardar o fd
-    /// (o pid e lido todo tick). `refresh`: ignorar o fd guardado e reabrir.
+    /// (o pid e lido todo tick). `refresh`: ignorar o fd guardado e reabrir
+    /// (ignorado na raiz `/proc` real, ver [`is_real_proc`]).
     pub fn read_stat(
         &mut self,
         root: &ProcRoot,
@@ -202,6 +205,7 @@ impl FdCache {
         buf: &mut String,
     ) -> Result<Stat, ReadError> {
         root.note_read(pid, "stat");
+        let refresh = refresh && !is_real_proc(root);
         let ti = self.table(root);
         let key = (pid, Kind::Stat);
         if refresh {
@@ -241,6 +245,7 @@ impl FdCache {
         buf: &mut String,
     ) -> Option<IoCounters> {
         root.note_read(pid, "io");
+        let refresh = refresh && !is_real_proc(root);
         let ti = self.table(root);
         let key = (pid, Kind::Io);
         if refresh {
@@ -385,6 +390,15 @@ fn budget_for_limit(soft: Option<u64>) -> usize {
         let slack = MIN_SLACK.max(soft / 4);
         soft.saturating_sub(slack).min(MAX_BUDGET as u64) as usize
     })
+}
+
+/// `/proc` de verdade, e nao uma fixture: a raiz e exatamente `/proc`. Ali o
+/// arquivo de um processo e o mesmo a vida toda e o fd de um processo que
+/// acabou morre com ele (ESRCH), entao reabrir tudo na varredura completa so
+/// gasta syscalls; numa fixture (arquivo trocado por outro inode) o descompasso
+/// e possivel e a reabertura periodica o limita.
+fn is_real_proc(root: &ProcRoot) -> bool {
+    root.path() == Path::new("/proc")
 }
 
 /// Limite brando de fds (`Max open files`) de um `/proc/<pid>/limits`.
@@ -538,6 +552,49 @@ mod tests {
         // `set_budget` do dono vale como novo teto e zera a espera.
         tiny.set_budget(40);
         assert_eq!((tiny.budget(), tiny.ceiling()), (40, 40));
+    }
+
+    #[test]
+    fn real_proc_ignores_refresh_and_a_fixture_root_honours_it() {
+        assert!(is_real_proc(&ProcRoot::default()));
+        assert!(is_real_proc(&ProcRoot::new("/proc")));
+        assert!(!is_real_proc(&ProcRoot::new("/proc/self")));
+        assert!(!is_real_proc(&ProcRoot::new("/tmp/proc")));
+
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let live = ProcRoot::default();
+        let mut c = FdCache::default();
+        let mut buf = String::new();
+        c.begin_tick(1);
+        let first = c.read_stat(&live, pid, true, false, &mut buf).unwrap();
+        let start = first.starttime;
+        assert!(
+            c.read_io(&live, pid, start, true, false, &mut buf)
+                .is_some()
+        );
+        assert_eq!((c.held(), c.stats().kept), (2, 2));
+        // Varredura completa em /proc real: serve pelo fd guardado, nao reabre.
+        c.begin_tick(1);
+        let st = c.read_stat(&live, pid, true, true, &mut buf).unwrap();
+        assert_eq!(st.comm, "sleep");
+        assert!(c.read_io(&live, pid, start, true, true, &mut buf).is_some());
+        assert_eq!((c.stats().hits, c.stats().kept), (2, 2));
+        child.kill().unwrap();
+        child.wait().unwrap();
+
+        // Fixture: o mesmo pedido reabre pelo caminho (`kept` sobe, `hits` nao).
+        let dir = TempDir::new("ac-fd-fixture-refresh").unwrap();
+        let (_fp, root) = proc_with(&dir, &[7]);
+        let mut f = FdCache::default();
+        f.begin_tick(1);
+        f.read_stat(&root, 7, true, false, &mut buf).unwrap();
+        f.begin_tick(1);
+        f.read_stat(&root, 7, true, true, &mut buf).unwrap();
+        assert_eq!((f.stats().hits, f.stats().kept), (0, 2));
     }
 
     #[test]
