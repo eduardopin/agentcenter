@@ -34,7 +34,9 @@ Native GTK tests require a display; they must not be skipped on headless CI.
 with a 1920x1200 screen and no TCP listener, lets it pick a free display
 number, and exports `GDK_BACKEND=x11` and that `DISPLAY` before `cargo test`.
 The window layout tests open 1280 and 1600 px windows, so a caller's display
-needs to be at least that large.
+needs to be at least that large. They also measure text in Ubuntu Sans, which
+the stylesheets ask for: install `fonts-ubuntu`, since the DejaVu fallback is
+wider and fails the 840 px strip test.
 
 Without `Xvfb` it falls back to its own Broadway display (`gtk4-broadwayd`,
 from `libgtk-4-bin`) and warns: Broadway has one 1024x768 monitor that clamps
