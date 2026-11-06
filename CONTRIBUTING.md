@@ -30,12 +30,18 @@ bash scripts/ci.sh
 
 Native GTK tests require a display; they must not be skipped on headless CI.
 `scripts/ci.sh` preserves a configured `DISPLAY`, `WAYLAND_DISPLAY` or
-`BROADWAY_DISPLAY`. Without one, it requires `gtk4-broadwayd` (the GTK stack's
-`libgtk-4-bin` package) and starts its own Broadway display, exporting
-`GDK_BACKEND=broadway` and a PID-unique `BROADWAY_DISPLAY` before `cargo test`.
-Its HTTP listener binds to `127.0.0.1` on an ephemeral port. The script stops
-only its own backend on exit, including test failures and INT/TERM; the same
-cleanup also removes the benchmark freshness stamp. It installs nothing.
+`BROADWAY_DISPLAY`. Without one, it starts its own `Xvfb` (the `xvfb` package)
+with a 1920x1200 screen and no TCP listener, lets it pick a free display
+number, and exports `GDK_BACKEND=x11` and that `DISPLAY` before `cargo test`.
+The window layout tests open 1280 and 1600 px windows, so a caller's display
+needs to be at least that large.
+
+Without `Xvfb` it falls back to its own Broadway display (`gtk4-broadwayd`,
+from `libgtk-4-bin`) and warns: Broadway has one 1024x768 monitor that clamps
+those windows, and 16 layout tests fail on it. Its HTTP listener binds to
+`127.0.0.1` on an ephemeral port. The script stops only its own display server
+on exit, including test failures and INT/TERM; the same cleanup also removes
+the benchmark freshness stamp. It installs nothing.
 For a direct `cargo test --workspace`, provide a working display yourself;
 use `bash scripts/ci.sh` for automatic headless setup.
 
