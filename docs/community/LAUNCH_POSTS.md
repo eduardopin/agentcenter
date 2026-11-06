@@ -19,11 +19,12 @@ and a Rust CLI that prints a table or JSON. Built-in adapters cover Claude Code,
 Codex, pi, Copilot CLI, Gemini CLI, Kiro CLI, OpenCode, Aider, Goose, and Cursor
 Agent.
 
-This is Linux-only and pre-alpha. The D-state performance gate passes in CI
-with almost no headroom (4.727 ms against a budget below 5 ms on commit
-014a336); the last recorded GUI first-frame and CPU measurements miss their
-budgets, and session actions still need acceptance work. I would value feedback on the measurement model, procfs
-edge cases, and what a useful session-level view should show.
+This is Linux-only and pre-alpha. The D-state performance gate passes in CI with
+almost no headroom (4.727 ms against a budget below 5 ms on commit 014a336); the
+last recorded GUI first-frame and CPU measurements miss their budgets, and
+session actions still need acceptance work. I would value feedback on the
+measurement model, procfs edge cases, and what a useful session-level view
+should show.
 
 - Project: https://github.com/eduardopin/agentcenter
 - Overview: https://eduardopin.github.io/agentcenter/
