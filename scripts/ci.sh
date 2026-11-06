@@ -20,13 +20,13 @@ command -v cargo >/dev/null 2>&1 || { echo "ci: cargo not found (install Rust wi
 step() { printf '\n==> %s\n' "$*"; }
 
 # One EXIT handler owns both temporary resources; never stop a caller's display.
-stamp="" broadway_pid="" broadway_log=""
+stamp="" display_pid="" display_log=""
 cleanup() {
-    if [ -n "$broadway_pid" ]; then
-        kill "$broadway_pid" 2>/dev/null || true
-        wait "$broadway_pid" 2>/dev/null || true
+    if [ -n "$display_pid" ]; then
+        kill "$display_pid" 2>/dev/null || true
+        wait "$display_pid" 2>/dev/null || true
     fi
-    [ -z "$broadway_log" ] || rm -f "$broadway_log"
+    [ -z "$display_log" ] || rm -f "$display_log"
     [ -z "$stamp" ] || rm -f "$stamp"
     return 0
 }
@@ -34,32 +34,55 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
+# Waits up to 5 s for the display server in $display_pid to write a line
+# matching $1 to $display_log.
+wait_display_ready() {
+    local ready="$1" name="$2"
+    for ((attempt=0; attempt<100; attempt++)); do
+        if ! kill -0 "$display_pid" 2>/dev/null; then
+            echo "ci: private $name display failed to start" >&2
+            cat "$display_log" >&2
+            return 2
+        fi
+        if grep -q "$ready" "$display_log"; then
+            return 0
+        fi
+        sleep 0.05
+    done
+    echo "ci: private $name display did not become ready within 5s" >&2
+    return 2
+}
+
 prepare_test_display() {
     # Respect explicit displays, including an externally managed Broadway server.
     if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}${BROADWAY_DISPLAY:-}" ]; then
         return 0
     fi
+    display_log="$(mktemp)"
+    # Xvfb first: the window layout tests open 1280 and 1600 px windows, and
+    # gtk4-broadwayd has one 1024x768 monitor that clamps them, which puts the
+    # header below its 1500 sp breakpoint and fails 16 tests.
+    if command -v Xvfb >/dev/null 2>&1; then
+        # -displayfd: the server picks a free display number and writes it once
+        # it accepts clients, so parallel runs on one machine do not collide.
+        # Its stderr stays on the CI log: it says why a start failed.
+        Xvfb -displayfd 3 -screen 0 1920x1200x24 -nolisten tcp 3>"$display_log" &
+        display_pid=$!
+        wait_display_ready '^[0-9]' Xvfb || return 2
+        DISPLAY=":$(head -n1 "$display_log")"
+        export GDK_BACKEND=x11 DISPLAY
+        return 0
+    fi
     command -v gtk4-broadwayd >/dev/null 2>&1 || {
-        echo "ci: headless GTK tests require gtk4-broadwayd (libgtk-4-bin)" >&2
+        echo "ci: headless GTK tests require Xvfb (apt install xvfb)" >&2
         return 2
     }
-    broadway_log="$(mktemp)"
+    echo "ci: Xvfb not found; Broadway's 1024x768 monitor fails the window layout tests (apt install xvfb)" >&2
     export GDK_BACKEND=broadway BROADWAY_DISPLAY=":$$"
     # PID-unique GTK socket; HTTP binds loopback on a kernel-selected port.
-    gtk4-broadwayd --address=127.0.0.1 --port=0 "$BROADWAY_DISPLAY" >"$broadway_log" 2>&1 &
-    broadway_pid=$!
-    for ((attempt=0; attempt<100; attempt++)); do
-        if ! kill -0 "$broadway_pid" 2>/dev/null; then
-            echo "ci: private Broadway backend failed to start" >&2
-            return 2
-        fi
-        if grep -q '^Listening on ' "$broadway_log"; then
-            return 0
-        fi
-        sleep 0.05
-    done
-    echo "ci: private Broadway backend did not become ready within 5s" >&2
-    return 2
+    gtk4-broadwayd --address=127.0.0.1 --port=0 "$BROADWAY_DISPLAY" >"$display_log" 2>&1 &
+    display_pid=$!
+    wait_display_ready '^Listening on ' Broadway
 }
 
 # Mesmas versoes das features do crates/agentcenter/Cargo.toml (v4_22, v1_9).
@@ -93,7 +116,7 @@ cargo fmt --all --check
 step "cargo clippy --workspace --all-targets -- -D warnings"
 cargo clippy --workspace --all-targets -- -D warnings
 
-step "GTK test display (existing display or private local Broadway)"
+step "GTK test display (existing display or private Xvfb 1920x1200, Broadway as fallback)"
 prepare_test_display
 
 step "cargo test --workspace"
@@ -110,7 +133,7 @@ target_dir="$(cargo metadata --format-version 1 --no-deps \
 mkdir -p "$target_dir"
 # Marco antes do bench: o portao so aceita resultado gravado depois dele.
 stamp="$(mktemp "$target_dir/.bench-gate-stamp.XXXXXX")"
-# The EXIT handler above removes this stamp as well as our Broadway process.
+# The EXIT handler above removes this stamp as well as our display server.
 
 step "cargo bench -p agentcenter-core --bench tick -- $bench_id"
 cargo bench -p agentcenter-core --bench tick -- "$bench_id"
