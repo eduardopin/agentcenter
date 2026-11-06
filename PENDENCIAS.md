@@ -94,8 +94,9 @@ via Herdr (CC4), gauges por linha (CC8) e gráficos de cockpit no detalhe (CC9).
     claude_40 2,939 ms e delayacct 2,757 ms, com load 3–7 e sem máquina
     parada; a folga-alvo de 1,3x não foi atingida. FIX_FIRST leve na revisão, não
     corrigido: `task/` aberto sem `O_DIRECTORY` (uma FIFO numa raiz de fixture
-    trava a varredura; não ocorre em `/proc` real), falta teste de vazamento
-    de fd e de `O_CLOEXEC`, teste de alocação falha com `TMPDIR` maior que
+    trava a varredura; não ocorre em `/proc` real), falta teste de
+    `O_CLOEXEC` (o de vazamento de fd entrou em
+    `crates/agentcenter-core/tests/fd_leak.rs`, PR #3), teste de alocação falha com `TMPDIR` maior que
     ~205 caracteres, comparação de caminho por `Path` e não por bytes, buffer
     do `getdents64` sem alinhamento explícito. Exige glibc 2.30 ou mais nova.
 - [ ] Fazer o gate integral passar sem afrouxar testes ou orçamentos.
