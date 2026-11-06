@@ -23,11 +23,12 @@
 //!   caminho: o descompasso dura no maximo ate a proxima varredura, e em
 //!   `/proc` real nao existe.
 //!
-//! Custo limitado: no maximo metade do limite de fds do processo
-//! (`RLIMIT_NOFILE`, lido de `/proc/self/limits`) e no maximo dois por pid vivo
-//! do tick; alem disso, ou em EMFILE/ENFILE, a leitura segue o caminho
-//! `open`-`read`-`close` de sempre. Os fds sao do [`FdCache`], que e do
-//! `Sampler`: soltar o amostrador fecha todos.
+//! Custo limitado: o orcamento padrao e o limite de fds do processo
+//! (`RLIMIT_NOFILE`, lido de `/proc/self/limits`) menos uma folga (ver
+//! [`default_budget`]), no maximo dois fds por pid vivo do tick, e as entradas
+//! de quem saiu da sessao fecham na hora. Alem disso, ou em EMFILE/ENFILE, a
+//! leitura segue o caminho `open`-`read`-`close` de sempre. Os fds sao do [`FdCache`], que
+//! e do `Sampler`: soltar o amostrador fecha todos.
 //!
 //! Sem `unsafe`: o `pread` e o `FileExt::read_at` da std.
 
@@ -47,6 +48,11 @@ const MAX_BUDGET: usize = 8192;
 
 /// Orcamento quando o limite nao pode ser lido (sem `/proc/self/limits`).
 const FALLBACK_BUDGET: usize = 256;
+
+/// Folga minima que o orcamento padrao deixa livre no limite de fds para o
+/// resto do processo (sockets, arquivos de sessao, GTK, as aberturas
+/// transitorias do proprio tick).
+const MIN_SLACK: u64 = 256;
 
 /// EMFILE e ENFILE: sem fd livre, no processo ou no sistema.
 const EMFILE: i32 = 24;
@@ -318,15 +324,28 @@ impl FdCache {
     }
 }
 
-/// Orcamento padrao: metade do limite brando de fds do processo, ate [`MAX_BUDGET`].
+/// Orcamento padrao: o limite brando de fds do processo menos uma folga de
+/// `max(256, limite / 4)`, ate [`MAX_BUDGET`]. Metade do limite (o primeiro
+/// desenho) dava 512 com o `ulimit -n 1024` padrao do systemd, abaixo dos ~748
+/// fds de uma raiz com 374 processos de sessao, e o ganho sumia justo onde o
+/// limite e mais apertado; com a folga fixa de 256 (um quarto em limites
+/// altos) o 1024 vira 768, o bastante para uma raiz, e o resto do processo
+/// ainda tem onde abrir. Limite ilegivel: [`FALLBACK_BUDGET`]; `unlimited`:
+/// [`MAX_BUDGET`]; limite menor que a folga: 0 (cache desligado).
 fn default_budget() -> usize {
-    std::fs::read_to_string("/proc/self/limits")
-        .ok()
-        .as_deref()
-        .and_then(nofile_soft_limit)
-        .map_or(FALLBACK_BUDGET, |soft| {
-            (soft / 2).min(MAX_BUDGET as u64) as usize
-        })
+    budget_for_limit(
+        std::fs::read_to_string("/proc/self/limits")
+            .ok()
+            .as_deref()
+            .and_then(nofile_soft_limit),
+    )
+}
+
+fn budget_for_limit(soft: Option<u64>) -> usize {
+    soft.map_or(FALLBACK_BUDGET, |soft| {
+        let slack = MIN_SLACK.max(soft / 4);
+        soft.saturating_sub(slack).min(MAX_BUDGET as u64) as usize
+    })
 }
 
 /// Limite brando de fds (`Max open files`) de um `/proc/<pid>/limits`.
@@ -389,11 +408,24 @@ mod tests {
     }
 
     #[test]
-    fn default_budget_is_at_most_half_the_soft_limit() {
+    fn default_budget_leaves_room_below_the_soft_limit() {
+        // O padrao do systemd (1024) tem de cobrir uma raiz de 374 processos de
+        // sessao (748 fds); metade do limite dava 512.
+        assert_eq!(budget_for_limit(Some(1024)), 768);
+        assert!(budget_for_limit(Some(1024)) >= 2 * 374);
+        // Folga de um quarto em limites altos, de 256 nos baixos.
+        assert_eq!(budget_for_limit(Some(4096)), 3072);
+        assert_eq!(budget_for_limit(Some(512)), 256);
+        assert_eq!(budget_for_limit(Some(256)), 0);
+        assert_eq!(budget_for_limit(Some(100)), 0);
+        // Teto absoluto, `unlimited` e limite ilegivel.
+        assert_eq!(budget_for_limit(Some(524_288)), MAX_BUDGET);
+        assert_eq!(budget_for_limit(Some(u64::MAX)), MAX_BUDGET);
+        assert_eq!(budget_for_limit(None), FALLBACK_BUDGET);
+        // E o desta maquina respeita a mesma conta.
         let limits = fs::read_to_string("/proc/self/limits").unwrap();
         let soft = nofile_soft_limit(&limits).unwrap();
-        let budget = FdCache::default().budget() as u64;
-        assert!(budget > 0 && budget <= soft / 2 && budget <= MAX_BUDGET as u64);
+        assert_eq!(FdCache::default().budget(), budget_for_limit(Some(soft)));
     }
 
     #[test]
