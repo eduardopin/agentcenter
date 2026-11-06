@@ -20,7 +20,7 @@ const NON_UNIQUE_ENV: &str = "AGENTCENTER_NON_UNIQUE";
 
 /// Folhas da GUI num provedor so, tokens primeiro (as outras leem as
 /// variaveis). Direcao em docs/DESIGN.md; contraste em scripts/contrast.py.
-const STYLESHEET: &str = concat!(
+pub(crate) const STYLESHEET: &str = concat!(
     include_str!("../resources/tokens.css"),
     include_str!("../resources/sessions.css"),
     include_str!("../resources/memory_map.css"),

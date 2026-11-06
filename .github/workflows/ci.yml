@@ -49,9 +49,12 @@ jobs:
 
       - name: GTK4 + libadwaita
         if: env.GUI_DEPS == 'true'
+        # xvfb: the GUI tests need a 1920x1200 display (scripts/ci.sh).
+        # fonts-ubuntu: the stylesheets ask for Ubuntu Sans; the DejaVu
+        # fallback is wider and breaks the 840 px strip width test.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pkgconf libgtk-4-dev libgtk-4-bin libadwaita-1-dev desktop-file-utils xvfb
+          sudo apt-get install -y --no-install-recommends pkgconf libgtk-4-dev libgtk-4-bin libadwaita-1-dev desktop-file-utils xvfb fonts-ubuntu
 
       # Chave pelo Cargo.lock da raiz e pela versao do rustc (target/ compilado
       # por outro rustc nao serve). Restaura sempre; grava so em push na main,

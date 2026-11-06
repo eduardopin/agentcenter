@@ -1265,11 +1265,11 @@ mod tests {
     fn the_row_fits_840_px_when_medium() {
         gtk::test_synced(|| {
             adw::init().expect("isolated Broadway display required");
+            // The whole app sheet, as the window loads it: with tokens and
+            // timeline alone the row measured 868 px when run by itself, and
+            // passed only after other tests had left their sheets on the display.
             let provider = gtk::CssProvider::new();
-            provider.load_from_string(concat!(
-                include_str!("../resources/tokens.css"),
-                include_str!("../resources/timeline.css"),
-            ));
+            provider.load_from_string(crate::app::STYLESHEET);
             gtk::style_context_add_provider_for_display(
                 &gtk::gdk::Display::default().unwrap(),
                 &provider,
