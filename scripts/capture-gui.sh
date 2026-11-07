@@ -30,6 +30,21 @@
 # (ociosas por status e por CPU), nomes-longos e vazio (estado sem ociosas).
 # Saida: $OUT/<fixture>-reclaim-<LxA>-<tema>.png. Nao combina com --detail.
 # Precisa de sessao grafica (WAYLAND_DISPLAY ou DISPLAY).
+# detail_verdict <detail_settled> <detail_capped> <detail_x>: the app's three
+# lines for a --detail capture. Prints the failure and returns 1 when a line is
+# missing, the app gave up waiting for the push (detail_capped=1), or the page
+# is not at rest (detail_x is 0 at rest, 67 mid push). Defined before anything
+# runs so a test can source this file (measure.rs).
+detail_verdict() {
+    local settled=$1 capped=$2 x=$3
+    if [[ -z $settled || $capped != 0 ]] ||
+        ! awk -v x="$x" 'BEGIN { exit !(x != "" && x >= -1.5 && x <= 1.5) }'; then
+        echo "agentcenter: overflow: the detail transition never settled (detail_settled=${settled:-none} detail_capped=${capped:-none} detail_x=${x:-none})"
+        return 1
+    fi
+}
+[[ ${BASH_SOURCE[0]} != "$0" ]] && return 0
+
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -87,7 +102,7 @@ for fx in "${fixtures[@]}"; do
         for theme in $THEMES; do
             png=$OUT/$fx${DETAIL:+-detail}${PAGE:+-$PAGE}-$size-$theme.png
             rm -f "$png"
-            settled= detail_x=
+            settled='' detail_x=''
             # 200 ms por tick: os 3 frames de dados da captura saem em ~0,5 s.
             err=$(AGENTCENTER_SNAPSHOT_JSON=$json AGENTCENTER_SNAPSHOT_INTERVAL_MS=$interval \
                 ADW_DEBUG_COLOR_SCHEME=prefer-$theme AGENTCENTER_NON_UNIQUE=1 \
@@ -107,15 +122,13 @@ for fx in "${fixtures[@]}"; do
             # detail_px=0: o detalhe nao foi desenhado (a captura so tem a faixa).
             if [[ -n $DETAIL && ${DETAIL_BACK:-} != 1 ]]; then
                 detail_px=$(sed -n 's/^detail_px=//p' "$OUT/.stdout")
-                # detail_settled=<paints waited>: the app holds the capture until the
-                # push animation ends (measure.rs); no fixed sleep here. Absent, or at
-                # the cap (600), the capture may be mid-slide.
+                # The app holds the capture until the push animation ends and caps
+                # the wait itself (detail_capped=1, measure.rs); no sleep here.
                 settled=$(sed -n 's/^detail_settled=//p' "$OUT/.stdout")
-                # detail_x is the page's left edge at capture: 0 at rest, 67 mid push.
+                capped=$(sed -n 's/^detail_capped=//p' "$OUT/.stdout")
                 detail_x=$(sed -n 's/^detail_x=//p' "$OUT/.stdout")
-                at_rest() { awk -v x="$1" 'BEGIN { exit !(x != "" && x >= -1.5 && x <= 1.5) }'; }
-                if [[ -z $settled || $settled -ge 600 ]] || ! at_rest "$detail_x"; then
-                    err+="${err:+; }agentcenter: overflow: the detail transition never settled (detail_settled=${settled:-none} detail_x=${detail_x:-none})"
+                if ! verdict=$(detail_verdict "$settled" "$capped" "$detail_x"); then
+                    err+="${err:+; }$verdict"
                 fi
                 if [[ ${detail_px:-0} -le 0 ]]; then
                     err+="${err:+; }agentcenter: overflow: the detail never showed (detail_px=${detail_px:-none})"
