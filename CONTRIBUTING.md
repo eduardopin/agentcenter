@@ -42,6 +42,10 @@ If you get stuck, include your Linux distribution, `rustc --version`, the exact
 command, and its complete error in the issue. Never include live transcripts,
 credentials, agent prompts, or private project paths.
 
+A security vulnerability never goes in an issue: report it privately as
+[SECURITY.md](SECURITY.md) describes. Questions go to
+[Discussions](https://github.com/eduardopin/agentcenter/discussions).
+
 ## Build and test
 
 You need Rust from [rustup](https://rustup.rs) (stable, at least the
