@@ -42,12 +42,18 @@ const NAME_AT: usize = 19;
 /// principal (o kernel le o lider do grupo), entao `task/<pid>/stat` nao e relido.
 /// Sem `task/` legivel (processo que sumiu) a contagem e 0.
 pub fn count_d_threads(root: &ProcRoot, pid: u32, main_state: char, buf: &mut String) -> u32 {
+    d_threads_besides_main(root, pid, buf).map_or(0, |n| n + u32::from(main_state == 'D'))
+}
+
+/// Threads em `D` sem contar a principal, ou `None` se `task/` nao abre (processo
+/// que sumiu) ou nao lista. E o que [`count_d_threads`] soma ao estado do `stat`,
+/// separado para que a varredura de varios processos rode em paralelo
+/// ([`scan_d_threads`]) antes de o `stat` de cada um estar fechado.
+pub fn d_threads_besides_main(root: &ProcRoot, pid: u32, buf: &mut String) -> Option<u32> {
     root.note_read(pid, "task");
-    let Ok(dir) = root.with_pid_path(pid, "task", |p| File::open(p)) else {
-        return 0;
-    };
+    let dir = root.with_pid_path(pid, "task", |p| File::open(p)).ok()?;
     let dfd = dir.as_raw_fd();
-    let mut n = u32::from(main_state == 'D');
+    let mut n = 0u32;
     let mut dents = [0u8; DENTS_BUF];
     // "<nome>/stat\0": d_name tem no maximo 255 bytes.
     let mut rel = [0u8; 256 + 6];
@@ -59,7 +65,7 @@ pub fn count_d_threads(root: &ProcRoot, pid: u32, main_state: char, buf: &mut St
         if got < 0 && first {
             // `task` que abre mas nao lista (nao e diretorio): como o antigo
             // `read_dir`, que falhava ja na abertura, nada a contar.
-            return 0;
+            return None;
         }
         first = false;
         if got <= 0 {
@@ -116,5 +122,59 @@ pub fn count_d_threads(root: &ProcRoot, pid: u32, main_state: char, buf: &mut St
             }
         }
     }
-    n
+    Some(n)
+}
+
+/// Menos varreduras que isto rodam na thread de quem chama: criar thread custa
+/// mais que as ~60 syscalls de um processo de poucas threads.
+const PARALLEL_MIN_JOBS: usize = 24;
+
+/// Threads de varredura no maximo. A varredura e quase so syscall (`openat`,
+/// `read`, `close` por thread de cada processo), que o kernel atende em
+/// paralelo; mais de 4 nao paga o custo de criar as threads em maquina de 4 vCPU.
+const MAX_SCAN_WORKERS: usize = 4;
+
+fn scan_workers() -> usize {
+    // `available_parallelism` le o cgroup a cada chamada: uma vez so.
+    static WORKERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *WORKERS.get_or_init(|| {
+        std::thread::available_parallelism()
+            .map_or(1, |n| n.get())
+            .min(MAX_SCAN_WORKERS)
+    })
+}
+
+/// [`d_threads_besides_main`] de cada pid de `pids`, na mesma ordem. Com
+/// trabalho suficiente divide os pids entre threads (cada uma com o seu
+/// buffer); o resultado nao depende de como foram divididos.
+pub fn scan_d_threads(root: &ProcRoot, pids: &[u32]) -> Vec<Option<u32>> {
+    let workers = scan_workers().min(pids.len() / (PARALLEL_MIN_JOBS / 2));
+    if pids.len() < PARALLEL_MIN_JOBS || workers < 2 {
+        let mut buf = String::with_capacity(512);
+        return pids
+            .iter()
+            .map(|&p| d_threads_besides_main(root, p, &mut buf))
+            .collect();
+    }
+    let mut out: Vec<Option<u32>> = vec![None; pids.len()];
+    let chunk = pids.len().div_ceil(workers);
+    std::thread::scope(|s| {
+        let mut parts = pids.chunks(chunk).zip(out.chunks_mut(chunk));
+        // A ultima fatia roda aqui mesmo: uma thread a menos para criar.
+        let last = parts.next_back();
+        for (ps, os) in parts {
+            s.spawn(move || scan_slice(root, ps, os));
+        }
+        if let Some((ps, os)) = last {
+            scan_slice(root, ps, os);
+        }
+    });
+    out
+}
+
+fn scan_slice(root: &ProcRoot, pids: &[u32], out: &mut [Option<u32>]) {
+    let mut buf = String::with_capacity(512);
+    for (&p, o) in pids.iter().zip(out.iter_mut()) {
+        *o = d_threads_besides_main(root, p, &mut buf);
+    }
 }
