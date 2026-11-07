@@ -60,7 +60,7 @@ use crate::procfs::smaps::{SmapsRollup, parse_smaps_rollup};
 use crate::procfs::stat::Stat;
 use crate::procfs::status::{Status, parse_status};
 use crate::procfs::system::{CpuTotals, delayacct_enabled, read_cpu_totals};
-use crate::procfs::task::count_d_threads;
+use crate::procfs::task::{count_d_threads, scan_d_threads};
 use crate::procfs::{ProcRoot, ReadError};
 use crate::session::{ProcessMetrics, Session};
 use crate::snapshot::{IoStallSource, Machine, SCHEMA_VERSION, Snapshot};
@@ -218,6 +218,10 @@ pub struct Sampler {
     agents: HashMap<u32, AgentInfo>,
     /// Fds abertos de `stat` e `io` dos processos de sessao (ver `procfs::fdcache`).
     fds: FdCache,
+    /// Varreduras de `task/` do tick em curso, feitas antes da leitura dos
+    /// processos para rodarem em paralelo: pid -> (`starttime`, threads em `D`
+    /// fora a principal). Vazio fora de `tick`.
+    d_scans: HashMap<u32, (u64, Option<u32>)>,
 }
 
 impl Default for Sampler {
@@ -249,6 +253,7 @@ impl Sampler {
             quiet: HashSet::new(),
             agents: HashMap::new(),
             fds: FdCache::default(),
+            d_scans: HashMap::new(),
         };
         s.set_config(config);
         s
@@ -404,17 +409,25 @@ impl Sampler {
         let mut by_agent: HashMap<u32, Vec<ProcessMetrics>> = HashMap::with_capacity(members.len());
         let mut next_prev: HashMap<u32, Prev> = HashMap::with_capacity(attribution.owner.len());
         let mut quiet: HashSet<u32> = HashSet::with_capacity(self.quiet.len());
-        for (agent, pids) in members {
+        // Quais sessoes sao lidas neste tick: a quieta, nao selecionada e sem
+        // processo novo repete as metricas do tick anterior.
+        let members: Vec<(u32, Vec<u32>, bool)> = members
+            .into_iter()
+            .map(|(agent, pids)| {
+                let read = full
+                    || self.selected == Some(agent)
+                    || !self.quiet.contains(&agent)
+                    || pids.iter().any(|p| {
+                        self.prev
+                            .get(p)
+                            .is_none_or(|pr| pr.agent != agent || pr.metrics.is_none())
+                    });
+                (agent, pids, read)
+            })
+            .collect();
+        self.scan_threads(root, &members, &stats, delayacct);
+        for (agent, pids, read) in members {
             let selected = self.selected == Some(agent);
-            // Processo novo (ou que veio de outra sessao) acorda a sessao.
-            let read = full
-                || selected
-                || !self.quiet.contains(&agent)
-                || pids.iter().any(|p| {
-                    self.prev
-                        .get(p)
-                        .is_none_or(|pr| pr.agent != agent || pr.metrics.is_none())
-                });
             let procs = by_agent.entry(agent).or_default();
             if !read {
                 for pid in pids {
@@ -468,6 +481,7 @@ impl Sampler {
             }
         }
 
+        self.d_scans.clear();
         let mut sessions: Vec<Session> = Vec::with_capacity(by_agent.len());
         let mut agents: HashMap<u32, AgentInfo> = HashMap::with_capacity(by_agent.len());
         for (agent_pid, procs) in by_agent {
@@ -544,6 +558,45 @@ impl Sampler {
             sessions,
             summary,
         })
+    }
+
+    /// Varre `task/` dos processos que `read_process` vai varrer neste tick, todos
+    /// de uma vez: a varredura e quase so syscall e dividida entre threads
+    /// ([`scan_d_threads`]) custa uma fracao da feita processo a processo. Quem
+    /// mudou de `starttime` ou de contagem de threads entre aqui e a leitura
+    /// (o `stat` de sessao quieta e relido la) e varrido de novo la.
+    fn scan_threads(
+        &mut self,
+        root: &ProcRoot,
+        members: &[(u32, Vec<u32>, bool)],
+        stats: &HashMap<u32, Stat>,
+        delayacct: bool,
+    ) {
+        if delayacct {
+            return;
+        }
+        let mut due: Vec<(u32, u64)> = Vec::new();
+        for (agent, pids, read) in members {
+            if !read {
+                continue;
+            }
+            let selected = self.selected == Some(*agent);
+            for &pid in pids {
+                let Some(st) = stats.get(&pid).filter(|st| st.num_threads > 1) else {
+                    continue;
+                };
+                let same = self.prev.get(&pid).filter(|p| p.starttime == st.starttime);
+                let fresh = matches!(same, Some(p) if !selected
+                    && self.tick_no - p.mem.d_at < self.idle_every);
+                if !fresh {
+                    due.push((pid, st.starttime));
+                }
+            }
+        }
+        let pids: Vec<u32> = due.iter().map(|&(p, _)| p).collect();
+        for ((pid, start), others) in due.into_iter().zip(scan_d_threads(root, &pids)) {
+            self.d_scans.insert(pid, (start, others));
+        }
     }
 
     /// Le io; status, smaps_rollup e `task/` conforme a cadencia (ver o topo do
@@ -627,7 +680,13 @@ impl Sampler {
         } else {
             match cached {
                 Some(c) if !selected && tick - c.d_at < self.idle_every => (c.threads_d, c.d_at),
-                _ => (count_d_threads(root, pid, st.state, buf), tick),
+                _ => match self.d_scans.remove(&pid) {
+                    Some((start, others)) if start == st.starttime => (
+                        others.map_or(0, |n| n + u32::from(st.state == 'D')),
+                        tick,
+                    ),
+                    _ => (count_d_threads(root, pid, st.state, buf), tick),
+                },
             }
         };
 
