@@ -1911,7 +1911,11 @@ fn settle_paned(window: &Window) {
         .into_iter()
         .find_map(|w| w.downcast::<gtk::Paned>().ok())
         .expect("the window has a paned");
-    settle_until(|| paned.start_child().is_some_and(|c| c.height() == paned.position()));
+    settle_until(|| {
+        paned
+            .start_child()
+            .is_some_and(|c| c.height() == paned.position())
+    });
     settle();
 }
 
@@ -2007,7 +2011,10 @@ fn at_360_the_detail_page_does_not_overflow_sideways() {
             .into_iter()
             .find(|w| w.is::<adw::BreakpointBin>())
             .expect("the detail's breakpoint bin");
-        assert!(settle_until(|| page.width() > 0), "the detail page is laid out");
+        assert!(
+            settle_until(|| page.width() > 0),
+            "the detail page is laid out"
+        );
         let (least, _, _, _) = tb.measure(gtk::Orientation::Horizontal, -1);
         assert!(
             least <= 360,
@@ -2111,8 +2118,16 @@ fn at_360_the_maps_content_gets_the_height_it_asks_for() {
         let _font = DesktopLook::set();
         let window = open("io.agentcenter.Narrow360AskedQA", 360, 640, &tipico());
         settle_paned(&window);
-        let bin = window.map.widget().first_child().expect("the breakpoint bin");
-        let inner = bin.downcast::<adw::BreakpointBin>().unwrap().child().unwrap();
+        let bin = window
+            .map
+            .widget()
+            .first_child()
+            .expect("the breakpoint bin");
+        let inner = bin
+            .downcast::<adw::BreakpointBin>()
+            .unwrap()
+            .child()
+            .unwrap();
         let asked = inner.measure(gtk::Orientation::Vertical, inner.width()).1;
         assert!(
             inner.height() >= asked,
