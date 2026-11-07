@@ -111,6 +111,10 @@ cargo test -p agentcenter-core control:: --lib --offline
 cargo test -p agentcenter-core --test handoff_agentcenter --offline
 ```
 
+Tests create their private runtime directories under `XDG_RUNTIME_DIR` when it
+exists, else under `~/.ac-test-rt` (0700, short enough for a socket path), so
+a clean runner needs no `/run/user/UID`.
+
 Both SDK paths are required inputs; there are no developer-specific path
 defaults. Missing inputs or a missing private SDK fail, without skips or fallback. The cross-language
 fixture builds `examples/pi_control_probe.rs` offline and exercises Rust

@@ -1,8 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, readFile, readdir, lstat, rm } from 'node:fs/promises';
+import { readdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { createOperations } from './operations.mjs';
+import { privateBase } from './test-support.mjs';
 const P = process.env.PI_SDK_DIR;
 assert.ok(P, 'Set PI_SDK_DIR to the original read-only Pi SDK');
 const { ModelRuntime } = await import(`${P}/dist/core/model-runtime.js`);
@@ -12,8 +14,8 @@ const { createAssistantMessageEventStream } = await import(`${P}/node_modules/@e
 globalThis.fetch = () => { throw new Error('NETWORK FORBIDDEN'); };
 
 async function fixture(sessionId = 'synthetic') {
-  const root = await mkdtemp(`/run/user/${process.getuid()}/ac-op-`);
-  let leaf = 'leaf', busy = false, pending = false, calls = 0, finish;
+  const root = await mkdtemp(`${privateBase}/ac-op-`);
+  let leaf = 'leaf', busy = false, pending = false, calls = 0, changes = 0, finish;
   const runtime = await ModelRuntime.create({ credentials: AuthStorage.inMemory(), modelsPath: null, refreshOnCreate: false, allowModelNetwork: false });
   runtime.registerProvider('cc1-fake', { baseUrl: 'http://invalid.invalid', apiKey: 'synthetic', api: 'cc1-fake', models: [{ id: 'fake', name: 'fake', input: ['text'], reasoning: false, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 65536, maxTokens: 2048 }], streamSimple(model, context, options) {
     calls++;
@@ -32,15 +34,15 @@ async function fixture(sessionId = 'synthetic') {
     isIdle: () => !busy, hasPendingMessages: () => pending,
     sessionManager: { getGuardedCompactionState: () => ({ managerId: 'manager', revision: leaf === 'leaf' ? '1' : '2', sessionId, sessionFile: '/synthetic', leafId: leaf }), getSessionId: () => sessionId, getSessionFile: () => '/synthetic', getLeafId: () => leaf,
       buildSessionProjection: () => ({ messages: [{ role: 'user', content: 'Work request' }] }) } };
-  const manager = await createOperations({ getContext: () => ctx, outputRoot: root });
+  const manager = await createOperations({ getContext: () => ctx, outputRoot: root, onChange: () => { changes++; } });
   const { capabilities, handoff_directory, model_auth, ...identity } = manager.metadata();
   const request = { protocol_version: 2, operation_id: randomUUID(), action: 'handoff', ...identity };
-  return { ctx, manager, request, root, calls: () => calls, finish: overrides => finish(overrides), stale: () => { leaf = 'changed'; }, busy: () => { busy = true; }, pending: () => { pending = true; }, async close() { await manager.close(); await rm(root, { recursive: true, force: true }); } };
+  return { ctx, manager, request, root, calls: () => calls, changes: () => changes, finish: overrides => finish(overrides), stale: () => { leaf = 'changed'; }, busy: () => { busy = true; }, pending: () => { pending = true; }, async close() { await manager.close(); await rm(root, { recursive: true, force: true }); } };
 }
 test('SDK provider quota error returns only sanitized code and no artifact', async () => {
   const f = await fixture();
   try {
-    f.manager.dispatch(f.request); await tick();
+    f.manager.dispatch(f.request); await waitCall(f);
     f.finish({ stopReason: 'error', errorMessage: '429 quota synthetic-private-provider-detail', content: [] });
     const result = await terminal(f);
     assert.equal(result.state, 'failed');
@@ -74,8 +76,11 @@ test('deadline aborts SDK provider wait and late delivery cannot publish', async
 test('unit retention tombstones expire without restarting an operation', async t => {
   const f = await fixture();
   try {
-    f.manager.dispatch(f.request); await tick(); f.finish();
+    f.manager.dispatch(f.request); await waitCall(f); f.finish();
     assert.equal((await terminal(f)).state, 'completed');
+    // The result is visible before the record's `finished` stamp: the last onChange
+    // (start, then cleanup) comes after it. Mocking Date earlier stamps mocked time.
+    await settled(f, 2);
     t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
     t.mock.timers.tick(30 * 60 * 1000 + 1);
     assert.equal(f.manager.dispatch({ ...f.request, action: 'status' }).code, 'expired');
@@ -98,6 +103,7 @@ test('128 retained tombstones reject a 129th ID without eviction or a second eff
       assert.equal(result.state, 'completed');
       receipts.push({ request, result });
     }
+    await settled(f, 256);
     assert.equal(effects, 128);
     const overflow = { ...f.request, action: 'compact', operation_id: randomUUID() };
     assert.equal(f.manager.dispatch(overflow).code, 'capacity');
@@ -199,7 +205,7 @@ test('SDK fake provider generates real private artifact exactly once; duplicate 
   const f = await fixture();
   try {
     assert.equal(f.manager.dispatch(f.request).state, 'accepted');
-    await tick();
+    await waitCall(f);
     assert.equal(f.manager.dispatch(f.request).state, 'running');
     assert.equal(f.calls(), 1);
     assert.equal(f.manager.dispatch({ ...f.request, operation_id: randomUUID() }).code, 'busy');
@@ -220,12 +226,12 @@ test('SDK fake provider generates real private artifact exactly once; duplicate 
 });
 test('stale revision after generation discards artifact; metadata refresh keeps nonce', async () => {
   const f = await fixture();
-  try { f.manager.dispatch(f.request); await tick(); f.stale(); f.finish(); assert.equal((await terminal(f)).code, 'stale_revision'); assert.equal(f.manager.metadata().instance_nonce, f.request.instance_nonce); }
+  try { f.manager.dispatch(f.request); await waitCall(f); f.stale(); f.finish(); assert.equal((await terminal(f)).code, 'stale_revision'); assert.equal(f.manager.metadata().instance_nonce, f.request.instance_nonce); }
   finally { await f.close(); }
 });
 test('cancel aborts only generation and never creates completed; busy/pending refuse dispatch', async () => {
   const f = await fixture();
-  try { f.manager.dispatch(f.request); await tick(); f.manager.dispatch({ ...f.request, action: 'cancel' }); assert.equal((await terminal(f)).state, 'cancelled'); f.finish(); await tick(); assert.equal((await terminal(f)).state, 'cancelled'); }
+  try { f.manager.dispatch(f.request); await waitCall(f); f.manager.dispatch({ ...f.request, action: 'cancel' }); assert.equal((await terminal(f)).state, 'cancelled'); f.finish(); await tick(); assert.equal((await terminal(f)).state, 'cancelled'); }
   finally { await f.close(); }
   for (const condition of ['busy', 'pending']) { const g = await fixture(); try { g[condition](); assert.equal(g.manager.dispatch(g.request).code, 'busy'); assert.equal(g.calls(), 0); } finally { await g.close(); } }
 });
@@ -246,3 +252,54 @@ test('well-formed wrong nonce is unauthorized for every action without model cal
     assert.equal(f.manager.dispatch({ ...f.request, action: 'status' }).code, 'unknown_operation');
   } finally { await f.close(); }
 });
+
+test('same operation ID with a different identity field is duplicate_mismatch, with no second effect', async () => {
+  const f = await fixture();
+  try {
+    f.manager.dispatch(f.request); await waitCall(f);
+    for (const mutate of [
+      request => ({ ...request, expected: { ...request.expected, leafId: 'other' } }),
+      request => ({ ...request, expected: { ...request.expected, revision: '99' } }),
+      request => ({ ...request, expected: { ...request.expected, managerId: 'other' } }),
+      request => ({ ...request, action: 'compact' }),
+    ]) {
+      const result = f.manager.dispatch(mutate(f.request));
+      assert.ok(['duplicate_mismatch', 'stale_instance', 'stale_revision'].includes(result.code), result.code);
+      assert.notEqual(result.state, 'accepted');
+    }
+    // status with the same fingerprint still observes the original operation.
+    assert.equal(f.manager.dispatch({ ...f.request, action: 'status' }).state, 'running');
+    assert.equal(f.calls(), 1);
+  } finally { await f.close(); }
+});
+
+test('a different process_starttime is stale_instance and reaches no model', async () => {
+  const f = await fixture();
+  try {
+    for (const action of ['handoff', 'compact', 'status', 'cancel']) {
+      const result = f.manager.dispatch({ ...f.request, action, process_starttime: `${f.request.process_starttime}0` });
+      assert.deepEqual([result.state, result.code], ['rejected', 'stale_instance'], action);
+    }
+    assert.equal(f.calls(), 0);
+    assert.deepEqual(await readdir(f.root), []);
+  } finally { await f.close(); }
+});
+
+test('state that changes only after the artifact is linked discards it', async () => {
+  const f = await fixture();
+  try {
+    // Flip the leaf the moment a published (non-dot) artifact exists: only the
+    // check after link() can see it.
+    const state = f.ctx.sessionManager.getGuardedCompactionState;
+    f.ctx.sessionManager.getGuardedCompactionState = () => readdirSync(f.root).some(name => !name.startsWith('.'))
+      ? { ...state(), revision: '2', leafId: 'changed' } : state();
+    f.manager.dispatch(f.request); await waitCall(f); f.finish();
+    const result = await terminal(f);
+    assert.equal(result.state, 'rejected');
+    assert.equal(result.code, 'stale_revision');
+    assert.equal(result.artifact_path, undefined);
+    assert.deepEqual(await readdir(f.root), []);
+  } finally { await f.close(); }
+});
+async function waitCall(f) { for (let i = 0; i < 1000 && f.calls() === 0; i++) await new Promise(resolve => setImmediate(resolve)); assert.equal(f.calls(), 1); }
+async function settled(f, changes) { for (let i = 0; i < 1000 && f.changes() < changes; i++) await new Promise(resolve => setImmediate(resolve)); assert.ok(f.changes() >= changes); }

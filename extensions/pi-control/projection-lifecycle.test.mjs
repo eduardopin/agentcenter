@@ -4,6 +4,7 @@ import {mkdtemp,mkdir,readFile,readdir,rm} from 'node:fs/promises';
 import {join} from 'node:path';
 import {createConnection} from 'node:net';
 import {randomUUID} from 'node:crypto';
+import { privateBase } from './test-support.mjs';
 const SDK=process.env.AGENTCENTER_GUARDED_PI_SDK;
 assert.ok(SDK, 'Set AGENTCENTER_GUARDED_PI_SDK to a prepared private runtime');
 const EXTENSION=new URL('./index.ts',import.meta.url).pathname;
@@ -11,7 +12,7 @@ const {createAgentSession,ModelRuntime,AuthStorage,SessionManager,SettingsManage
 const {createAssistantMessageEventStream}=await import(`${SDK}/node_modules/@earendil-works/pi-ai/dist/index.js`);
 globalThis.fetch=()=>{throw Error('NETWORK FORBIDDEN')};
 async function setup() {
- const root=await mkdtemp(`/run/user/${process.getuid()}/cc1-verif-`); const runtimeDir=join(root,'runtime'); await mkdir(runtimeDir,{mode:0o700});
+ const root=await mkdtemp(`${privateBase}/cc1-verif-`); const runtimeDir=join(root,'runtime'); await mkdir(runtimeDir,{mode:0o700});
  const old={XDG_RUNTIME_DIR:process.env.XDG_RUNTIME_DIR,XDG_STATE_HOME:process.env.XDG_STATE_HOME};
  process.env.XDG_RUNTIME_DIR=runtimeDir;process.env.XDG_STATE_HOME=root;
  const prompts=[];
