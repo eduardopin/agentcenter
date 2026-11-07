@@ -365,12 +365,16 @@ fn spawned_sampler_delivers_frames_by_channel_and_stops_on_drop() {
         interval: Duration::from_millis(100),
         ..SamplerConfig::default()
     };
+    // O relogio parte antes do spawn: a thread publica o primeiro frame na hora
+    // (tick em `next = Instant::now()`), entao o 4o sai em spawn + 3 intervalos.
+    // Medir depois do spawn/select deixava o primeiro frame fora da conta e o
+    // piso dependia de a thread de teste ser escalonada em menos de 20 ms.
+    let start = Instant::now();
     let handle = Sampler::with_config(Registry::default(), config).spawn(root.clone(), true);
     handle.select(Some(30));
-    let start = Instant::now();
     let frames: Vec<_> = (0..4).map(|_| handle.recv().unwrap().unwrap()).collect();
     let elapsed = start.elapsed();
-    assert!(elapsed >= Duration::from_millis(280), "ritmo: {elapsed:?}");
+    assert!(elapsed >= Duration::from_millis(300), "ritmo: {elapsed:?}");
     let last = frames.last().unwrap();
     assert_eq!(last.snapshot.sessions.len(), 2);
     let h = last.history.as_ref().unwrap();
