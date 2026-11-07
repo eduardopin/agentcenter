@@ -116,6 +116,7 @@ fn settle_cap() -> u32 {
 /// header bar overhangs by [`OVERHANG_PX`]). Mid push the page spans x 67..907
 /// in an 840 window (bug 08da96cb). `None`: not drawn yet, wait for it.
 /// After `tries` paints without settling, give up waiting.
+#[cfg(test)]
 fn detail_settled(left_edge: Option<f32>, tries: u32) -> bool {
     detail_settled_within(left_edge, tries, DETAIL_SETTLE_TRIES)
 }
