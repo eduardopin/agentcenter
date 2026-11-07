@@ -31,8 +31,13 @@ cl = text("CHANGELOG.md")
 if cl:
     if "keepachangelog.com" not in cl: fail("CHANGELOG.md: no Keep a Changelog reference")
     if not re.search(r"^## \[Unreleased\]\s*$", cl, re.M): fail("CHANGELOG.md: no '## [Unreleased]' heading")
-    for h in ("Added", "Changed", "Fixed"):
-        if not re.search(rf"^### {h}\s*$", cl, re.M): fail(f"CHANGELOG.md: no '### {h}' section")
+    # Keep a Changelog allows any subset of its six change types per release.
+    kinds = {"Added", "Changed", "Deprecated", "Removed", "Fixed", "Security"}
+    unrel = re.search(r"^## \[Unreleased\]\s*$(.*?)(?=^## |\Z)", cl, re.M | re.S)
+    heads = re.findall(r"^### (.+?)\s*$", unrel.group(1), re.M) if unrel else []
+    if unrel and not heads: fail("CHANGELOG.md: [Unreleased] has no '### <type>' section")
+    for h in heads:
+        if h not in kinds: fail(f"CHANGELOG.md: '### {h}' is not a Keep a Changelog type")
 
 sec = text("SECURITY.md")
 if sec:
