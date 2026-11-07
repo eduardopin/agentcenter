@@ -1023,9 +1023,10 @@ impl Ui {
     pub fn needed_height(&self, width: i32) -> i32 {
         let (_, page, _, _) = self.root.measure(gtk::Orientation::Vertical, width);
         let (_, bin, _, _) = self.bin.measure(gtk::Orientation::Vertical, width);
-        let child = self.bin.child().map_or(0, |c| {
-            c.measure(gtk::Orientation::Vertical, width).1
-        });
+        let child = self
+            .bin
+            .child()
+            .map_or(0, |c| c.measure(gtk::Orientation::Vertical, width).1);
         // The bin allocates its child no more than the reference layout's
         // height and clips the rest; ask for what the child needs.
         self.bin.set_size_request(280, child);
