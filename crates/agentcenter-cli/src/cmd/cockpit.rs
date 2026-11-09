@@ -22,8 +22,8 @@ hit, re-read share and payback, and below it the reasons (`motivo:`).
 Transcripts are read in full; sampling repeats until every matched
 transcript is read or the timeout runs out. On timeout what is ready is
 printed, stderr says how many sessions are still reading, and the exit code
-is 0. A timeout shorter than the first sample prints that
-sample alone, without rates (interval 0).
+is 0. The first sample is always awaited: when it alone runs past the
+timeout, the command returns right after it, without rates (interval 0).
 
   --json            print the snapshot as JSON (same as `snapshot --json`)
   --all             also list idle sessions (OCIOSA), hidden by default
@@ -889,18 +889,26 @@ mod tests {
 
     #[test]
     fn sample_does_not_start_the_second_tick_after_a_first_one_that_ate_the_deadline() {
-        // O primeiro tick passa do prazo sozinho (maquina carregada): o segundo
-        // nao pode somar mais um tick inteiro ao tempo de espera.
+        // O primeiro tick passa do prazo sozinho (maquina carregada): a chamada
+        // volta com ele e a thread nao comeca o segundo.
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        let make = move || {
+            move || -> Result<Snapshot, String> {
+                let n = seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(if n == 0 { MS(400) } else { MS(0) });
+                let mut s = snap_with(vec![]);
+                s.taken_at_ms = n as u64 + 1;
+                s.summary.cockpit_pending = 1;
+                Ok(s)
+            }
+        };
         let t0 = Instant::now();
-        let snap = sample_with(
-            fake_tick(vec![MS(1_500), MS(1_500)], vec![1, 0]),
-            MS(1),
-            MS(1),
-            MS(200),
-        )
-        .unwrap();
+        let snap = sample_with(make, MS(1), MS(1), MS(200)).unwrap();
         assert_eq!(snap.taken_at_ms, 1);
         assert!(t0.elapsed() < MS(2_500), "{:?}", t0.elapsed());
+        std::thread::sleep(MS(300));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
