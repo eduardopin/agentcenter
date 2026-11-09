@@ -1304,14 +1304,6 @@ impl Ui {
         } else {
             gtk::Orientation::Vertical
         });
-        // Narrow, the chips stack under each other so the strips below stay
-        // in view.
-        self.chips_row.set_orientation(if strips {
-            gtk::Orientation::Vertical
-        } else {
-            gtk::Orientation::Horizontal
-        });
-        self.chips_row.set_spacing(if strips { 4 } else { 10 });
         // The verdict line under the chips says the same; the caption goes.
         if let Some(caption) = self.chips_row.first_child() {
             caption.set_visible(!strips);
