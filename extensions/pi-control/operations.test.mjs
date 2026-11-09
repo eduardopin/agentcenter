@@ -84,9 +84,9 @@ test('unit retention tombstones expire without restarting an operation', async t
     t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
     // Just inside retention the record is still served. The margin covers the real
     // milliseconds between the `finished` stamp and the mock starting.
-    t.mock.timers.tick(30 * 60 * 1000 - 100);
+    t.mock.timers.tick(30 * 60 * 1000 - 1000);
     assert.equal(f.manager.dispatch({ ...f.request, action: 'status' }).state, 'completed');
-    t.mock.timers.tick(101);
+    t.mock.timers.tick(1001);
     assert.equal(f.manager.dispatch({ ...f.request, action: 'status' }).code, 'expired');
     assert.equal(f.manager.dispatch(f.request).code, 'expired');
     assert.equal(f.calls(), 1);

@@ -136,13 +136,15 @@ test('at most 4 connections are held; a 5th is destroyed and a freed slot is reu
   try {
     for (let i = 0; i < 4; i++) held.push(await open(endpoint));
     await new Promise(resolve => setTimeout(resolve, 50));
+    // A 5th while all 4 are held is destroyed. Checked before the 4th answers,
+    // because answering closes the 4th and frees its slot.
+    const fifth = await raw(endpoint, frame(endpoint));
+    assert.deepEqual(fifth, { result: '', closed: true });
     // The 4th connection is within the limit: it stays open and answers.
     assert.equal(held[3].destroyed, false);
     const answer = new Promise(resolve => { let data = ''; held[3].on('data', d => { data += d; }); held[3].once('end', () => resolve(JSON.parse(data))); });
     held[3].write(frame(endpoint) + '\n');
     assert.equal((await answer).code, 'disabled');
-    const fifth = await raw(endpoint, frame(endpoint));
-    assert.deepEqual(fifth, { result: '', closed: true });
     const gone = closes(held[0]);
     held[0].destroy(); await gone;
     await new Promise(resolve => setTimeout(resolve, 50));
