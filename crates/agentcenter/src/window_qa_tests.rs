@@ -2138,3 +2138,140 @@ fn at_360_the_maps_content_gets_the_height_it_asks_for() {
         settle();
     });
 }
+
+fn paned_of(window: &Window) -> gtk::Paned {
+    descendants(window.window.upcast_ref())
+        .into_iter()
+        .find_map(|w| w.downcast::<gtk::Paned>().ok())
+        .expect("the window has a paned")
+}
+
+/// The top of the paned is what the strips ask for (never the 64 px default
+/// the narrow mode starts from), and the list keeps its chrome. Checked after
+/// a busier snapshot, the case the re-clamp on every map render is for.
+#[test]
+fn at_360_the_paned_top_is_at_least_what_the_maps_need() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let calm: Snapshot =
+            serde_json::from_str(include_str!("../tests/fixtures/snapshots/vazio.json")).unwrap();
+        let window = open("io.agentcenter.Narrow360PanedQA", 360, 640, &calm);
+        settle_paned(&window);
+        window.apply(Ok(Frame {
+            snapshot: Arc::new(tipico()),
+            history: None,
+        }));
+        settle_paned(&window);
+        let paned = paned_of(&window);
+        let need = window.map.needed_height(content_stack(&window).width());
+        assert!(
+            need > STRIPS_TOP_PX,
+            "the strips need {need} px, no more than the {STRIPS_TOP_PX} px default"
+        );
+        assert!(
+            paned.position() >= need,
+            "the paned top is {} px, the maps need {need}",
+            paned.position()
+        );
+        assert!(
+            paned.position() <= paned.height() - LIST_CHROME_PX,
+            "the paned top {} px leaves the list less than its {LIST_CHROME_PX} px chrome of {}",
+            paned.position(),
+            paned.height()
+        );
+        window.window.close();
+        settle();
+    });
+}
+
+/// tipico-40 with names and an agent type no 360 px window has room for:
+/// long names unbreakable at any point, so only ellipsizing keeps them in.
+fn long_names() -> Snapshot {
+    let mut snap = tipico();
+    for (i, s) in snap.sessions.iter_mut().enumerate() {
+        if let Some(o) = s.overlay.as_mut() {
+            o.name = Some(format!("{}{i}", "n".repeat(90)));
+        }
+        if i == 0 {
+            s.agent = "a".repeat(70);
+        }
+    }
+    snap
+}
+
+/// Names of any length: the chip's name and the dropdown's items give way,
+/// since a minimum above the window's makes GTK allocate past the edge.
+#[test]
+fn at_360_long_names_do_not_widen_the_window() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360LongQA", 360, 640, &long_names());
+        settle_paned(&window);
+        let root = window.window.clone();
+        let whole = gtk::graphene::Rect::new(0.0, 0.0, 360.0, 640.0);
+        let content = window.window.content().expect("window content");
+        let (least, _, _, _) = content.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            least <= 360,
+            "content needs {least} px at the least, 360 given"
+        );
+        assert!(
+            !mapped_with_class(&window, "chip").is_empty(),
+            "the waiting chips are shown"
+        );
+        // The stock item factory sizes the button to its longest item (155 and
+        // 122 px here, 57 and 53 with the ellipsizing label); the two together
+        // keep to half the window, or the order bar has no room for its label.
+        let least_widths: i32 = descendants(root.upcast_ref())
+            .into_iter()
+            .filter(|w| w.is_mapped() && w.is::<gtk::DropDown>())
+            .map(|d| d.measure(gtk::Orientation::Horizontal, -1).0)
+            .sum();
+        assert!(
+            least_widths <= 180,
+            "the dropdowns need {least_widths} px at the least, half the window is 180"
+        );
+        let mut clipped = Vec::new();
+        for w in descendants(root.upcast_ref())
+            .into_iter()
+            .filter(|w| w.is_mapped() && (w.has_css_class("chip") || w.is::<gtk::DropDown>()))
+        {
+            let b = bounds_in(&w, &root);
+            if !inside(&b, &whole) {
+                clipped.push(format!("{} {b:?} outside {whole:?}", w.type_().name()));
+            }
+        }
+        assert!(clipped.is_empty(), "{}", clipped.join("; "));
+        window.window.close();
+        settle();
+    });
+}
+
+/// The compact cells take 6 px all round: the 2 x 2 grid has no room for the
+/// 12 px sides of the wide row.
+#[test]
+fn at_360_the_machine_strip_cells_take_the_compact_padding() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360PaddingQA", 360, 640, &tipico());
+        settle_paned(&window);
+        let strip = descendants(window.window.upcast_ref())
+            .into_iter()
+            .find(|w| w.is_mapped() && w.has_css_class("machine-strip"))
+            .expect("the machine strip");
+        assert!(strip.has_css_class("compact"), "the strip is compact");
+        // A widget's width() is its content box; the allocation adds the padding.
+        let cell = strip.first_child().expect("a strip cell");
+        let outer = cell.compute_bounds(&strip).expect("laid out");
+        let (across, down) = (
+            outer.width() - cell.width() as f32,
+            outer.height() - cell.height() as f32,
+        );
+        assert!(
+            (across - 12.0).abs() < 0.5 && (down - 12.0).abs() < 0.5,
+            "the cell's padding takes {across} x {down} px, the compact padding is 6 + 6 each way"
+        );
+        window.window.close();
+        settle();
+    });
+}
