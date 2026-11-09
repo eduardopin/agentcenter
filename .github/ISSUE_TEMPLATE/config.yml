@@ -1,0 +1,9 @@
+# Questions go to Discussions and vulnerabilities to a private advisory, not the tracker.
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/eduardopin/agentcenter/security/advisories/new
+    about: Report it privately. Do not open a public issue.
+  - name: Ask a question
+    url: https://github.com/eduardopin/agentcenter/discussions
+    about: Questions and ideas that are not a bug or a feature request.

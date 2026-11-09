@@ -1,0 +1,54 @@
+name: Bug report
+description: Something in AgentCenter does not work as documented.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Security problems go through the Security tab ("Report a vulnerability"), not here.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you saw, and what you expected to see.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Start two Claude Code sessions
+        2. Open the detail page of one
+        3. ...
+    validations:
+      required: true
+  - type: dropdown
+    id: front-end
+    attributes:
+      label: Front end
+      options:
+        - agentcenter (GUI)
+        - agentcenter-cli
+        - install.sh
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version or commit
+      description: The About dialog shows the build stamp; for the CLI, run `git rev-parse --short HEAD` in your checkout.
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Distribution, GTK and libadwaita versions
+      placeholder: Ubuntu 26.04, GTK 4.22, libadwaita 1.9
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or a screenshot
+      description: Remove anything private, such as session names or paths.
+      render: shell

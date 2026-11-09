@@ -106,6 +106,9 @@ else
 fi
 bash scripts/test-install.sh
 
+step "hygiene: CHANGELOG, SECURITY, issue forms, dependabot"
+bash scripts/test-hygiene.sh
+
 step "cargo fmt --all --check"
 cargo fmt --all --check
 
