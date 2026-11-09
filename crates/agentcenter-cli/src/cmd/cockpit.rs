@@ -121,15 +121,59 @@ fn nap(d: Duration, deadline: Instant) {
 /// Dois ticks, como o `snapshot`, e mais ate nenhum transcript casado estar
 /// lendo (`summary.cockpit_pending == 0`) ou o prazo acabar.
 fn sample(root: &ProcRoot, config: SamplerConfig, timeout: Duration) -> Result<Snapshot, String> {
+    let root = root.clone();
+    let make = move || {
+        let mut sampler = Sampler::with_config(Registry::from_env(), config);
+        move || {
+            sampler
+                .tick(&root)
+                .map_err(|e| format!("reading {}: {e}", root.path().display()))
+        }
+    };
+    sample_with(make, FIRST_GAP, RETRY_GAP, timeout)
+}
+
+/// O laco de `sample` sobre um `tick` qualquer (os testes o trocam).
+///
+/// Os ticks rodam numa thread a parte e quem espera e esta, com `recv_timeout`
+/// ate o prazo: um tick nao e interrompivel, e numa maquina carregada ele passa
+/// dos segundos (varre todo o `/proc`). Com o laco na thread principal o prazo
+/// so era olhado entre ticks e o `--timeout-ms` estourava por um tick inteiro
+/// ou mais. So o primeiro snapshot e esperado sem prazo: sem ele nao ha o que
+/// mostrar. A thread fica para tras quando o prazo vence; o processo sai logo.
+fn sample_with<F, T>(
+    make: F,
+    first_gap: Duration,
+    retry_gap: Duration,
+    timeout: Duration,
+) -> Result<Snapshot, String>
+where
+    F: FnOnce() -> T + Send + 'static,
+    T: FnMut() -> Result<Snapshot, String>,
+{
     let deadline = Instant::now() + timeout;
-    let mut sampler = Sampler::with_config(Registry::from_env(), config);
-    let err = |e| format!("reading {}: {e}", root.path().display());
-    sampler.tick(root).map_err(err)?;
-    nap(FIRST_GAP, deadline);
-    let mut snap = sampler.tick(root).map_err(err)?;
-    while snap.summary.cockpit_pending > 0 && Instant::now() < deadline {
-        nap(RETRY_GAP, deadline);
-        snap = sampler.tick(root).map_err(err)?;
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut tick = make();
+        for n in 1u32.. {
+            let res = tick();
+            // Dois ticks sempre (a taxa nasce do segundo); depois, ate nada ler.
+            let last = match &res {
+                Ok(s) => n >= 2 && s.summary.cockpit_pending == 0,
+                Err(_) => true,
+            };
+            if tx.send(res).is_err() || last {
+                return;
+            }
+            nap(if n == 1 { first_gap } else { retry_gap }, deadline);
+            if Instant::now() >= deadline {
+                return;
+            }
+        }
+    });
+    let mut snap = rx.recv().map_err(|_| "sampler thread died".to_string())??;
+    while let Ok(next) = rx.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
+        snap = next?;
     }
     Ok(snap)
 }
@@ -779,6 +823,91 @@ mod tests {
             render(&snap, true, None),
             "0 handoff, 0 compactar, 0 continuar, 0 ociosas | burn - | cache -\n\
              nenhuma sessao no recorte\n"
+        );
+    }
+
+    /// Um tick falso: dorme `cost`, devolve um snapshot marcado com o numero do
+    /// tick (`taken_at_ms`) e com `pending[n]` transcripts lendo.
+    fn fake_tick(
+        cost: Vec<Duration>,
+        pending: Vec<usize>,
+    ) -> impl FnOnce() -> Box<dyn FnMut() -> Result<Snapshot, String> + Send> {
+        move || {
+            let mut base = snap_with(vec![]);
+            let mut n = 0usize;
+            Box::new(move || {
+                std::thread::sleep(cost.get(n).copied().unwrap_or_default());
+                base.taken_at_ms = n as u64 + 1;
+                base.summary.cockpit_pending = pending.get(n).copied().unwrap_or(0);
+                n += 1;
+                Ok(base.clone())
+            })
+        }
+    }
+
+    const MS: fn(u64) -> Duration = Duration::from_millis;
+
+    #[test]
+    fn sample_stops_at_the_second_tick_when_nothing_is_reading() {
+        let snap = sample_with(fake_tick(vec![], vec![0, 0]), MS(1), MS(1), MS(5_000)).unwrap();
+        assert_eq!(snap.taken_at_ms, 2);
+    }
+
+    #[test]
+    fn sample_retries_until_no_transcript_is_reading() {
+        let snap = sample_with(
+            fake_tick(vec![], vec![2, 2, 1, 0, 0]),
+            MS(1),
+            MS(1),
+            MS(5_000),
+        )
+        .unwrap();
+        assert_eq!(snap.taken_at_ms, 4);
+    }
+
+    #[test]
+    fn sample_gives_up_with_the_last_tick_when_the_deadline_passes_between_ticks() {
+        let snap = sample_with(fake_tick(vec![], vec![1; 1000]), MS(1), MS(20), MS(150)).unwrap();
+        assert!(snap.summary.cockpit_pending == 1 && snap.taken_at_ms > 2);
+    }
+
+    #[test]
+    fn sample_does_not_wait_for_a_tick_that_runs_past_the_deadline() {
+        // O segundo tick leva 3 s e o prazo e de 300 ms: sai com o primeiro.
+        let t0 = Instant::now();
+        let snap = sample_with(
+            fake_tick(vec![MS(0), MS(3_000)], vec![1, 0]),
+            MS(1),
+            MS(1),
+            MS(300),
+        )
+        .unwrap();
+        assert_eq!(snap.taken_at_ms, 1);
+        assert!(t0.elapsed() < MS(2_000), "{:?}", t0.elapsed());
+    }
+
+    #[test]
+    fn sample_does_not_start_the_second_tick_after_a_first_one_that_ate_the_deadline() {
+        // O primeiro tick passa do prazo sozinho (maquina carregada): o segundo
+        // nao pode somar mais um tick inteiro ao tempo de espera.
+        let t0 = Instant::now();
+        let snap = sample_with(
+            fake_tick(vec![MS(1_500), MS(1_500)], vec![1, 0]),
+            MS(1),
+            MS(1),
+            MS(200),
+        )
+        .unwrap();
+        assert_eq!(snap.taken_at_ms, 1);
+        assert!(t0.elapsed() < MS(2_500), "{:?}", t0.elapsed());
+    }
+
+    #[test]
+    fn sample_reports_a_tick_error() {
+        let make = || || -> Result<Snapshot, String> { Err("boom".into()) };
+        assert_eq!(
+            sample_with(make, MS(1), MS(1), MS(100)).unwrap_err(),
+            "boom"
         );
     }
 }

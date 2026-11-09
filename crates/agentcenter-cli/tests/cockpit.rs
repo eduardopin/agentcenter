@@ -329,13 +329,28 @@ fn cockpit_table_and_json_match_the_c21_reference_values() {
 #[test]
 fn cockpit_times_out_with_what_it_has_and_says_how_many_are_reading() {
     let w = world(&["claude"]);
+    // Piso da maquina agora: start-up mais o primeiro tick, que varre o /proc
+    // inteiro, nao se interrompe e o teto nao alcanca. `--timeout-ms 0` sai
+    // logo depois dele.
+    // O maior de dois: a carga oscila e o piso so pode errar para cima.
+    let floor = (0..2)
+        .map(|_| {
+            let env = [("AGENTCENTER_COCKPIT_READ_BUDGET", "1")];
+            w.cli(&["--timeout-ms", "0"], &env).1
+        })
+        .max()
+        .unwrap();
     let (out, took) = w.cli(
         &["--timeout-ms", "1500"],
         &[("AGENTCENTER_COCKPIT_READ_BUDGET", "1")],
     );
     let err = stderr(&out);
     assert!(out.status.success(), "{err}");
-    assert!(took <= Duration::from_millis(1500 + 1000), "{took:?}");
+    // O teto e honrado: so o piso pode passar dele; sobra a folga de 1 s e meio
+    // piso, porque a mesma carga alonga o piso de uma rodada para outra (um
+    // segundo tick a mais, o defeito antigo, somava um piso inteiro).
+    let limit = Duration::from_millis(1500).max(floor) + Duration::from_millis(1000) + floor / 2;
+    assert!(took <= limit, "{took:?} > {limit:?} (piso {floor:?})");
     assert!(
         err.contains("1 sessao ainda lendo o transcript apos 1500 ms"),
         "{err}"
@@ -347,7 +362,8 @@ fn cockpit_times_out_with_what_it_has_and_says_how_many_are_reading() {
     assert!(text.lines().next().unwrap().contains("(1 lendo)"), "{text}");
 
     // Controle: sem o teto, o mesmo mundo sai sem aviso e com o cockpit.
-    let (out, _) = w.cli(&["--timeout-ms", "1500"], &[]);
+    // Teto folgado: o controle prova o mundo sem cap, nao a velocidade da maquina.
+    let (out, _) = w.cli(&["--timeout-ms", "30000"], &[]);
     assert_eq!(stderr(&out), "");
     assert!(stdout(&out).contains("CONTINUAR"), "{}", stdout(&out));
 }
