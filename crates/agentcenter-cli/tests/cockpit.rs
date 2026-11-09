@@ -329,13 +329,16 @@ fn cockpit_table_and_json_match_the_c21_reference_values() {
 #[test]
 fn cockpit_times_out_with_what_it_has_and_says_how_many_are_reading() {
     let w = world(&["claude"]);
-    let (out, took) = w.cli(
+    // O tempo de parede nao e conferido aqui: start-up e o primeiro tick variam
+    // com a carga, e um piso medido com o proprio binario cresce junto com um
+    // tick a mais. Quem prova que o teto e honrado sao os testes `sample_*` de
+    // cmd/cockpit.rs, com ticks falsos. Aqui fica o contrato visivel do teto.
+    let (out, _took) = w.cli(
         &["--timeout-ms", "1500"],
         &[("AGENTCENTER_COCKPIT_READ_BUDGET", "1")],
     );
     let err = stderr(&out);
     assert!(out.status.success(), "{err}");
-    assert!(took <= Duration::from_millis(1500 + 1000), "{took:?}");
     assert!(
         err.contains("1 sessao ainda lendo o transcript apos 1500 ms"),
         "{err}"
@@ -347,7 +350,8 @@ fn cockpit_times_out_with_what_it_has_and_says_how_many_are_reading() {
     assert!(text.lines().next().unwrap().contains("(1 lendo)"), "{text}");
 
     // Controle: sem o teto, o mesmo mundo sai sem aviso e com o cockpit.
-    let (out, _) = w.cli(&["--timeout-ms", "1500"], &[]);
+    // Teto folgado: o controle prova o mundo sem cap, nao a velocidade da maquina.
+    let (out, _) = w.cli(&["--timeout-ms", "30000"], &[]);
     assert_eq!(stderr(&out), "");
     assert!(stdout(&out).contains("CONTINUAR"), "{}", stdout(&out));
 }
