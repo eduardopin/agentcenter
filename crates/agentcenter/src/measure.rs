@@ -78,8 +78,36 @@ struct State {
     done: Cell<bool>,
     /// Capturas que sairam vazias e foram repetidas ([`EMPTY_RETRIES`]).
     empty_tries: Cell<u32>,
+    /// Paints spent waiting for the detail transition ([`DETAIL_SETTLE_MAX_MS`]).
+    settle_tries: Cell<u32>,
+    /// When the first data frame landed: the start of the settle wait.
+    first_data_at: Cell<Option<Instant>>,
+    /// Settle wait at the moment the capture went ahead: (ms, hit the cap).
+    settle_outcome: Cell<(u64, bool)>,
     /// Para pedir a pintura que dispara a captura (ver `data_applied`).
     window: RefCell<Option<glib::WeakRef<gtk::Window>>>,
+}
+
+/// How long the capture waits for the detail page to stop sliding in, from
+/// the first data frame. The push takes ~0.75 s and several times that on a
+/// loaded or blanked screen. Elapsed time, not paints: with only the fixture
+/// tick (200 ms) painting, a paint count would outlast capture-gui.sh's
+/// `timeout 30`. Past the cap the capture goes ahead and prints
+/// `detail_capped=1`, which the script turns into a failure.
+const DETAIL_SETTLE_MAX_MS: u64 = 10_000;
+
+/// The detail page is at rest: its left edge is flush with the window (the
+/// header bar overhangs by [`OVERHANG_PX`]). Mid push the page spans x 67..907
+/// in an 840 window (bug 08da96cb). `None`: not drawn yet, wait for it.
+/// After `waited_ms` without settling, give up waiting.
+fn detail_settled(left_edge: Option<f32>, waited_ms: u64) -> bool {
+    waited_ms >= DETAIL_SETTLE_MAX_MS || left_edge.is_some_and(|x| x.abs() <= OVERHANG_PX)
+}
+
+/// Left edge of the detail view in window coordinates, if it is mapped.
+fn detail_left_edge(window: &gtk::Window) -> Option<f32> {
+    let detail = find_by_class(window.upcast_ref(), "detail-view").filter(|d| d.is_mapped())?;
+    detail.compute_bounds(window).map(|r| r.x())
 }
 
 /// Quantas vezes a captura vazia e repetida na pintura seguinte. O
@@ -123,6 +151,9 @@ impl Probe {
             first_frame_ms: Cell::new(None),
             data_frames: Cell::new(0),
             empty_tries: Cell::new(0),
+            settle_tries: Cell::new(0),
+            first_data_at: Cell::new(None),
+            settle_outcome: Cell::new((0, false)),
             done: Cell::new(false),
             window: RefCell::new(None),
         })))
@@ -139,6 +170,9 @@ impl Probe {
         };
         let data = s.data_frames.get() + 1;
         s.data_frames.set(data);
+        if s.first_data_at.get().is_none() {
+            s.first_data_at.set(Some(Instant::now()));
+        }
         // A captura sai no after-paint. Um frame igual ao anterior (o modo
         // fixture repete o mesmo snapshot) nao muda widget nenhum, entao nada
         // repinta e a captura esperava uma pintura alheia: 4 a 20 s, e acima
@@ -172,6 +206,13 @@ impl Probe {
     }
 }
 
+/// Milliseconds since the first data frame (0 before it).
+fn settle_waited_ms(s: &State) -> u64 {
+    s.first_data_at
+        .get()
+        .map_or(0, |t| t.elapsed().as_millis() as u64)
+}
+
 fn on_paint(s: &Rc<State>, app: &adw::Application, window: &gtk::Window) {
     if s.done.get() {
         return;
@@ -194,6 +235,18 @@ fn on_paint(s: &Rc<State>, app: &adw::Application, window: &gtk::Window) {
     if let Some(path) = &s.screenshot
         && data >= s.frames
     {
+        // Detail opened at start: hold the capture until the push animation
+        // ends. The frame clock keeps painting while it runs, so the next
+        // after-paint asks again; no timer, no sleep.
+        if detail_to_settle() {
+            let (edge, waited) = (detail_left_edge(window), settle_waited_ms(s));
+            if !detail_settled(edge, waited) {
+                s.settle_tries.set(s.settle_tries.get() + 1);
+                return;
+            }
+            s.settle_outcome
+                .set((waited, !edge.is_some_and(|x| x.abs() <= OVERHANG_PX)));
+        }
         s.done.set(true);
         let (path, app, window, s) = (path.clone(), app.clone(), window.clone(), Rc::clone(s));
         let asked = s.size.map(|(w, _)| w);
@@ -201,6 +254,9 @@ fn on_paint(s: &Rc<State>, app: &adw::Application, window: &gtk::Window) {
         // dela reentraria no frame clock. Prioridade alta: roda antes do
         // proximo tick do feed, que pediria nova alocacao.
         glib::idle_add_local_full(glib::Priority::HIGH, move || {
+            // Read in the same main-loop turn as the snapshot below, so it is
+            // the page position the PNG shows, not one read after it.
+            let x_at_capture = detail_left_edge(&window);
             let problems = overflow(&window, asked);
             match save_png(&window, &path) {
                 Err(e) if e == EMPTY && s.empty_tries.get() < EMPTY_RETRIES => {
@@ -219,7 +275,16 @@ fn on_paint(s: &Rc<State>, app: &adw::Application, window: &gtk::Window) {
                     }
                     // Detalhe pedido na partida: altura do que apareceu (0 = nao
                     // desenhado), para o capture-gui.sh --detail falhar.
-                    if std::env::var_os(crate::window::DETAIL_ENV).is_some_and(|v| !v.is_empty()) {
+                    if detail_requested() {
+                        if detail_to_settle() {
+                            let (waited, capped) = s.settle_outcome.get();
+                            println!("detail_settled={}", s.settle_tries.get());
+                            println!("detail_wait_ms={waited}");
+                            println!("detail_capped={}", u8::from(capped));
+                            if let Some(x) = x_at_capture {
+                                println!("detail_x={x:.1}");
+                            }
+                        }
                         let px = find_by_class(window.upcast_ref(), "detail-view")
                             .filter(|d| d.is_mapped())
                             .map_or(0, |d| d.height());
@@ -233,6 +298,16 @@ fn on_paint(s: &Rc<State>, app: &adw::Application, window: &gtk::Window) {
             glib::ControlFlow::Break
         });
     }
+}
+
+/// The back probe (`AGENTCENTER_DETAIL_BACK`) pops the page and captures the
+/// list: there is no detail to wait for.
+fn detail_to_settle() -> bool {
+    detail_requested() && std::env::var_os(crate::window::DETAIL_BACK_ENV).is_none_or(|v| v != "1")
+}
+
+fn detail_requested() -> bool {
+    std::env::var_os(crate::window::DETAIL_ENV).is_some_and(|v| !v.is_empty())
 }
 
 /// O AdwHeaderBar passa 1 px de cada lado de proposito (a borda encosta na
@@ -364,5 +439,82 @@ mod tests {
         );
         // O primeiro tick nao tem taxas e nao entra na janela.
         assert!(RECLAIM_SCREENSHOT_FRAMES as usize > crate::reclaim_page::WINDOW_TICKS + 1);
+    }
+
+    #[test]
+    fn detail_capture_waits_while_the_page_slides_in() {
+        // Mid push: the page spans x 67..907 in an 840 window (bug 08da96cb).
+        assert!(!detail_settled(Some(67.0), 0));
+        assert!(!detail_settled(Some(-47.0), 0));
+        assert!(!detail_settled(Some(840.0), 0));
+        // At rest: flush with the window, within the header-bar overhang.
+        assert!(detail_settled(Some(0.0), 0));
+        assert!(detail_settled(Some(0.4), 0));
+        // The edge of the overhang is at rest, one step past it is not.
+        assert!(detail_settled(Some(1.5), 0));
+        assert!(detail_settled(Some(-1.5), 0));
+        assert!(!detail_settled(Some(1.51), 0));
+        assert!(!detail_settled(Some(-1.51), 0));
+        // Not drawn yet: wait for it, do not capture the strip alone.
+        assert!(!detail_settled(None, 0));
+    }
+
+    #[test]
+    fn detail_capture_wait_is_bounded_by_time() {
+        // A detail that never settles must still end in a verdict, not in the
+        // script's 30 s timeout: the cap is elapsed time, below that timeout.
+        const { assert!(DETAIL_SETTLE_MAX_MS < 30_000) };
+        assert!(!detail_settled(Some(67.0), DETAIL_SETTLE_MAX_MS - 1));
+        assert!(detail_settled(Some(67.0), DETAIL_SETTLE_MAX_MS));
+        assert!(detail_settled(None, DETAIL_SETTLE_MAX_MS));
+    }
+
+    /// Runs `detail_verdict <settled> <capped> <x>` from capture-gui.sh (sourced,
+    /// not executed) and returns (exit ok, stdout).
+    fn script_verdict(settled: &str, capped: &str, x: &str) -> (bool, String) {
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/../../scripts/capture-gui.sh");
+        let out = std::process::Command::new("bash")
+            .args(["-c", "source \"$1\"; detail_verdict \"$2\" \"$3\" \"$4\""])
+            .args(["bash", script, settled, capped, x])
+            .output()
+            .expect("bash runs");
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).into_owned(),
+        )
+    }
+
+    #[test]
+    fn capture_script_verdict_fails_a_capture_that_is_not_at_rest() {
+        // At rest, settled in time.
+        assert!(script_verdict("12", "0", "0.0").0);
+        assert!(script_verdict("0", "0", "1.5").0);
+        assert!(script_verdict("3", "0", "-1.5").0);
+        // Mid push (67 in an 840 window): the bug this guards.
+        assert!(!script_verdict("12", "0", "67.0").0);
+        assert!(!script_verdict("12", "0", "1.6").0);
+        // The app gave up waiting.
+        assert!(!script_verdict("12", "1", "0.0").0);
+        // The app printed nothing (old binary, or the line was lost).
+        assert!(!script_verdict("", "0", "0.0").0);
+        assert!(!script_verdict("12", "", "0.0").0);
+        assert!(!script_verdict("12", "0", "").0);
+        let (_, msg) = script_verdict("12", "1", "67.0");
+        assert!(msg.contains("the detail transition never settled"), "{msg}");
+    }
+
+    #[test]
+    fn capture_script_does_not_wait_with_a_fixed_sleep() {
+        let script = include_str!("../../../scripts/capture-gui.sh");
+        let words = |l: &str| -> Vec<String> {
+            l.split(|c: char| !c.is_alphanumeric())
+                .map(str::to_owned)
+                .collect()
+        };
+        let slept = script
+            .lines()
+            .map(|l| l.split('#').next().unwrap_or(""))
+            .any(|l| words(l).iter().any(|w| w == "sleep" || w == "usleep"));
+        assert!(!slept, "capture-gui.sh must not wait with a fixed sleep");
     }
 }
