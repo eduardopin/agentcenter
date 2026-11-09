@@ -22,7 +22,8 @@ hit, re-read share and payback, and below it the reasons (`motivo:`).
 Transcripts are read in full; sampling repeats until every matched
 transcript is read or the timeout runs out. On timeout what is ready is
 printed, stderr says how many sessions are still reading, and the exit code
-is 0.
+is 0. A timeout shorter than the first sample prints that
+sample alone, without rates (interval 0).
 
   --json            print the snapshot as JSON (same as `snapshot --json`)
   --all             also list idle sessions (OCIOSA), hidden by default
@@ -900,6 +901,26 @@ mod tests {
         .unwrap();
         assert_eq!(snap.taken_at_ms, 1);
         assert!(t0.elapsed() < MS(2_500), "{:?}", t0.elapsed());
+    }
+
+    #[test]
+    fn sample_starts_no_tick_once_the_deadline_has_passed() {
+        // O primeiro tick ja passou do prazo: a thread nao pode comecar outro,
+        // mesmo que a espera pelo resultado ja tenha voltado.
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        let make = move || {
+            move || -> Result<Snapshot, String> {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::thread::sleep(MS(200));
+                let mut s = snap_with(vec![]);
+                s.summary.cockpit_pending = 1;
+                Ok(s)
+            }
+        };
+        sample_with(make, MS(1), MS(1), MS(50)).unwrap();
+        std::thread::sleep(MS(400));
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
