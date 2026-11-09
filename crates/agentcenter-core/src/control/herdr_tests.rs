@@ -6,13 +6,21 @@ use std::{
 };
 static SEQ: AtomicU64 = AtomicU64::new(0);
 const PI_FILE: &str = "/home/u/.pi/agent/sessions/--w--/2026-10-22_pi.jsonl";
-fn fixture(mode: &'static str) -> (Endpoint, Target, std::thread::JoinHandle<usize>, PathBuf) {
+struct RootGuard(PathBuf);
+impl Drop for RootGuard {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+fn fixture(mode: &'static str) -> (Endpoint, Target, std::thread::JoinHandle<usize>, RootGuard) {
     let root = PathBuf::from(std::env::var_os("HOME").unwrap()).join(format!(
         ".ac-herdr-test-{}-{}",
         std::process::id(),
         SEQ.fetch_add(1, Ordering::Relaxed)
     ));
     fs::create_dir(&root).unwrap();
+    // Armed before anything else can fail; every caller takes over the guard.
+    let guard = RootGuard(root.clone());
     fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
     let listener = UnixListener::bind(root.join("s")).unwrap();
     fs::set_permissions(root.join("s"), fs::Permissions::from_mode(0o600)).unwrap();
@@ -95,7 +103,7 @@ fn fixture(mode: &'static str) -> (Endpoint, Target, std::thread::JoinHandle<usi
         }
         count
     });
-    (endpoint, target, handle, root)
+    (endpoint, target, handle, guard)
 }
 #[test]
 fn herdr_focus_revalidates_and_checks_semantic_reply() {
@@ -104,22 +112,20 @@ fn herdr_focus_revalidates_and_checks_semantic_reply() {
         ("moved", Err(Error::Stale), 0),
         ("bad_reply", Err(Error::Unknown), 1),
     ] {
-        let (e, t, h, root) = fixture(mode);
+        let (e, t, h, _root) = fixture(mode);
         assert_eq!(e.focus(&t, Duration::from_millis(250)), expected);
         assert_eq!(h.join().unwrap(), effects);
-        fs::remove_dir_all(root).unwrap();
     }
 }
 #[test]
 fn herdr_reused_pid_is_refused_without_effect() {
-    let (e, mut t, h, root) = fixture("ok");
+    let (e, mut t, h, _root) = fixture("ok");
     t.starttime += 1;
     assert_eq!(
         e.focus(&t, Duration::from_millis(250)),
         Err(Error::Identity)
     );
     assert_eq!(h.join().unwrap(), 0);
-    fs::remove_dir_all(root).unwrap();
 }
 #[test]
 fn herdr_pi_pane_is_identified_by_its_session_file() {
@@ -156,7 +162,7 @@ fn herdr_pi_pane_is_identified_by_its_session_file() {
             0,
         ),
     ] {
-        let (e, t, h, root) = fixture(mode);
+        let (e, t, h, _root) = fixture(mode);
         let r = e.prompt(
             &t,
             session,
@@ -165,7 +171,6 @@ fn herdr_pi_pane_is_identified_by_its_session_file() {
         );
         assert_eq!(r, expected, "{mode} {session:?}");
         assert_eq!(h.join().unwrap(), effects, "{mode} {session:?}");
-        fs::remove_dir_all(root).unwrap();
     }
 }
 #[test]
@@ -176,7 +181,7 @@ fn herdr_pane_reported_keeps_the_kind_and_pane_session_only_ids() {
         ("other_kind", None),
         ("null", None),
     ] {
-        let (e, t, h, root) = fixture(mode);
+        let (e, t, h, _root) = fixture(mode);
         let r = e.pane_reported(&t, Duration::from_millis(250)).unwrap();
         assert_eq!(r, (reported.clone(), Some("idle".into())), "{mode}");
         let id = e.pane_session(&t, Duration::from_millis(250)).unwrap().0;
@@ -186,6 +191,5 @@ fn herdr_pane_reported_keeps_the_kind_and_pane_session_only_ids() {
         };
         assert_eq!(id, expected, "{mode}");
         assert_eq!(h.join().unwrap(), 0);
-        fs::remove_dir_all(root).unwrap();
     }
 }

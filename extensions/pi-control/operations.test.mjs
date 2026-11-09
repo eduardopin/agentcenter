@@ -82,7 +82,11 @@ test('unit retention tombstones expire without restarting an operation', async t
     // (start, then cleanup) comes after it. Mocking Date earlier stamps mocked time.
     await settled(f, 2);
     t.mock.timers.enable({ apis: ['Date'], now: Date.now() });
-    t.mock.timers.tick(30 * 60 * 1000 + 1);
+    // Just inside retention the record is still served. The margin covers the real
+    // milliseconds between the `finished` stamp and the mock starting.
+    t.mock.timers.tick(30 * 60 * 1000 - 100);
+    assert.equal(f.manager.dispatch({ ...f.request, action: 'status' }).state, 'completed');
+    t.mock.timers.tick(101);
     assert.equal(f.manager.dispatch({ ...f.request, action: 'status' }).code, 'expired');
     assert.equal(f.manager.dispatch(f.request).code, 'expired');
     assert.equal(f.calls(), 1);
@@ -264,7 +268,7 @@ test('same operation ID with a different identity field is duplicate_mismatch, w
       request => ({ ...request, action: 'compact' }),
     ]) {
       const result = f.manager.dispatch(mutate(f.request));
-      assert.ok(['duplicate_mismatch', 'stale_instance', 'stale_revision'].includes(result.code), result.code);
+      assert.equal(result.code, 'duplicate_mismatch');
       assert.notEqual(result.state, 'accepted');
     }
     // status with the same fingerprint still observes the original operation.

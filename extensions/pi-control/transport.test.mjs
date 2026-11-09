@@ -136,6 +136,11 @@ test('at most 4 connections are held; a 5th is destroyed and a freed slot is reu
   try {
     for (let i = 0; i < 4; i++) held.push(await open(endpoint));
     await new Promise(resolve => setTimeout(resolve, 50));
+    // The 4th connection is within the limit: it stays open and answers.
+    assert.equal(held[3].destroyed, false);
+    const answer = new Promise(resolve => { let data = ''; held[3].on('data', d => { data += d; }); held[3].once('end', () => resolve(JSON.parse(data))); });
+    held[3].write(frame(endpoint) + '\n');
+    assert.equal((await answer).code, 'disabled');
     const fifth = await raw(endpoint, frame(endpoint));
     assert.deepEqual(fifth, { result: '', closed: true });
     const gone = closes(held[0]);
@@ -157,6 +162,6 @@ test('an idle connection is closed after 2 seconds, not before', { timeout: 10_0
     await closes(socket);
     const elapsed = Date.now() - started;
     assert.equal(early, false);
-    assert.ok(elapsed < 4000, `closed after ${elapsed} ms`);
+    assert.ok(elapsed < 2500, `closed after ${elapsed} ms`);
   } finally { await endpoint.close(); }
 });
