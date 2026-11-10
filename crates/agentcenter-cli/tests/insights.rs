@@ -250,8 +250,10 @@ fn help_states_the_model_boundaries_and_the_usage_lists_the_command() {
     ] {
         assert!(help.contains(opt), "{opt}: {help}");
     }
+    // O help quebra linha no meio das frases.
+    let flat = help.split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
-        help.contains("never sees transcript content or session names"),
+        flat.contains("never sees transcript content or session names"),
         "{help}"
     );
     assert!(

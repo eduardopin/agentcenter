@@ -1,6 +1,7 @@
 //! Um modulo por subcomando.
 
 pub mod cockpit;
+pub mod insights;
 pub mod reclaim;
 pub mod signal;
 pub mod snapshot;

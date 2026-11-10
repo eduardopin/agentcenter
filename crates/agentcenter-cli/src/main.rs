@@ -11,6 +11,7 @@ usage: agentcenter-cli <command> [options]
 commands:
   snapshot   one sample of every AI session (table, or JSON with --json)
   cockpit    what to do per agent session: context, burn, re-read (contexto.py)
+  insights   findings and a short briefing, optionally worded by a local model
   watch      sample every second until interrupted (table, or NDJSON with --json)
   signal     stop, resume, terminate or kill a session or one process
   reclaim    idle sessions by memory, with the command to end each (read only)
@@ -22,6 +23,7 @@ fn main() -> ExitCode {
     let result = match args.next().as_deref() {
         Some("snapshot") => cmd::snapshot::run(args.collect()),
         Some("cockpit") => cmd::cockpit::run(args.collect()),
+        Some("insights") => cmd::insights::run(args.collect()),
         Some("watch") => cmd::watch::run(args.collect()),
         Some("signal") => cmd::signal::run(args.collect()),
         Some("reclaim") => cmd::reclaim::run(args.collect()),

@@ -9,6 +9,9 @@ pre-alpha.
 
 ### Added
 
+- `agentcenter-cli insights`: up to four findings from fixed rules and a two-sentence briefing. With
+  `--llm` (or `AGENTCENTER_LLM`) a local model on loopback can word the briefing; its answer is checked and the
+  rule text is shown when the check fails. No model is bundled and no other command calls one.
 - Session list with one line per session: a state glyph, a metric bar that
   follows the sort, an Action column with Handoff and Compact buttons, a token
   battery (share of the last 30 minutes of spend and tokens per minute) and a
