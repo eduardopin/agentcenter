@@ -60,6 +60,21 @@ fn spawn(path: &Path) -> Reap {
     panic!("fake-agent: text file busy");
 }
 
+/// Espera o `comm` virar `want`. `spawn` volta quando o filho ja fez exec, mas
+/// o kernel solta o pai (`exec_mmap`) um instante antes de gravar o novo `comm`;
+/// com a CPU disputada o teste lia o nome da thread do proprio teste.
+fn wait_for_comm(pid: u32, want: &str) {
+    let mut last = String::new();
+    for _ in 0..500 {
+        last = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+        if last == format!("{want}\n") {
+            return;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    panic!("comm of {pid} never became {want}: {last:?}");
+}
+
 /// (estado, starttime) de `/proc/<pid>/stat`.
 fn stat(pid: u32) -> Option<(char, String)> {
     let s = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
@@ -92,10 +107,7 @@ fn signal_term_session_needs_yes_without_a_terminal() {
     let pid = agent.0.id();
     let pid_s = pid.to_string();
     let (_, started) = stat(pid).expect("agente vivo");
-    assert_eq!(
-        std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap(),
-        "fake-agent\n"
-    );
+    wait_for_comm(pid, "fake-agent");
     let args = ["signal", "term", "--session", pid_s.as_str()];
 
     // `echo n | ...`: stdin nao e terminal, nada e enviado.
