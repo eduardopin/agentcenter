@@ -2233,6 +2233,14 @@ fn at_360_long_names_do_not_widen_the_window() {
             least <= 360,
             "content needs {least} px at the least, 360 given"
         );
+        // The longest list heading, beside the order and the subheading.
+        window.list.set_sort_key(SortKey::SinceStart);
+        settle_paned(&window);
+        let (least, _, _, _) = content.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            least <= 360,
+            "content needs {least} px at the least with the since-start heading, 360 given"
+        );
         assert!(
             !mapped_with_class(&window, "chip").is_empty(),
             "the waiting chips are shown"

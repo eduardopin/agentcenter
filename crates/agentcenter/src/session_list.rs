@@ -714,7 +714,6 @@ impl SessionList {
             .sync_create()
             .build();
         title.set_hexpand(false);
-        title.set_ellipsize(gtk::pango::EllipsizeMode::End);
         // Nothing to choose with one agent type: no control (see `refresh_agents`).
         agent_menu.set_visible(false);
         agent_menu.add_css_class("agent-filter");
