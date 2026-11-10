@@ -2308,3 +2308,45 @@ fn at_360x640_the_list_keeps_2_whole_rows() {
         settle();
     });
 }
+
+/// tipico-40 with every session that reports a state waiting for its user:
+/// a chip each, more than a 360 x 640 top has room for.
+fn all_waiting() -> Snapshot {
+    let mut snap = tipico();
+    for s in &mut snap.sessions {
+        if let Some(o) = s.overlay.as_mut() {
+            o.status = Some(agentcenter_core::overlay::OverlayStatus::Blocked);
+        }
+    }
+    snap
+}
+
+/// A chip per waiting session asks the strips for more height than the window has:
+/// the top stops where the list's chrome begins, and the list scrolls its rows.
+#[test]
+fn at_360_many_waiting_chips_leave_the_list_its_chrome() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open(
+            "io.agentcenter.Narrow360WaitingQA",
+            360,
+            640,
+            &all_waiting(),
+        );
+        settle_paned(&window);
+        let paned = paned_of(&window);
+        let cap = paned.height() - LIST_CHROME_PX;
+        let need = window.map.needed_height(content_stack(&window).width());
+        assert!(
+            need > cap,
+            "the chips ask for {need} px, no more than the {cap} px the top may take"
+        );
+        assert!(
+            paned.position() <= cap,
+            "the paned top is {} px, past the {cap} px that leave the list its {LIST_CHROME_PX} px chrome",
+            paned.position()
+        );
+        window.window.close();
+        settle();
+    });
+}
