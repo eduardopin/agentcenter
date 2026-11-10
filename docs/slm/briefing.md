@@ -84,8 +84,9 @@ Reasoning text between `<think>` and `</think>` is discarded before the answer i
 
 Measured on 2026-11-10 with the llama.cpp CPU build b12233, 4 threads, on an Intel Core Ultra 7 265U under WSL2.
 Each candidate worded the same 60 scenarios, built from one real snapshot with seeded changes. The answers were
-checked by the Python reference of the guard, which predates the spelled-number and format-character checks, so
-the Rust guard can only pass the same answers or fewer.
+checked by the Python reference of the guard, which predates the spelled-number and format-character checks of
+the Rust guard. The Rust guard is stricter on those checks and looser on two others (it discards `<think>`
+blocks and reads Unicode digits as numbers), so these rates were not measured through it.
 
 | Candidate | Quantization | Size | Guard pass rate (60 scenarios) | p50 | p95 latency on CPU | Peak memory | Decision |
 |---|---|---|---|---|---|---|---|
@@ -99,7 +100,7 @@ No candidate meets the bar, so no model is recommended and the rule text stays t
 within the latency limit. Of the 189 refused answers, 158 left out a key fact of the first finding (its number
 or its action word), 30 carried a number that is not in the findings and 1 was empty. All 13 refusals of
 Qwen2.5-0.5B-Instruct were a missing key fact. The next thing to try is a fine-tune of that model on rule text
-paired with accepted briefings, not a larger model: the two larger candidates passed less often.
+paired with accepted briefings, not a larger model: LFM2.5-1.2B-Instruct (13%) and Qwen2.5-1.5B-Instruct (42%) both passed less often than it.
 
 Acceptance bar: at least 90% of answers pass the guard on 60 scenarios, and the 95th percentile of the
 response time stays within 8 seconds on CPU. The smallest candidate that meets both is the recommended one. If
