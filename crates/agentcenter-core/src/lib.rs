@@ -3,6 +3,7 @@
 
 pub mod actions;
 pub mod adapters;
+pub mod briefing;
 pub mod cockpit;
 pub mod control;
 pub mod fixture;

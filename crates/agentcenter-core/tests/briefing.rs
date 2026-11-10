@@ -62,7 +62,10 @@ fn messages_are_the_four_reference_turns() {
     let m = messages(&fs);
     let roles: Vec<&str> = m.iter().map(|x| x.role.as_str()).collect();
     assert_eq!(roles, ["system", "user", "assistant", "user"]);
-    assert!(m[0].content.starts_with("You brief a developer who runs many AI coding agents"));
+    assert!(
+        m[0].content
+            .starts_with("You brief a developer who runs many AI coding agents")
+    );
     assert!(m[1].content.contains("api (pid 4411) at 91%"));
     assert!(m[2].content.starts_with("Three sessions are past 75%"));
     assert_eq!(m[3].content, facts(&fs));
@@ -83,19 +86,41 @@ fn guard_accepts_clean_lines() {
     assert_eq!(over.chars().count(), 420);
     let lines: Vec<(&str, Vec<Finding>)> = vec![
         (GOOD, fs.clone()),
-        ("api (pid 4411) is at 91% of its context window. Write a handoff now.", fs.clone()),
+        (
+            "api (pid 4411) is at 91% of its context window. Write a handoff now.",
+            fs.clone(),
+        ),
         ("Write a handoff 91%.", fs.clone()),
         (&over, fs.clone()),
-        ("Do 1 thing first: write a handoff for api (pid 4411) at 91%.", fs.clone()),
-        ("Run agentcenter-cli reclaim to free 2.60 GB, the idle sessions hold it.", vec![idle_memory()]),
-        ("Hand off api at 91% with a handoff, then 2 more steps follow.", fs.clone()),
+        (
+            "Do 1 thing first: write a handoff for api (pid 4411) at 91%.",
+            fs.clone(),
+        ),
+        (
+            "Run agentcenter-cli reclaim to free 2.60 GB, the idle sessions hold it.",
+            vec![idle_memory()],
+        ),
+        (
+            "Hand off api at 91% with a handoff, then 2 more steps follow.",
+            fs.clone(),
+        ),
         (
             "Three sessions waste memory, so run agentcenter-cli reclaim now.",
-            vec![finding("x", "high", "3 sessions waste memory. Action: agentcenter-cli reclaim.", &["3", "reclaim"])],
+            vec![finding(
+                "x",
+                "high",
+                "3 sessions waste memory. Action: agentcenter-cli reclaim.",
+                &["3", "reclaim"],
+            )],
         ),
         (
             "Twelve idle sessions hold 2.6 GB; run agentcenter-cli reclaim.",
-            vec![finding("x", "low", "12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.", &["12", "reclaim"])],
+            vec![finding(
+                "x",
+                "low",
+                "12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.",
+                &["12", "reclaim"],
+            )],
         ),
         ("API (PID 4411) IS AT 91%. WRITE A HANDOFF.", fs.clone()),
     ];
@@ -115,8 +140,11 @@ fn guard_strips_special_tokens_and_keeps_the_first_paragraph() {
     assert_eq!(t, GOOD);
     let t = guard(&format!("{GOOD}\n\nNote: this took 99 steps."), &fs).unwrap();
     assert_eq!(t, GOOD, "the invented 99 sits in the dropped paragraph");
-    let t = guard(&format!("Three sessions are past 75% of their context window,\nand api (pid 4411)   is at 91%.\nWrite a handoff."), &fs).unwrap();
-    assert_eq!(t, "Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff.");
+    let t = guard("Three sessions are past 75% of their context window,\nand api (pid 4411)   is at 91%.\nWrite a handoff.", &fs).unwrap();
+    assert_eq!(
+        t,
+        "Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff."
+    );
 }
 
 #[test]
@@ -144,12 +172,18 @@ fn guard_rejects_out_of_role_phrases() {
     let fs = pair();
     let r = reject("As an AI, I would write a handoff for api at 91%.", &fs);
     assert_eq!(r, "out of role: as an ai");
-    let r = reject("I cannot say, but api (pid 4411) is at 91% so write a handoff.", &fs);
+    let r = reject(
+        "I cannot say, but api (pid 4411) is at 91% so write a handoff.",
+        &fs,
+    );
     assert_eq!(r, "out of role: i cannot");
     // eco do prompt de sistema
     let echo = "You brief a developer who runs many AI coding agents on one machine. Write 2 sentences in plain English.";
     assert_eq!(reject(echo, &fs), "out of role: plain english");
-    let r = reject("The findings say api (pid 4411) is at 91%; write a handoff.", &fs);
+    let r = reject(
+        "The findings say api (pid 4411) is at 91%; write a handoff.",
+        &fs,
+    );
     assert_eq!(r, "out of role: the findings");
     // OOC vem antes do numero inventado
     assert!(reject("As an AI I saw 93% and no handoff.", &fs).starts_with("out of role"));
@@ -158,10 +192,22 @@ fn guard_rejects_out_of_role_phrases() {
 #[test]
 fn guard_rejects_a_number_not_in_the_findings() {
     let fs = pair();
-    let r = reject("Three sessions are past 75%, and api (pid 4411) is at 93%. Write a handoff.", &fs);
+    let r = reject(
+        "Three sessions are past 75%, and api (pid 4411) is at 93%. Write a handoff.",
+        &fs,
+    );
     assert_eq!(r, "number not in findings: 93");
-    let r = reject("Write a handoff for api at 91%, then free 3.4 GB with agentcenter-cli reclaim.", &fs);
+    let r = reject(
+        "Write a handoff for api at 91%, then free 3.4 GB with agentcenter-cli reclaim.",
+        &fs,
+    );
     assert_eq!(r, "number not in findings: 3.4");
+    // zeros finais so valem depois de um ponto decimal: 20 nao vira 2
+    let r = reject(
+        "Write a handoff for api at 91%, with 20 sessions to go.",
+        &fs,
+    );
+    assert_eq!(r, "number not in findings: 20");
     // um ponto final depois do numero nao vira decimal
     assert!(guard("Write a handoff for api at 91%. Then wait.", &fs).is_ok());
 }
@@ -169,9 +215,15 @@ fn guard_rejects_a_number_not_in_the_findings() {
 #[test]
 fn guard_rejects_a_missing_key_fact() {
     let fs = pair();
-    let r = reject("Three sessions are past 75% of their context window. Write a handoff for api now.", &fs);
+    let r = reject(
+        "Three sessions are past 75% of their context window. Write a handoff for api now.",
+        &fs,
+    );
     assert_eq!(r, "missing key fact: 91%");
-    let r = reject("Api (pid 4411) is at 91% of its context window, so slow down and rest.", &fs);
+    let r = reject(
+        "Api (pid 4411) is at 91% of its context window, so slow down and rest.",
+        &fs,
+    );
     assert_eq!(r, "missing key fact: handoff");
 }
 
@@ -190,7 +242,11 @@ fn endpoint_accepts_loopback_only_forms() {
         ("http://[::1]:9000/v1", 9000),
     ] {
         let e = Endpoint::parse(url).unwrap_or_else(|err| panic!("{url}: {err}"));
-        assert!(e.addr().ip().is_loopback(), "{url} resolved to {}", e.addr());
+        assert!(
+            e.addr().ip().is_loopback(),
+            "{url} resolved to {}",
+            e.addr()
+        );
         assert_eq!(e.addr().port(), port, "{url}");
     }
 }
@@ -270,7 +326,10 @@ fn stub(reply: Vec<u8>) -> (Endpoint, JoinHandle<String>) {
         let _ = s.flush();
         req
     });
-    (Endpoint::parse(&format!("http://127.0.0.1:{port}")).unwrap(), h)
+    (
+        Endpoint::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
+        h,
+    )
 }
 
 /// Servidor que aceita, le o pedido e nunca responde (segura a conexao por 3 s).
@@ -320,7 +379,10 @@ fn ask_posts_the_chat_request_and_returns_the_content() {
     assert_eq!(got, GOOD);
     let req = srv.join().unwrap();
     let (head, body) = req.split_once("\r\n\r\n").unwrap();
-    assert!(head.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"), "{head}");
+    assert!(
+        head.starts_with("POST /v1/chat/completions HTTP/1.1\r\n"),
+        "{head}"
+    );
     let low = head.to_lowercase();
     assert!(low.contains("connection: close"));
     assert!(low.contains("content-type: application/json"));
@@ -349,7 +411,10 @@ fn ask_decodes_a_chunked_body() {
 #[test]
 fn ask_reports_a_non_200_status() {
     let (ep, _srv) = stub(http("500 Internal Server Error", "{\"error\":\"boom\"}"));
-    assert_eq!(ask(&ep, &messages(&pair()), T), Err(ClientError::Status(500)));
+    assert_eq!(
+        ask(&ep, &messages(&pair()), T),
+        Err(ClientError::Status(500))
+    );
 }
 
 #[test]
@@ -358,7 +423,11 @@ fn ask_times_out_on_a_server_that_never_answers() {
     let t0 = Instant::now();
     let r = ask(&ep, &messages(&pair()), Duration::from_millis(300));
     assert_eq!(r, Err(ClientError::Timeout));
-    assert!(t0.elapsed() < Duration::from_millis(1500), "took {:?}", t0.elapsed());
+    assert!(
+        t0.elapsed() < Duration::from_millis(1500),
+        "took {:?}",
+        t0.elapsed()
+    );
 }
 
 #[test]
@@ -369,7 +438,7 @@ fn ask_times_out_on_a_server_that_drips_forever() {
     thread::spawn(move || {
         let (mut s, _) = l.accept().unwrap();
         let _ = read_request(&mut s);
-        let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n");
+        let _ = s.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 10000\r\n\r\n");
         for _ in 0..50 {
             if s.write_all(b"x").is_err() {
                 break;
@@ -381,7 +450,11 @@ fn ask_times_out_on_a_server_that_drips_forever() {
     let t0 = Instant::now();
     let r = ask(&ep, &messages(&pair()), Duration::from_millis(500));
     assert_eq!(r, Err(ClientError::Timeout));
-    assert!(t0.elapsed() < Duration::from_millis(1500), "took {:?}", t0.elapsed());
+    assert!(
+        t0.elapsed() < Duration::from_millis(1500),
+        "took {:?}",
+        t0.elapsed()
+    );
 }
 
 #[test]
@@ -420,7 +493,10 @@ fn ask_fails_fast_when_nothing_listens() {
         l.local_addr().unwrap().port()
     };
     let ep = Endpoint::parse(&format!("http://127.0.0.1:{port}")).unwrap();
-    assert!(matches!(ask(&ep, &messages(&pair()), T), Err(ClientError::Io(_))));
+    assert!(matches!(
+        ask(&ep, &messages(&pair()), T),
+        Err(ClientError::Io(_))
+    ));
 }
 
 // ------------------------------------------------------------------- brief
@@ -490,11 +566,17 @@ fn brief_falls_back_on_garbage_and_on_oversized_bodies() {
     let fs = pair();
     let (ep, _srv) = stub(http("200 OK", "<html>nope</html>"));
     let b = brief(&fs, Some(&ep), T);
-    assert_eq!((b.text.as_str(), b.source), (fallback(&fs).as_str(), Source::Rules));
+    assert_eq!(
+        (b.text.as_str(), b.source),
+        (fallback(&fs).as_str(), Source::Rules)
+    );
     assert!(b.rejected.is_some());
     let (ep, _srv) = stub(http("200 OK", &chat_body(&"a".repeat(100_000))));
     let b = brief(&fs, Some(&ep), T);
-    assert_eq!((b.text.as_str(), b.source), (fallback(&fs).as_str(), Source::Rules));
+    assert_eq!(
+        (b.text.as_str(), b.source),
+        (fallback(&fs).as_str(), Source::Rules)
+    );
     assert!(b.rejected.unwrap().contains("too large"));
 }
 
@@ -507,18 +589,29 @@ fn brief_falls_back_when_nothing_listens() {
     };
     let ep = Endpoint::parse(&format!("http://127.0.0.1:{port}")).unwrap();
     let b = brief(&fs, Some(&ep), T);
-    assert_eq!((b.text.as_str(), b.source), (fallback(&fs).as_str(), Source::Rules));
+    assert_eq!(
+        (b.text.as_str(), b.source),
+        (fallback(&fs).as_str(), Source::Rules)
+    );
     assert!(b.rejected.is_some());
 }
 
 #[test]
 fn briefing_serializes_the_source_in_lowercase() {
-    let rules = Briefing { text: "a".into(), source: Source::Rules, rejected: Some("why".into()) };
+    let rules = Briefing {
+        text: "a".into(),
+        source: Source::Rules,
+        rejected: Some("why".into()),
+    };
     assert_eq!(
         serde_json::to_value(&rules).unwrap(),
         json!({"text": "a", "source": "rules", "rejected": "why"})
     );
-    let model = Briefing { text: "b".into(), source: Source::Model, rejected: None };
+    let model = Briefing {
+        text: "b".into(),
+        source: Source::Model,
+        rejected: None,
+    };
     assert_eq!(
         serde_json::to_value(&model).unwrap(),
         json!({"text": "b", "source": "model", "rejected": null})
