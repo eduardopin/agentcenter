@@ -4,8 +4,9 @@ import { mkdtemp, chmod, lstat, readFile, symlink, rm } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { listenPrivate, privateDirectory } from './transport.mjs';
+import { privateBase } from './test-support.mjs';
 
-const runtime = `/run/user/${process.getuid()}`;
+const runtime = privateBase;
 const identity = { session_id: 'synthetic', session_file: '/synthetic/session.jsonl',
   pid: process.pid, process_starttime: 'synthetic-start', expected: { managerId: 'manager', revision: '1', sessionId: 'synthetic', sessionFile: '/synthetic/session.jsonl', leafId: 'leaf' } };
 function query(endpoint, overrides = {}) {
@@ -70,4 +71,99 @@ test('rejects symlink and permissive runtime directory before publishing', async
     await chmod(directory, 0o755);
     await assert.rejects(listenPrivate(directory, identity), /unsafe_directory/);
   } finally { await rm(directory, { recursive: true, force: true }); }
+});
+
+const frame = (endpoint, overrides = {}) => JSON.stringify({ protocol_version: 2,
+  operation_id: randomUUID(), action: 'handoff', ...identity,
+  instance_nonce: endpoint.metadata.instance_nonce, ...overrides });
+// Resolves with what the server sent and whether it closed the socket, within `ms`.
+function raw(endpoint, bytes, ms = 500) {
+  return new Promise(resolve => {
+    const socket = connect(endpoint.socket);
+    let result = '', closed = false;
+    socket.on('error', () => {}); // a destroyed peer may reset the write
+    socket.on('data', data => { result += data; });
+    socket.on('close', () => { closed = true; });
+    socket.on('connect', () => { if (bytes) socket.write(bytes); });
+    setTimeout(() => { const state = { result, closed }; socket.destroy(); resolve(state); }, ms);
+  });
+}
+const open = endpoint => new Promise((resolve, reject) => {
+  const socket = connect(endpoint.socket);
+  socket.on('error', () => {});
+  socket.once('connect', () => resolve(socket));
+  socket.once('error', reject);
+});
+const closes = socket => new Promise(resolve => socket.destroyed ? resolve() : socket.once('close', resolve));
+
+test('a process_starttime or session identity that differs is stale_instance', { timeout: 10_000 }, async () => {
+  const endpoint = await listenPrivate(runtime, identity);
+  try {
+    for (const key of ['process_starttime', 'session_id', 'session_file']) {
+      assert.equal((await query(endpoint, { [key]: 'other' })).code, 'stale_instance', key);
+    }
+  } finally { await endpoint.close(); }
+});
+
+test('frame limit is 16 KiB including the newline: exactly that is answered, one more byte is dropped', { timeout: 10_000 }, async () => {
+  const endpoint = await listenPrivate(runtime, identity);
+  try {
+    const body = frame(endpoint);
+    const exact = body + ' '.repeat(16 * 1024 - 1 - body.length) + '\n';
+    assert.equal(Buffer.byteLength(exact), 16 * 1024);
+    const accepted = await raw(endpoint, exact);
+    assert.equal(JSON.parse(accepted.result).code, 'disabled');
+    const over = await raw(endpoint, body + ' '.repeat(16 * 1024 - body.length) + '\n');
+    assert.equal(over.result, '');
+    assert.equal(over.closed, true);
+    // The limit also holds without a newline, so a slow writer cannot grow the buffer.
+    const noNewline = await raw(endpoint, ' '.repeat(16 * 1024 + 1));
+    assert.equal(noNewline.closed, true);
+  } finally { await endpoint.close(); }
+});
+
+test('bytes after the newline drop the connection without a reply', { timeout: 10_000 }, async () => {
+  const endpoint = await listenPrivate(runtime, identity);
+  try {
+    const result = await raw(endpoint, frame(endpoint) + '\n{}');
+    assert.deepEqual(result, { result: '', closed: true });
+  } finally { await endpoint.close(); }
+});
+
+test('at most 4 connections are held; a 5th is destroyed and a freed slot is reusable', { timeout: 10_000 }, async () => {
+  const endpoint = await listenPrivate(runtime, identity);
+  const held = [];
+  try {
+    for (let i = 0; i < 4; i++) held.push(await open(endpoint));
+    await new Promise(resolve => setTimeout(resolve, 50));
+    // A 5th while all 4 are held is destroyed. Checked before the 4th answers,
+    // because answering closes the 4th and frees its slot.
+    const fifth = await raw(endpoint, frame(endpoint));
+    assert.deepEqual(fifth, { result: '', closed: true });
+    // The 4th connection is within the limit: it stays open and answers.
+    assert.equal(held[3].destroyed, false);
+    const answer = new Promise(resolve => { let data = ''; held[3].on('data', d => { data += d; }); held[3].once('end', () => resolve(JSON.parse(data))); });
+    held[3].write(frame(endpoint) + '\n');
+    assert.equal((await answer).code, 'disabled');
+    const gone = closes(held[0]);
+    held[0].destroy(); await gone;
+    await new Promise(resolve => setTimeout(resolve, 50));
+    assert.equal((await query(endpoint)).code, 'disabled');
+  } finally { for (const socket of held) socket.destroy(); await endpoint.close(); }
+});
+
+test('an idle connection is closed after 2 seconds, not before', { timeout: 10_000 }, async () => {
+  const endpoint = await listenPrivate(runtime, identity);
+  try {
+    const socket = await open(endpoint);
+    const started = Date.now();
+    let early = false;
+    socket.once('close', () => { early = Date.now() - started < 1500; });
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    assert.equal(socket.destroyed, false);
+    await closes(socket);
+    const elapsed = Date.now() - started;
+    assert.equal(early, false);
+    assert.ok(elapsed < 2500, `closed after ${elapsed} ms`);
+  } finally { await endpoint.close(); }
 });

@@ -6,6 +6,7 @@ import { createConnection } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import { privateBase } from './test-support.mjs';
 const execute = promisify(execFile);
 const P = process.env.PI_SDK_DIR;
 assert.ok(P, 'Set PI_SDK_DIR to the original read-only Pi SDK');
@@ -38,7 +39,7 @@ function request(socket, body) { return new Promise((resolve, reject) => { const
 for (const [name, implementation, supported, crossLanguage, reloadInHook] of [['private CC0', guardedSdk, true, false], ['original SDK (no fallback)', await sdk(P), false, false], ['Rust client -> private CC0', guardedSdk, true, true], ['reload inside native compact hook', guardedSdk, true, false, true]]) {
 const { createAgentSession, ModelRuntime, AuthStorage, SessionManager, SettingsManager, DefaultResourceLoader } = implementation;
 test(`opt-in ${name}: socket Handoff and Compact persistence or explicit refusal`, { timeout: 10000 }, async () => {
-  const root = await mkdtemp(`/run/user/${process.getuid()}/ac-sdk-`);
+  const root = await mkdtemp(`${privateBase}/ac-sdk-`);
   const previous = { runtime: process.env.XDG_RUNTIME_DIR, state: process.env.XDG_STATE_HOME };
   let session, calls = 0, hookReload, hookEntered = false, hookCompleted = false;
   try {
@@ -186,7 +187,7 @@ test(`opt-in ${name}: socket Handoff and Compact persistence or explicit refusal
 }
 
 test('BLOCKER: public input/switch/fork/tree guards cannot prevent leaf mutation during native compact', { timeout: 5000 }, async () => {
-  const root = await mkdtemp(`/run/user/${process.getuid()}/ac-cas-`);
+  const root = await mkdtemp(`${privateBase}/ac-cas-`);
   const key = `cc1-proof-${randomUUID()}`;
   const proof = globalThis[key] = { owned: false, inputCalls: 0 };
   let session;

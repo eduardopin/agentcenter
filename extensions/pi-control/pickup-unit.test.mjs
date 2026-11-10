@@ -9,6 +9,7 @@ import { createConnection } from 'node:net';
 import { randomUUID } from 'node:crypto';
 import { createOperations, PICKUP_CAPACITY, pickupMessage } from './operations.mjs';
 import { listenPrivate } from './transport.mjs';
+import { privateBase } from './test-support.mjs';
 
 const P = process.env.PI_SDK_DIR;
 assert.ok(P, 'Set PI_SDK_DIR to the original read-only Pi SDK');
@@ -39,7 +40,7 @@ function request(socket, body) {
 
 async function world() {
   delete globalThis[REGISTRY];
-  const root = await mkdtemp(`/run/user/${process.getuid()}/ac-pu-`);
+  const root = await mkdtemp(`${privateBase}/ac-pu-`);
   const runtimeDir = join(root, 'runtime'); await mkdir(runtimeDir, { mode: 0o700 });
   const handoffs = join(root, 'handoffs'); await mkdir(handoffs, { mode: 0o700 });
   const w = { root, handoffs, revision: '1', busy: false, guarded: true, model: true, calls: 0, newSession: 0, sent: [], onChange: undefined };

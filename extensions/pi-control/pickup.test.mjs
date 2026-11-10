@@ -11,6 +11,7 @@ import { join, resolve } from 'node:path';
 import { createConnection } from 'node:net';
 import { createHash, randomUUID } from 'node:crypto';
 import { pickupMessage } from './operations.mjs';
+import { privateBase } from './test-support.mjs';
 
 const SDK = process.env.AGENTCENTER_GUARDED_PI_SDK;
 assert.ok(SDK, 'Set AGENTCENTER_GUARDED_PI_SDK to a prepared private runtime');
@@ -42,7 +43,7 @@ function assistant(model, text, overrides = {}) {
 
 // One private runtime per test: own XDG dirs, own runtime/session directory.
 async function harness({ cancelSwitch = false } = {}) {
-  const root = await mkdtemp(`/run/user/${process.getuid()}/ac-pk-`);
+  const root = await mkdtemp(`${privateBase}/ac-pk-`);
   const runtimeDir = join(root, 'runtime'); await mkdir(runtimeDir, { mode: 0o700 });
   const previous = { XDG_RUNTIME_DIR: process.env.XDG_RUNTIME_DIR, XDG_STATE_HOME: process.env.XDG_STATE_HOME };
   process.env.XDG_RUNTIME_DIR = runtimeDir; process.env.XDG_STATE_HOME = root;
