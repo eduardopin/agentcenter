@@ -304,13 +304,34 @@ fn task_scan_allocations_do_not_grow_with_threads() {
     assert_eq!(big, small, "alocacoes com 1200 threads vs 10");
 }
 
+/// Scratch directory under `/tmp`, removed on drop.
+struct ShortDir(std::path::PathBuf);
+
+impl ShortDir {
+    fn new(prefix: &str) -> Self {
+        let p = std::path::PathBuf::from(format!("/tmp/{prefix}-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&p);
+        fs::create_dir_all(&p).unwrap();
+        Self(p)
+    }
+}
+
+impl Drop for ShortDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn read_pid_does_not_allocate_per_read() {
     // O caminho <raiz>/<pid>/<file> vai na pilha e a leitura reaproveita o
     // `buf`: 100 leituras alocam o mesmo que 1 (antes, PathBuf + to_string
     // em cada uma).
-    let dir = TempDir::new("ac-dscan-readpid").unwrap();
-    let fp = FakeProc::create(dir.path()).unwrap();
+    // Under /tmp whatever TMPDIR says: a root over ~240 bytes does not fit the
+    // stack buffer and takes the heap path by design (see the long-root test).
+    let dir = ShortDir::new("ac-readpid");
+    assert!(dir.0.as_os_str().len() < 100, "{:?}", dir.0);
+    let fp = FakeProc::create(&dir.0).unwrap();
     fp.add(&FakeProcess::new(110, 1, "node")).unwrap();
     let root = fp.proc_root();
     let mut buf = String::with_capacity(4096);
