@@ -74,7 +74,10 @@ and at most 120 tokens.
 
 The number check reads every run of numeric characters, fullwidth and other Unicode digits included, as a
 number that must appear in the findings (or be 1 or 2), refuses numeric characters with no decimal value, and
-refuses spelled numbers above twelve (such as "twenty" or "hundred") unless the findings contain the same word.
+refuses spelled numbers above twelve (such as "twenty" or "hundred"), "zero", "dozen" and "billion" unless the
+findings contain the same word. The words three to twelve pass only when their digit is in the findings or the
+findings contain the same word; "one" and "two" always pass, as 1 and 2 do. The guard also refuses control
+characters and invisible format characters (zero width, text direction, tags).
 Reasoning text between `<think>` and `</think>` is discarded before the answer is checked.
 
 ## Model choice
