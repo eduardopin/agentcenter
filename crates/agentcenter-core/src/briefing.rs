@@ -104,10 +104,30 @@ impl fmt::Display for Rejection {
     }
 }
 
-/// Troca `<|...|>` e `<think>`/`</think>` por um espaco.
-fn strip_special(text: &str) -> String {
+/// Tira de `<think>` ate `</think>` (ou ate o fim, se nunca fecha): e o raciocinio do modelo,
+/// nao a resposta.
+fn drop_think(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
+    while let Some(i) = rest.find("<think>") {
+        out.push_str(&rest[..i]);
+        match rest[i..].find("</think>") {
+            Some(j) => {
+                out.push(' ');
+                rest = &rest[i + j + "</think>".len()..];
+            }
+            None => return out,
+        }
+    }
+    out.push_str(rest);
+    out
+}
+
+/// Troca `<|...|>` e `</think>` solto por um espaco.
+fn strip_special(text: &str) -> String {
+    let text = &drop_think(text);
+    let mut out = String::with_capacity(text.len());
+    let mut rest = text.as_str();
     while let Some(i) = rest.find('<') {
         out.push_str(&rest[..i]);
         let tail = &rest[i..];
@@ -115,8 +135,6 @@ fn strip_special(text: &str) -> String {
             // <| [^|>]* |>
             let n = body.find(['|', '>']).unwrap_or(body.len());
             body[n..].starts_with("|>").then_some(2 + n + 2)
-        } else if tail.starts_with("<think>") {
-            Some("<think>".len())
         } else if tail.starts_with("</think>") {
             Some("</think>".len())
         } else {
@@ -144,29 +162,83 @@ fn clean(text: &str) -> String {
     first.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Numeros no texto: digitos com uma parte decimal opcional (`91`, `2.6`).
-fn numbers(text: &str) -> Vec<&str> {
-    let b = text.as_bytes();
+/// Primeiro codepoint (o zero) de cada bloco de digitos decimais Unicode comum.
+const ZEROS: [u32; 16] = [
+    0x0660, 0x06F0, 0x0966, 0x09E6, 0x0A66, 0x0AE6, 0x0B66, 0x0BE6, 0x0C66, 0x0CE6, 0x0D66, 0x0E50,
+    0x0ED0, 0x0F20, 0x1040, 0xFF10,
+];
+
+/// O valor decimal de `c`, se tiver um (ASCII, fullwidth, arabe-indico, devanagari...).
+fn decimal(c: char) -> Option<u32> {
+    if let Some(d) = c.to_digit(10) {
+        return Some(d);
+    }
+    let u = c as u32;
+    ZEROS
+        .iter()
+        .find(|z| (**z..**z + 10).contains(&u))
+        .map(|z| u - z)
+}
+
+/// Numeros no texto, com digitos normalizados para ASCII: uma sequencia de digitos com uma parte
+/// decimal opcional (`91`, `2.6`, `９９`). Um caractere numerico sem valor decimal (`½`, `Ⅷ`, `²`)
+/// vem como `?` e nunca esta nos achados.
+fn numbers(text: &str) -> Vec<String> {
+    let cs: Vec<char> = text.chars().collect();
     let mut out = Vec::new();
     let mut i = 0;
-    while i < b.len() {
-        if !b[i].is_ascii_digit() {
+    while i < cs.len() {
+        if !cs[i].is_numeric() {
             i += 1;
             continue;
         }
-        let start = i;
-        while i < b.len() && b[i].is_ascii_digit() {
-            i += 1;
-        }
-        if i + 1 < b.len() && b[i] == b'.' && b[i + 1].is_ascii_digit() {
-            i += 1;
-            while i < b.len() && b[i].is_ascii_digit() {
-                i += 1;
+        let mut n = String::new();
+        let run = |i: &mut usize, n: &mut String| {
+            while *i < cs.len() && cs[*i].is_numeric() {
+                n.push(
+                    decimal(cs[*i])
+                        .and_then(|d| char::from_digit(d, 10))
+                        .unwrap_or('?'),
+                );
+                *i += 1;
             }
+        };
+        run(&mut i, &mut n);
+        if i + 1 < cs.len() && cs[i] == '.' && cs[i + 1].is_numeric() {
+            n.push('.');
+            i += 1;
+            run(&mut i, &mut n);
         }
-        out.push(&text[start..i]);
+        out.push(n);
     }
     out
+}
+
+/// Numeros por extenso acima de doze: so passam se o texto dos achados tem a mesma palavra.
+const BIG: [&str; 18] = [
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+    "twenty",
+    "thirty",
+    "forty",
+    "fifty",
+    "sixty",
+    "seventy",
+    "eighty",
+    "ninety",
+    "hundred",
+    "thousand",
+    "million",
+];
+
+fn words(low: &str) -> impl Iterator<Item = &str> {
+    low.split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
 }
 
 /// O texto com `one`..`twelve` (palavra inteira) trocados por digitos.
@@ -196,6 +268,9 @@ fn spell_to_digits(low: &str) -> String {
 /// Ordem: vazio, longo, fora do papel, numero inventado, fato-chave ausente.
 pub fn guard(text: &str, fs: &[Finding]) -> Result<String, Rejection> {
     let t = clean(text);
+    if t.chars().any(char::is_control) {
+        return Err(rejected("control character"));
+    }
     let len = t.chars().count();
     if len < MIN_CHARS {
         return Err(rejected("empty"));
@@ -209,16 +284,20 @@ pub fn guard(text: &str, fs: &[Finding]) -> Result<String, Rejection> {
     }
     let known = facts(fs);
     let mut allowed = numbers(&known);
-    allowed.extend(["1", "2"]);
+    allowed.extend(["1".to_string(), "2".to_string()]);
+    let known_low = known.to_lowercase();
+    if let Some(w) = words(&low).find(|w| BIG.contains(w) && !words(&known_low).any(|k| k == *w)) {
+        return Err(rejected(format!("number not in findings: {w}")));
+    }
     for n in numbers(&t) {
         // zeros finais so contam depois de um ponto decimal (a referencia
         // Python aceitava 20 e 100 porque "2" e "1" sempre estao permitidos)
         let trimmed = if n.contains('.') {
             n.trim_end_matches('0').trim_end_matches('.')
         } else {
-            n
+            n.as_str()
         };
-        if !allowed.contains(&n) && !allowed.contains(&trimmed) {
+        if !allowed.contains(&n) && !allowed.iter().any(|a| a == trimmed) {
             return Err(rejected(format!("number not in findings: {n}")));
         }
     }

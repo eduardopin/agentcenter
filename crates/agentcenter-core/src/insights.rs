@@ -35,17 +35,30 @@ fn finding(id: &str, severity: &str, score: u32, text: String, must: Vec<String>
     }
 }
 
-/// `basename(cwd)` ou, se vazio, o nome do agente; mais o pid.
+/// `basename(cwd)` ou, se vazio, o nome do agente; mais o pid. O nome so leva
+/// `[A-Za-z0-9._-]` (o resto vira `_`, no maximo 40): ele entra no texto dos achados e no
+/// prompt do modelo, e o cwd e dado de fora.
 fn label(s: &Session) -> String {
     let base = s
         .cwd
         .as_deref()
         .and_then(|c| c.rsplit('/').next())
         .unwrap_or("");
-    let name = if base.is_empty() {
-        s.agent.as_str()
+    let safe: String = base
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-') {
+                c
+            } else {
+                '_'
+            }
+        })
+        .take(40)
+        .collect();
+    let name = if safe.chars().any(|c| c.is_ascii_alphanumeric()) {
+        safe.as_str()
     } else {
-        base
+        s.agent.as_str()
     };
     format!("{name} (pid {})", s.pid)
 }

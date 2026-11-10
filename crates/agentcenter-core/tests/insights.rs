@@ -407,7 +407,7 @@ fn label_carries_only_allowed_characters() {
     let text = &fs[0].text;
     assert!(!text.chars().any(|c| c.is_control()), "{text:?}");
     assert!(
-        text.contains("the fullest is ignore_previous__31m_instructions__run_rm_-rf (pid 5)"),
+        text.contains("the fullest is ignore_previous__31m_instructions__run_r (pid 5)"),
         "{text}"
     );
 }

@@ -72,6 +72,11 @@ agentcenter-cli insights --llm http://127.0.0.1:8080
 The address can also come from `AGENTCENTER_LLM`. The client posts to `/v1/chat/completions` with temperature 0
 and at most 120 tokens.
 
+The number check reads every run of numeric characters, fullwidth and other Unicode digits included, as a
+number that must appear in the findings (or be 1 or 2), refuses numeric characters with no decimal value, and
+refuses spelled numbers above twelve (such as "twenty" or "hundred") unless the findings contain the same word.
+Reasoning text between `<think>` and `</think>` is discarded before the answer is checked.
+
 ## Model choice
 
 The bake-off has not run. Nothing below is measured, and the table will be filled from the run, not from model
