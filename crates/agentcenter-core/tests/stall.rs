@@ -292,3 +292,28 @@ fn missing_values_are_none_and_session_sum_is_partial() {
     assert!(va["sessions"][0]["cpu_pct"].is_null());
     assert!(va["machine"]["cpu_pct"].is_null());
 }
+
+#[test]
+fn a_full_tick_counts_the_d_threads_from_the_parallel_pre_scan() {
+    let dir = TempDir::new("ac-pre-scan").unwrap();
+    let fp = FakeProc::create(dir.path()).unwrap();
+    fp.set_delayacct(false).unwrap();
+    fp.add(&proc_(20, 1, "claude", 0, 0, 0)).unwrap();
+    // Processos de varias threads bastantes para a varredura se dividir.
+    let children = agentcenter_core::procfs::task::PARALLEL_MIN_JOBS as u32 + 6;
+    for pid in 100..100 + children {
+        let mut p = proc_(pid, 20, "node", 0, 0, 0);
+        p.threads = 4;
+        p.d_threads = 1;
+        fp.add(&p).unwrap();
+    }
+    let mut s = Sampler::new(Registry::default());
+    let snap = s.tick(&fp.proc_root()).unwrap();
+    assert_eq!(s.pre_scan_counts(), (children, 0));
+    let d: u32 = snap.sessions[0]
+        .processes
+        .iter()
+        .filter_map(|p| p.threads_d)
+        .sum();
+    assert_eq!(d, children, "one D thread each, counted once");
+}

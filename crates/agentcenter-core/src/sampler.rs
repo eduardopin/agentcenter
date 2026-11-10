@@ -218,6 +218,9 @@ pub struct Sampler {
     agents: HashMap<u32, AgentInfo>,
     /// Fds abertos de `stat` e `io` dos processos de sessao (ver `procfs::fdcache`).
     fds: FdCache,
+    /// Do ultimo tick: processos de varias threads contados pela pre-varredura
+    /// e pelos que varreram `task/` sozinhos (ver [`Sampler::pre_scan_counts`]).
+    pre_scan: (u32, u32),
 }
 
 /// Varreduras de `task/` de um tick, feitas antes da leitura dos processos para
@@ -254,6 +257,7 @@ impl Sampler {
             quiet: HashSet::new(),
             agents: HashMap::new(),
             fds: FdCache::default(),
+            pre_scan: (0, 0),
         };
         s.set_config(config);
         s
@@ -304,6 +308,13 @@ impl Sampler {
     }
 
     /// Series das sessoes vivas no ultimo tick.
+    /// Do ultimo tick, quantos processos de varias threads tiveram as threads
+    /// em `D` contadas pela pre-varredura em paralelo e quantos varreram
+    /// `task/` sozinhos (pid reusado, ou sem entrada na pre-varredura).
+    pub fn pre_scan_counts(&self) -> (u32, u32) {
+        self.pre_scan
+    }
+
     pub fn history(&self) -> &History {
         &self.history
     }
@@ -426,6 +437,7 @@ impl Sampler {
             })
             .collect();
         let mut d_scans = self.scan_threads(root, &members, &stats, delayacct);
+        self.pre_scan = (0, 0);
         for (agent, pids, read) in members {
             let selected = self.selected == Some(agent);
             let procs = by_agent.entry(agent).or_default();
@@ -682,12 +694,16 @@ impl Sampler {
         } else {
             match cached {
                 Some(c) if !selected && tick - c.d_at < self.idle_every => (c.threads_d, c.d_at),
-                _ => (
-                    d_threads_of(d_scans, pid, st.starttime, st.state, || {
-                        count_d_threads(root, pid, st.state, buf)
-                    }),
-                    tick,
-                ),
+                _ => {
+                    let (n, pre) =
+                        d_threads_of(d_scans, st, || count_d_threads(root, pid, st.state, buf));
+                    if pre {
+                        self.pre_scan.0 += 1;
+                    } else {
+                        self.pre_scan.1 += 1;
+                    }
+                    (n, tick)
+                }
             }
         };
 
@@ -882,56 +898,76 @@ fn run(
     }
 }
 
-/// Threads em `D` de um processo de varias threads: a pre-varredura do tick
-/// quando ela e do mesmo processo (mesmo `starttime`; pid reusado tem outro),
-/// senao `scan()`. A entrada sai do mapa nos dois casos.
-fn d_threads_of(
-    scans: &mut DScans,
-    pid: u32,
-    starttime: u64,
-    state: char,
-    scan: impl FnOnce() -> u32,
-) -> u32 {
-    match scans.remove(&pid) {
-        Some((start, others)) if start == starttime => {
-            others.map_or(0, |n| n + u32::from(state == 'D'))
+/// Threads em `D` de um processo de varias threads, e se vieram da
+/// pre-varredura: ela vale quando e do mesmo processo (o `starttime` do `st`
+/// lido agora; pid reusado tem outro), senao `scan()`. Recebe o `Stat` inteiro
+/// para que quem chama nao possa comparar com outro `starttime`. A entrada sai
+/// do mapa nos dois casos.
+fn d_threads_of(scans: &mut DScans, st: &Stat, scan: impl FnOnce() -> u32) -> (u32, bool) {
+    match scans.remove(&st.pid) {
+        Some((start, others)) if start == st.starttime => {
+            (others.map_or(0, |n| n + u32::from(st.state == 'D')), true)
         }
-        _ => scan(),
+        _ => (scan(), false),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{DScans, d_threads_of};
+    use crate::fixture::FakeProcess;
+    use crate::procfs::stat::{Stat, parse_stat};
 
     const SCANNED: u32 = 99;
+
+    fn stat(pid: u32, starttime: u64, state: char) -> Stat {
+        let mut p = FakeProcess::new(pid, 1, "x");
+        p.starttime = starttime;
+        p.state = state;
+        parse_stat(&p.stat_line()).unwrap()
+    }
 
     #[test]
     fn a_pre_scan_of_the_same_process_counts_its_threads_and_the_main_one() {
         let mut scans = DScans::from([(7, (100, Some(2)))]);
-        assert_eq!(d_threads_of(&mut scans, 7, 100, 'D', || SCANNED), 3);
+        assert_eq!(
+            d_threads_of(&mut scans, &stat(7, 100, 'D'), || SCANNED),
+            (3, true)
+        );
         assert!(scans.is_empty(), "the entry is used once");
         let mut scans = DScans::from([(7, (100, Some(2)))]);
-        assert_eq!(d_threads_of(&mut scans, 7, 100, 'S', || SCANNED), 2);
+        assert_eq!(
+            d_threads_of(&mut scans, &stat(7, 100, 'S'), || SCANNED),
+            (2, true)
+        );
     }
 
     #[test]
     fn a_pre_scan_of_a_vanished_task_dir_counts_none() {
         let mut scans = DScans::from([(7, (100, None))]);
-        assert_eq!(d_threads_of(&mut scans, 7, 100, 'D', || SCANNED), 0);
+        assert_eq!(
+            d_threads_of(&mut scans, &stat(7, 100, 'D'), || SCANNED),
+            (0, true)
+        );
     }
 
     #[test]
     fn a_reused_pid_is_scanned_again_and_its_old_entry_dropped() {
         let mut scans = DScans::from([(7, (100, Some(2)))]);
-        assert_eq!(d_threads_of(&mut scans, 7, 101, 'D', || SCANNED), SCANNED);
+        assert_eq!(
+            d_threads_of(&mut scans, &stat(7, 101, 'D'), || SCANNED),
+            (SCANNED, false)
+        );
         assert!(scans.is_empty(), "the other process's entry is dropped");
     }
 
     #[test]
     fn a_process_the_pre_scan_skipped_is_scanned_on_its_own() {
         let mut scans = DScans::from([(8, (100, Some(2)))]);
-        assert_eq!(d_threads_of(&mut scans, 7, 100, 'D', || SCANNED), SCANNED);
+        assert_eq!(
+            d_threads_of(&mut scans, &stat(7, 100, 'D'), || SCANNED),
+            (SCANNED, false)
+        );
         assert_eq!(scans.len(), 1, "another pid's entry stays");
     }
 }
