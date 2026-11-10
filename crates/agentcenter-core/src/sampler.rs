@@ -307,7 +307,6 @@ impl Sampler {
         &self.fds
     }
 
-    /// Series das sessoes vivas no ultimo tick.
     /// Do ultimo tick, quantos processos de varias threads tiveram as threads
     /// em `D` contadas pela pre-varredura em paralelo e quantos varreram
     /// `task/` sozinhos (pid reusado, ou sem entrada na pre-varredura).
@@ -315,6 +314,7 @@ impl Sampler {
         self.pre_scan
     }
 
+    /// Series das sessoes vivas no ultimo tick.
     pub fn history(&self) -> &History {
         &self.history
     }
