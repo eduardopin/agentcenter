@@ -2021,8 +2021,6 @@ fn at_360_the_waiting_chip_and_both_dropdowns_lie_inside_the_window() {
     });
 }
 
-/// The pushed detail page at 360 px: its least width is what the window asks
-/// for, so a minimum above 360 pushes the whole window past its edge.
 /// The detail's header bar (Back, the empty title, Handoff and Compact copies)
 /// belongs to the pushed page: the wide pane keeps it hidden, so the empty
 /// title never shows beside the list.
@@ -2044,6 +2042,8 @@ fn the_wide_detail_pane_hides_the_page_header() {
     });
 }
 
+/// The pushed detail page at 360 px: its least width is what the window asks
+/// for, so a minimum above 360 pushes the whole window past its edge.
 #[test]
 fn at_360_the_detail_page_does_not_overflow_sideways() {
     gtk::test_synced(|| {
