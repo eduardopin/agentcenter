@@ -681,10 +681,9 @@ impl Sampler {
             match cached {
                 Some(c) if !selected && tick - c.d_at < self.idle_every => (c.threads_d, c.d_at),
                 _ => match self.d_scans.remove(&pid) {
-                    Some((start, others)) if start == st.starttime => (
-                        others.map_or(0, |n| n + u32::from(st.state == 'D')),
-                        tick,
-                    ),
+                    Some((start, others)) if start == st.starttime => {
+                        (others.map_or(0, |n| n + u32::from(st.state == 'D')), tick)
+                    }
                     _ => (count_d_threads(root, pid, st.state, buf), tick),
                 },
             }
