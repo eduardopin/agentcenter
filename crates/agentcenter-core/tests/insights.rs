@@ -1,7 +1,7 @@
 //! Motor de achados: paridade com a referencia Python (fixtures) e bordas.
 
-use agentcenter_core::insights::{Finding, facts, fallback, findings};
 use agentcenter_core::Snapshot;
+use agentcenter_core::insights::{Finding, facts, fallback, findings};
 use serde_json::{Value, json};
 use std::path::PathBuf;
 
@@ -27,26 +27,49 @@ fn parity_with_python_reference() {
     assert!(stems.len() >= 12, "fixtures missing: {}", stems.len());
     let mut ids = std::collections::BTreeSet::new();
     for stem in stems {
-        let snap: Snapshot =
-            serde_json::from_str(&std::fs::read_to_string(dir().join(format!("{stem}.snapshot.json"))).unwrap())
-                .unwrap_or_else(|e| panic!("{stem}: {e}"));
-        let want: Value =
-            serde_json::from_str(&std::fs::read_to_string(dir().join(format!("{stem}.expected.json"))).unwrap())
-                .unwrap();
+        let snap: Snapshot = serde_json::from_str(
+            &std::fs::read_to_string(dir().join(format!("{stem}.snapshot.json"))).unwrap(),
+        )
+        .unwrap_or_else(|e| panic!("{stem}: {e}"));
+        let want: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir().join(format!("{stem}.expected.json"))).unwrap(),
+        )
+        .unwrap();
         let got = findings(&snap);
         let want_fs = want["findings"].as_array().unwrap();
         assert_eq!(got.len(), want_fs.len(), "{stem}: count");
         for (g, w) in got.iter().zip(want_fs) {
             assert_eq!(g.id, w["id"].as_str().unwrap(), "{stem}: id");
-            assert_eq!(g.severity, w["severity"].as_str().unwrap(), "{stem}: severity");
-            assert_eq!(g.score as i64, w["score"].as_i64().unwrap(), "{stem}: score");
+            assert_eq!(
+                g.severity,
+                w["severity"].as_str().unwrap(),
+                "{stem}: severity"
+            );
+            assert_eq!(
+                g.score as i64,
+                w["score"].as_i64().unwrap(),
+                "{stem}: score"
+            );
             assert_eq!(g.text, w["text"].as_str().unwrap(), "{stem}: text");
-            let must: Vec<&str> = w["must"].as_array().unwrap().iter().map(|m| m.as_str().unwrap()).collect();
+            let must: Vec<&str> = w["must"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|m| m.as_str().unwrap())
+                .collect();
             assert_eq!(g.must, must, "{stem}: must");
             ids.insert(g.id.clone());
         }
-        assert_eq!(facts(&got), want["facts"].as_str().unwrap(), "{stem}: facts");
-        assert_eq!(fallback(&got), want["fallback"].as_str().unwrap(), "{stem}: fallback");
+        assert_eq!(
+            facts(&got),
+            want["facts"].as_str().unwrap(),
+            "{stem}: facts"
+        );
+        assert_eq!(
+            fallback(&got),
+            want["fallback"].as_str().unwrap(),
+            "{stem}: fallback"
+        );
     }
     for id in [
         "loop",
@@ -152,9 +175,19 @@ fn multiplexers_are_not_counted_as_agents() {
 #[test]
 fn singular_wording_and_label_fallback() {
     let s = vec![
-        session(7, "/home/dev/api", GB, overlay(json!({}), json!({ "max_streak": 9 }))),
+        session(
+            7,
+            "/home/dev/api",
+            GB,
+            overlay(json!({}), json!({ "max_streak": 9 })),
+        ),
         // cwd com barra no fim: basename vazio, cai no nome do agente
-        session(8, "/home/dev/", GB, overlay(json!({ "context_pct": 91.4 }), json!({}))),
+        session(
+            8,
+            "/home/dev/",
+            GB,
+            overlay(json!({ "context_pct": 91.4 }), json!({})),
+        ),
     ];
     let fs = findings(&snap(machine(), s));
     assert_eq!(ids(&fs), ["loop", "context_full"]);
@@ -173,19 +206,43 @@ fn singular_wording_and_label_fallback() {
 #[test]
 fn plural_wording() {
     let s = vec![
-        session(1, "/p/a", GB, overlay(json!({}), json!({ "max_streak": 5 }))),
-        session(2, "/p/b", GB, overlay(json!({}), json!({ "max_streak": 12 }))),
+        session(
+            1,
+            "/p/a",
+            GB,
+            overlay(json!({}), json!({ "max_streak": 5 })),
+        ),
+        session(
+            2,
+            "/p/b",
+            GB,
+            overlay(json!({}), json!({ "max_streak": 12 })),
+        ),
     ];
     let fs = findings(&snap(machine(), s));
-    assert!(fs[0].text.starts_with("2 sessions are repeating"), "{}", fs[0].text);
+    assert!(
+        fs[0].text.starts_with("2 sessions are repeating"),
+        "{}",
+        fs[0].text
+    );
     assert!(fs[0].text.contains("b (pid 2) repeated it 12 times"));
 }
 
 #[test]
 fn loop_leader_tie_keeps_the_first_session() {
     let s = vec![
-        session(1, "/p/a", GB, overlay(json!({}), json!({ "max_streak": 7 }))),
-        session(2, "/p/b", GB, overlay(json!({}), json!({ "max_streak": 7 }))),
+        session(
+            1,
+            "/p/a",
+            GB,
+            overlay(json!({}), json!({ "max_streak": 7 })),
+        ),
+        session(
+            2,
+            "/p/b",
+            GB,
+            overlay(json!({}), json!({ "max_streak": 7 })),
+        ),
     ];
     let fs = findings(&snap(machine(), s));
     assert!(fs[0].text.contains("a (pid 1)"), "{}", fs[0].text);
@@ -211,7 +268,10 @@ fn cap_is_four_ordered_by_score() {
         .collect();
     let fs = findings(&snap(m, s));
     // loop 100, memory 90, context 80, idle 60 entram; cpu 55, burn 40 e cache 30 ficam de fora
-    assert_eq!(ids(&fs), ["loop", "memory_pressure", "context_full", "idle_memory"]);
+    assert_eq!(
+        ids(&fs),
+        ["loop", "memory_pressure", "context_full", "idle_memory"]
+    );
     let scores: Vec<u32> = fs.iter().map(|f| f.score).collect();
     assert_eq!(scores, [100, 90, 80, 60]);
 }
@@ -235,21 +295,30 @@ fn ordering_puts_lower_scores_after_higher_ones() {
         .collect();
     let fs = findings(&snap(m, s));
     assert_eq!(ids(&fs), ["cpu_saturated", "burn_leader", "cache_cold"]);
-    assert_eq!(fs[0].text, "Load average is 9.5 on 8 cores. Action: pause the busiest session with agentcenter-cli signal.");
-    assert!(fs[1].text.starts_with("s1 (pid 21) accounts for 90% of the token burn of all 3 sessions."));
-    assert!(fs[2].text.contains("3 large sessions have a prompt-cache hit rate under 80%; the lowest is s0 (pid 20) at 60%."));
+    assert_eq!(
+        fs[0].text,
+        "Load average is 9.5 on 8 cores. Action: pause the busiest session with agentcenter-cli signal."
+    );
+    assert!(
+        fs[1]
+            .text
+            .starts_with("s1 (pid 21) accounts for 90% of the token burn of all 3 sessions.")
+    );
+    assert!(fs[2].text.contains(
+        "3 large sessions have a prompt-cache hit rate under 80%; the lowest is s0 (pid 20) at 60%."
+    ));
 }
 
 #[test]
 fn memory_pressure_text_and_thresholds() {
     let mut m = machine();
-    m["mem_available_bytes"] = json!(2_400_000_000u64);
+    m["mem_available_bytes"] = json!(2_300_000_000u64);
     m["swap_total_bytes"] = json!(4 * GB);
     m["swap_free_bytes"] = json!(GB);
     let fs = findings(&snap(m, vec![session(1, "/p/a", 5 * GB, Value::Null)]));
     assert_eq!(
         fs[0].text,
-        "Only 2.4 GB of 16.0 GB memory is available (15%), with 3.0 GB in swap; agent sessions hold 5.0 GB. Action: agentcenter-cli reclaim."
+        "Only 2.3 GB of 16.0 GB memory is available (14%), with 3.0 GB in swap; agent sessions hold 5.0 GB. Action: agentcenter-cli reclaim."
     );
     // 15% exato nao dispara (< 0.15)
     let mut m = machine();
@@ -266,7 +335,10 @@ fn cache_hit_zero_counts_as_unknown_like_the_reference() {
         1,
         "/p/a",
         GB,
-        overlay(json!({ "tokens_in": 5_000_000 }), json!({ "cache_hit": 0.0 })),
+        overlay(
+            json!({ "tokens_in": 5_000_000 }),
+            json!({ "cache_hit": 0.0 }),
+        ),
     )];
     assert_eq!(ids(&findings(&snap(machine(), s))), ["all_clear"]);
 }
@@ -283,7 +355,11 @@ fn facts_and_fallback_wording() {
     assert_eq!(facts(&one), "1. [high] A.");
     assert_eq!(fallback(&one), "A.");
     let mut two = one.clone();
-    two.push(Finding { text: "B.".into(), severity: "low".into(), ..one[0].clone() });
+    two.push(Finding {
+        text: "B.".into(),
+        severity: "low".into(),
+        ..one[0].clone()
+    });
     assert_eq!(facts(&two), "1. [high] A.\n2. [low] B.");
     assert_eq!(fallback(&two), "A. 1 more finding below.");
     two.push(two[1].clone());
@@ -298,4 +374,22 @@ fn finding_serializes_with_the_contract_fields() {
     assert_eq!(v["severity"], "info");
     assert_eq!(v["score"], 0);
     assert!(v["text"].is_string() && v["must"].is_array());
+}
+
+#[test]
+fn context_threshold_is_inclusive_at_75() {
+    let at = |pct: f64| {
+        let s = vec![session(
+            1,
+            "/p/a",
+            GB,
+            overlay(json!({ "context_pct": pct }), json!({})),
+        )];
+        ids(&findings(&snap(machine(), s)))
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(at(75.0), ["context_full"]);
+    assert_eq!(at(74.9), ["all_clear"]);
 }

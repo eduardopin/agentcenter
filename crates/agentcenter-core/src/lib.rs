@@ -7,6 +7,7 @@ pub mod cockpit;
 pub mod control;
 pub mod fixture;
 pub mod history;
+pub mod insights;
 pub mod machine;
 pub mod overlay;
 pub mod procfs;
