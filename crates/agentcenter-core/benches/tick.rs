@@ -1,10 +1,11 @@
 //! Custo de um tick (orcamento: < 5 ms com 500 processos, ARCHITECTURE).
 
+use agentcenter_core::adapters::AgentRole;
 use agentcenter_core::fixture::{TempDir, synthetic};
 use agentcenter_core::overlay::claude_state::{ClaudeState, SESSIONS_DIR_ENV};
 use agentcenter_core::overlay::herdr::SOCKET_ENV as HERDR_SOCKET_ENV;
 use agentcenter_core::overlay::{self, Overlay};
-use agentcenter_core::{ProcRoot, Registry, Sampler};
+use agentcenter_core::{HISTORY_LEN, History, ProcRoot, Registry, Sampler, Session};
 use criterion::{Criterion, criterion_group, criterion_main};
 use std::hint::black_box;
 use std::path::Path;
@@ -36,6 +37,30 @@ fn claude_sessions(dir: &Path) {
             .count(),
         40
     );
+}
+
+/// Custo do `History::clone` que o sampler paga em cada frame da GUI
+/// (`Frame.history`): 20 sessoes com as series cheias (10 min a 1 s).
+fn history_clone(c: &mut Criterion) {
+    let sessions: Vec<Session> = (1..=20)
+        .map(|pid| Session::aggregate("claude".into(), AgentRole::Agent, pid, 16, Vec::new()))
+        .collect();
+    let mut history = History::default();
+    for _ in 0..HISTORY_LEN + 5 {
+        history.record(&sessions, |_| 7);
+    }
+    c.bench_function("history_clone_20", |bench| {
+        bench.iter(|| black_box(black_box(&history).clone()))
+    });
+    // Clone seguido de um tick: o que o sampler faz de fato (o frame segura o
+    // clone enquanto o proximo tick escreve).
+    c.bench_function("history_clone_then_record_20", |bench| {
+        bench.iter(|| {
+            let frame = black_box(&history).clone();
+            history.record(&sessions, |_| 7);
+            black_box(frame)
+        })
+    });
 }
 
 fn tick(c: &mut Criterion) {
@@ -128,6 +153,6 @@ fn tick(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(30);
-    targets = tick
+    targets = tick, history_clone
 }
 criterion_main!(benches);

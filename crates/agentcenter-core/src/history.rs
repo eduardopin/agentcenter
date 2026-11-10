@@ -417,4 +417,98 @@ mod tests {
         }
         assert_eq!(latest(&s.ctx_pct), 12.0);
     }
+
+    // ---- Pino do conteudo e do clone (custo do clone por tick) -----------
+
+    /// Modelo de referencia: a fila das ultimas `cap` amostras.
+    fn model_push(m: &mut std::collections::VecDeque<f32>, cap: usize, v: f32) {
+        if m.len() == cap {
+            m.pop_front();
+        }
+        m.push_back(v);
+    }
+
+    #[test]
+    fn ring_matches_a_deque_model_for_odd_capacities() {
+        for cap in [1, 2, 63, 64, 65, 127, 128, 600] {
+            let mut r = Ring::new(cap);
+            let mut m = std::collections::VecDeque::new();
+            for i in 0..cap * 2 + 7 {
+                // NaN no meio: ausente tambem e amostra.
+                let v = if i % 5 == 3 { f32::NAN } else { i as f32 };
+                r.push(v);
+                model_push(&mut m, cap, v);
+                assert_eq!(r.len(), m.len());
+                assert_eq!(r.capacity(), cap);
+                let got: Vec<u32> = r.iter().map(f32::to_bits).collect();
+                let want: Vec<u32> = m.iter().map(|v| v.to_bits()).collect();
+                assert_eq!(got, want, "cap {cap} depois de {} amostras", i + 1);
+                assert_eq!(r.to_vec().len(), m.len());
+                assert_eq!(r.latest().map(f32::to_bits), m.back().map(|v| v.to_bits()));
+                let back: Vec<u32> = r.iter().rev().map(f32::to_bits).collect();
+                let want_back: Vec<u32> = m.iter().rev().map(|v| v.to_bits()).collect();
+                assert_eq!(back, want_back, "iter de tras para frente, cap {cap}");
+            }
+        }
+    }
+
+    #[test]
+    fn cloned_ring_and_history_do_not_see_later_pushes() {
+        let mut r = Ring::new(100);
+        for i in 0..150 {
+            r.push(i as f32);
+        }
+        let frozen = r.clone();
+        let before = frozen.to_vec();
+        for i in 150..400 {
+            r.push(i as f32);
+        }
+        assert_eq!(frozen.to_vec(), before, "o clone e um instantaneo");
+        assert_eq!(r.latest(), Some(399.0));
+
+        let mut h = History::new(HISTORY_LEN);
+        let mut o = SessionOverlay::default();
+        for i in 0..HISTORY_LEN {
+            o.context_pct = Some(i as f64);
+            h.record(&[with_overlay(9, o.clone())], |_| 7);
+        }
+        let frame = h.clone();
+        let before = frame.get(9).unwrap().ctx_pct.to_vec();
+        o.context_pct = Some(1000.0);
+        h.record(&[with_overlay(9, o)], |_| 7);
+        assert_eq!(frame.get(9).unwrap().ctx_pct.to_vec(), before);
+        assert_eq!(frame.get(9).unwrap().len(), HISTORY_LEN);
+        assert_eq!(latest(&h.get(9).unwrap().ctx_pct), 1000.0);
+        // Dois lados do clone divergem sem se afetar.
+        let mut other = frame.clone();
+        other.record(&[with_overlay(9, SessionOverlay::default())], |_| 7);
+        assert_eq!(frame.get(9).unwrap().ctx_pct.to_vec(), before);
+        assert_eq!(latest(&h.get(9).unwrap().ctx_pct), 1000.0);
+    }
+
+    #[test]
+    fn every_series_is_recorded_from_the_session_fields() {
+        let mut s = agent(11);
+        s.cpu_pct = Some(12.5);
+        s.pss_bytes = Some(4096);
+        s.swap_pss_bytes = Some(1024);
+        s.read_bps = Some(7.0);
+        s.write_bps = Some(9.0);
+        s.stall_pct = Some(3.5);
+        let mut h = History::new(8);
+        h.record(&[s.clone()], |_| 1);
+        s.stall_pct = None;
+        s.threads_d = Some(2);
+        s.cpu_pct = None;
+        h.record(&[s], |_| 1);
+        let h = h.get(11).unwrap();
+        assert_eq!(h.len(), 2);
+        assert_eq!(h.cpu_pct.to_vec()[0], 12.5);
+        assert!(h.cpu_pct.to_vec()[1].is_nan());
+        assert_eq!(h.pss_bytes.to_vec(), [4096.0, 4096.0]);
+        assert_eq!(h.swap_pss_bytes.to_vec(), [1024.0, 1024.0]);
+        assert_eq!(h.read_bps.to_vec(), [7.0, 7.0]);
+        assert_eq!(h.write_bps.to_vec(), [9.0, 9.0]);
+        assert_eq!(h.stall.to_vec(), [3.5, 2.0], "fallback: threads em D");
+    }
 }
