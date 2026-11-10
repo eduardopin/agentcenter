@@ -11,6 +11,7 @@ use super::{ProcRoot, read_open_into};
 use std::ffi::{c_char, c_void};
 use std::fs::File;
 use std::os::fd::{AsRawFd, FromRawFd};
+use std::sync::Mutex;
 
 unsafe extern "C" {
     /// `openat(2)`. Variadica (o `mode` so conta com `O_CREAT`, que nao usamos).
@@ -174,23 +175,86 @@ pub fn scan_d_threads_with(root: &ProcRoot, pids: &[u32], workers: usize) -> Vec
     }
     let mut out: Vec<Option<u32>> = vec![None; pids.len()];
     let chunk = pids.len().div_ceil(workers);
+    // Cada fatia num slot: a thread que nasce tira a sua; a que o sistema
+    // recusa (limite de pids, RLIMIT_NPROC) deixa a fatia para o chamador, e o
+    // tick fica mais lento em vez de derrubar a thread do sampler.
+    let slots: Vec<Mutex<Option<Slice<'_>>>> = pids
+        .chunks(chunk)
+        .zip(out.chunks_mut(chunk))
+        .map(|part| Mutex::new(Some(part)))
+        .collect();
     std::thread::scope(|s| {
-        let mut parts = pids.chunks(chunk).zip(out.chunks_mut(chunk));
         // A ultima fatia roda aqui mesmo: uma thread a menos para criar.
-        let last = parts.next_back();
-        for (ps, os) in parts {
-            s.spawn(move || scan_slice(root, ps, os));
+        let (last, rest) = slots.split_last().expect("pids is not empty");
+        for slot in rest {
+            if refuse_spawn()
+                || std::thread::Builder::new()
+                    .spawn_scoped(s, || run_slot(root, slot))
+                    .is_err()
+            {
+                run_slot(root, slot);
+            }
         }
-        if let Some((ps, os)) = last {
-            scan_slice(root, ps, os);
-        }
+        run_slot(root, last);
     });
+    drop(slots);
     out
+}
+
+type Slice<'a> = (&'a [u32], &'a mut [Option<u32>]);
+
+fn run_slot(root: &ProcRoot, slot: &Mutex<Option<Slice<'_>>>) {
+    let part = slot.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if let Some((ps, os)) = part {
+        scan_slice(root, ps, os);
+    }
+}
+
+#[cfg(not(test))]
+fn refuse_spawn() -> bool {
+    false
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Faz o sistema "recusar" as threads de quem chama, nos testes.
+    static REFUSE_SPAWN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn refuse_spawn() -> bool {
+    REFUSE_SPAWN.with(std::cell::Cell::get)
 }
 
 fn scan_slice(root: &ProcRoot, pids: &[u32], out: &mut [Option<u32>]) {
     let mut buf = String::with_capacity(512);
     for (&p, o) in pids.iter().zip(out.iter_mut()) {
         *o = d_threads_besides_main(root, p, &mut buf);
+    }
+}
+
+#[cfg(test)]
+mod spawn_tests {
+    use super::{REFUSE_SPAWN, scan_d_threads_with};
+    use crate::fixture::{FakeProc, FakeProcess, TempDir};
+
+    #[test]
+    fn a_refused_thread_leaves_its_slice_to_the_caller() {
+        let dir = TempDir::new("ac-refuse-spawn").unwrap();
+        let fp = FakeProc::create(dir.path()).unwrap();
+        let pids: Vec<u32> = (100..140).collect();
+        for &pid in &pids {
+            let mut p = FakeProcess::new(pid, 1, "worker");
+            p.threads = 3;
+            p.d_threads = 1;
+            fp.add(&p).unwrap();
+        }
+        let root = fp.proc_root();
+        let spawned = scan_d_threads_with(&root, &pids, 4);
+        REFUSE_SPAWN.with(|r| r.set(true));
+        let refused = scan_d_threads_with(&root, &pids, 4);
+        REFUSE_SPAWN.with(|r| r.set(false));
+        assert_eq!(refused, spawned);
+        assert!(refused.iter().all(|n| n.is_some()), "{refused:?}");
     }
 }
