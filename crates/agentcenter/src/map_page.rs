@@ -1023,14 +1023,20 @@ impl Ui {
     pub fn needed_height(&self, width: i32) -> i32 {
         let (_, page, _, _) = self.root.measure(gtk::Orientation::Vertical, width);
         let (_, bin, _, _) = self.bin.measure(gtk::Orientation::Vertical, width);
-        let child = self
-            .bin
+        page + (self.child_height(width) - bin).max(0)
+    }
+
+    /// Raises the bin to its child's height at `width`. The bin allocates
+    /// its child no more than the reference layout's height and clips the
+    /// rest. `render` drops the request again when the strips go away.
+    pub fn fit_bin_to_child(&self, width: i32) {
+        self.bin.set_size_request(280, self.child_height(width));
+    }
+
+    fn child_height(&self, width: i32) -> i32 {
+        self.bin
             .child()
-            .map_or(0, |c| c.measure(gtk::Orientation::Vertical, width).1);
-        // The bin allocates its child no more than the reference layout's
-        // height and clips the rest; ask for what the child needs.
-        self.bin.set_size_request(280, child);
-        page + (child - bin).max(0)
+            .map_or(0, |c| c.measure(gtk::Orientation::Vertical, width).1)
     }
 
     /// New snapshot: the map, the bar, the chips and every line of text.
@@ -1323,7 +1329,7 @@ impl Ui {
         let idle_tokens = strips && token_input.sessions.is_empty();
         self.tokens_col.set_visible(show_tokens && !idle_tokens);
         if !strips {
-            self.bin.set_size_request(280, 1); // `needed_height` raised it
+            self.bin.set_size_request(280, 1); // `fit_bin_to_child` raised it
         }
         self.memory_col.set_visible(show_memory);
         self.token_map.set_visible(!strips);

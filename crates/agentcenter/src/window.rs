@@ -645,6 +645,7 @@ impl Window {
                     // the chips and the memory strip. The list keeps its chrome
                     // (order bar, dropdowns) and scrolls its rows.
                     let need = map.needed_height(content.width());
+                    map.fit_bin_to_child(content.width());
                     at = at.max(need).min((total - LIST_CHROME_PX).max(0));
                 }
                 saved.set(kept);
