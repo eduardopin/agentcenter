@@ -82,16 +82,24 @@ Reasoning text between `<think>` and `</think>` is discarded before the answer i
 
 ## Model choice
 
-The bake-off has not run. Nothing below is measured, and the table will be filled from the run, not from model
-cards.
+Measured on 2026-11-10 with the llama.cpp CPU build b12233, 4 threads, on an Intel Core Ultra 7 265U under WSL2.
+Each candidate worded the same 60 scenarios, built from one real snapshot with seeded changes. The answers were
+checked by the Python reference of the guard, which predates the spelled-number and format-character checks, so
+the Rust guard can only pass the same answers or fewer.
 
-| Candidate | Quantization | Size | Guard pass rate (60 scenarios) | p95 latency on CPU | Decision |
-|---|---|---|---|---|---|
-| LFM2.5-350M | Q4_K_M | 229 MB | not measured yet | not measured yet | not measured yet |
-| Qwen2.5-0.5B-Instruct | q4_k_m | 491 MB | not measured yet | not measured yet | not measured yet |
-| Qwen3-0.6B | Q8_0 | 639 MB | not measured yet | not measured yet | not measured yet |
-| LFM2.5-1.2B-Instruct | Q4_K_M | 731 MB | not measured yet | not measured yet | not measured yet |
-| Qwen2.5-1.5B-Instruct | q4_k_m | 1117 MB | not measured yet | not measured yet | not measured yet |
+| Candidate | Quantization | Size | Guard pass rate (60 scenarios) | p50 | p95 latency on CPU | Peak memory | Decision |
+|---|---|---|---|---|---|---|---|
+| LFM2.5-350M | Q4_K_M | 229 MB | 1 of 60 (2%) | 1.76 s | 2.98 s | 465 MB | Rejected: pass rate |
+| Qwen2.5-0.5B-Instruct | q4_k_m | 491 MB | 47 of 60 (78%) | 2.90 s | 3.87 s | 697 MB | Rejected: pass rate, the closest |
+| Qwen3-0.6B, thinking off | Q8_0 | 639 MB | 30 of 60 (50%) | 4.58 s | 6.93 s | 1936 MB | Rejected: pass rate |
+| LFM2.5-1.2B-Instruct | Q4_K_M | 731 MB | 8 of 60 (13%) | 5.44 s | 7.77 s | 1313 MB | Rejected: pass rate |
+| Qwen2.5-1.5B-Instruct | q4_k_m | 1117 MB | 25 of 60 (42%) | 4.95 s | 7.31 s | 1941 MB | Rejected: pass rate |
+
+No candidate meets the bar, so no model is recommended and the rule text stays the briefing. All five stay
+within the latency limit. Of the 189 refused answers, 158 left out a key fact of the first finding (its number
+or its action word), 30 carried a number that is not in the findings and 1 was empty. All 13 refusals of
+Qwen2.5-0.5B-Instruct were a missing key fact. The next thing to try is a fine-tune of that model on rule text
+paired with accepted briefings, not a larger model: the two larger candidates passed less often.
 
 Acceptance bar: at least 90% of answers pass the guard on 60 scenarios, and the 95th percentile of the
 response time stays within 8 seconds on CPU. The smallest candidate that meets both is the recommended one. If
