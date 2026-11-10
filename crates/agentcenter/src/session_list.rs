@@ -589,6 +589,31 @@ fn dropdown(items: &[&str], a11y: &str) -> (gtk::DropDown, gtk::StringList) {
     let list = gtk::StringList::new(items);
     let dd = gtk::DropDown::new(Some(list.clone()), gtk::Expression::NONE);
     dd.set_valign(gtk::Align::Center);
+    // The stock factory makes the button as wide as its longest item, which
+    // at 360 px pushes the header past the window; an ellipsizing label lets
+    // it shrink.
+    let factory = gtk::SignalListItemFactory::new();
+    factory.connect_setup(|_, item| {
+        let label = gtk::Label::new(None);
+        label.set_xalign(0.0);
+        label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        if let Some(item) = item.downcast_ref::<gtk::ListItem>() {
+            item.set_child(Some(&label));
+        }
+    });
+    factory.connect_bind(|_, item| {
+        let Some(item) = item.downcast_ref::<gtk::ListItem>() else {
+            return;
+        };
+        let text = item
+            .item()
+            .and_downcast::<gtk::StringObject>()
+            .map(|s| s.string());
+        if let Some(label) = item.child().and_downcast::<gtk::Label>() {
+            label.set_label(text.as_deref().unwrap_or(""));
+        }
+    });
+    dd.set_factory(Some(&factory));
     dd.update_property(&[gtk::accessible::Property::Label(a11y)]);
     dd.set_tooltip_text(Some(a11y));
     (dd, list)
