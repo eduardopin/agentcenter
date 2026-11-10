@@ -4,7 +4,9 @@
 //! counts or inspects this process's fds, so they run one at a time.
 
 use agentcenter_core::fixture::{FakeProc, FakeProcess, TempDir};
-use agentcenter_core::procfs::task::{count_d_threads, d_threads_besides_main, scan_d_threads_with};
+use agentcenter_core::procfs::task::{
+    count_d_threads, d_threads_besides_main, scan_d_threads_with,
+};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -112,9 +114,7 @@ fn scan_fds_are_close_on_exec() {
     }
     // Let the scan finish: a stat line makes the thread count as `D`.
     use std::io::Write;
-    (&writer)
-        .write_all(b"200 (worker) D 1 0 0 0 0\n")
-        .unwrap();
+    (&writer).write_all(b"200 (worker) D 1 0 0 0 0\n").unwrap();
     assert_eq!(scan.join().unwrap(), Some(1));
     let (task_flags, stat_flags) = seen.expect("the scan never held both fds at once");
     assert_ne!(task_flags & O_CLOEXEC, 0, "task fd flags {task_flags:o}");

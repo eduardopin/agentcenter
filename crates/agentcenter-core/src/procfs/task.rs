@@ -290,7 +290,10 @@ mod dents_tests {
     fn getdents_buffer_is_aligned_for_linux_dirent64() {
         assert!(std::mem::align_of::<DentsBuf>() >= std::mem::align_of::<u64>());
         let b = DentsBuf::new();
-        assert_eq!(b.as_bytes().as_ptr() as usize % std::mem::align_of::<u64>(), 0);
+        assert_eq!(
+            b.as_bytes().as_ptr() as usize % std::mem::align_of::<u64>(),
+            0
+        );
         assert_eq!(b.as_bytes().len(), super::DENTS_BUF);
     }
 }
