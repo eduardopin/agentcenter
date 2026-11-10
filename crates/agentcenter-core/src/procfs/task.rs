@@ -127,29 +127,40 @@ pub fn d_threads_besides_main(root: &ProcRoot, pid: u32, buf: &mut String) -> Op
 
 /// Menos varreduras que isto rodam na thread de quem chama: criar thread custa
 /// mais que as ~60 syscalls de um processo de poucas threads.
-const PARALLEL_MIN_JOBS: usize = 24;
+pub const PARALLEL_MIN_JOBS: usize = 24;
 
-/// Threads de varredura no maximo. A varredura e quase so syscall (`openat`,
-/// `read`, `close` por thread de cada processo), que o kernel atende em
-/// paralelo; mais de 4 nao paga o custo de criar as threads em maquina de 4 vCPU.
-const MAX_SCAN_WORKERS: usize = 4;
+/// Threads de varredura no maximo, contando a de quem chama. A varredura e
+/// quase so syscall (`openat`, `read`, `close` por thread de cada processo), que
+/// o kernel atende em paralelo; mais de 4 nao paga o custo de criar as threads
+/// em maquina de 4 vCPU.
+pub const MAX_SCAN_WORKERS: usize = 4;
 
-fn scan_workers() -> usize {
+fn cpus() -> usize {
     // `available_parallelism` le o cgroup a cada chamada: uma vez so.
-    static WORKERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
-    *WORKERS.get_or_init(|| {
-        std::thread::available_parallelism()
-            .map_or(1, |n| n.get())
-            .min(MAX_SCAN_WORKERS)
-    })
+    static CPUS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *CPUS.get_or_init(|| std::thread::available_parallelism().map_or(1, |n| n.get()))
+}
+
+/// Quantas threads (contando a de quem chama) varrem `jobs` processos numa
+/// maquina de `cpus` CPUs: 1 abaixo de [`PARALLEL_MIN_JOBS`], nunca mais que
+/// [`MAX_SCAN_WORKERS`] nem que `cpus`, e cada thread com ao menos metade de
+/// [`PARALLEL_MIN_JOBS`] processos.
+pub fn scan_worker_count(jobs: usize, cpus: usize) -> usize {
+    if jobs < PARALLEL_MIN_JOBS {
+        return 1;
+    }
+    cpus.min(MAX_SCAN_WORKERS)
+        .min(jobs / (PARALLEL_MIN_JOBS / 2))
+        .max(1)
 }
 
 /// [`d_threads_besides_main`] de cada pid de `pids`, na mesma ordem. Com
 /// trabalho suficiente divide os pids entre threads (cada uma com o seu
-/// buffer); o resultado nao depende de como foram divididos.
+/// buffer, ver [`scan_worker_count`]); o resultado nao depende de como foram
+/// divididos.
 pub fn scan_d_threads(root: &ProcRoot, pids: &[u32]) -> Vec<Option<u32>> {
-    let workers = scan_workers().min(pids.len() / (PARALLEL_MIN_JOBS / 2));
-    if pids.len() < PARALLEL_MIN_JOBS || workers < 2 {
+    let workers = scan_worker_count(pids.len(), cpus());
+    if workers < 2 {
         let mut buf = String::with_capacity(512);
         return pids
             .iter()
