@@ -218,11 +218,12 @@ pub struct Sampler {
     agents: HashMap<u32, AgentInfo>,
     /// Fds abertos de `stat` e `io` dos processos de sessao (ver `procfs::fdcache`).
     fds: FdCache,
-    /// Varreduras de `task/` do tick em curso, feitas antes da leitura dos
-    /// processos para rodarem em paralelo: pid -> (`starttime`, threads em `D`
-    /// fora a principal). Vazio fora de `tick`.
-    d_scans: HashMap<u32, (u64, Option<u32>)>,
 }
+
+/// Varreduras de `task/` de um tick, feitas antes da leitura dos processos para
+/// rodarem em paralelo: pid -> (`starttime`, threads em `D` fora a principal).
+/// Vive so dentro de `tick`, entao nenhuma entrada passa para o tick seguinte.
+type DScans = HashMap<u32, (u64, Option<u32>)>;
 
 impl Default for Sampler {
     fn default() -> Self {
@@ -253,7 +254,6 @@ impl Sampler {
             quiet: HashSet::new(),
             agents: HashMap::new(),
             fds: FdCache::default(),
-            d_scans: HashMap::new(),
         };
         s.set_config(config);
         s
@@ -425,7 +425,7 @@ impl Sampler {
                 (agent, pids, read)
             })
             .collect();
-        self.scan_threads(root, &members, &stats, delayacct);
+        let mut d_scans = self.scan_threads(root, &members, &stats, delayacct);
         for (agent, pids, read) in members {
             let selected = self.selected == Some(agent);
             let procs = by_agent.entry(agent).or_default();
@@ -459,7 +459,8 @@ impl Sampler {
                     };
                 }
                 let st = &stats[&pid];
-                let Some((m, prev, quiet_cpu)) = self.read_process(root, st, agent, selected, ctx)
+                let Some((m, prev, quiet_cpu)) =
+                    self.read_process(root, st, agent, selected, ctx, &mut d_scans)
                 else {
                     continue; // sumiu no meio da leitura
                 };
@@ -481,7 +482,6 @@ impl Sampler {
             }
         }
 
-        self.d_scans.clear();
         let mut sessions: Vec<Session> = Vec::with_capacity(by_agent.len());
         let mut agents: HashMap<u32, AgentInfo> = HashMap::with_capacity(by_agent.len());
         for (agent_pid, procs) in by_agent {
@@ -566,14 +566,14 @@ impl Sampler {
     /// mudou de `starttime` ou de contagem de threads entre aqui e a leitura
     /// (o `stat` de sessao quieta e relido la) e varrido de novo la.
     fn scan_threads(
-        &mut self,
+        &self,
         root: &ProcRoot,
         members: &[(u32, Vec<u32>, bool)],
         stats: &HashMap<u32, Stat>,
         delayacct: bool,
-    ) {
+    ) -> DScans {
         if delayacct {
-            return;
+            return DScans::new();
         }
         let mut due: Vec<(u32, u64)> = Vec::new();
         for (agent, pids, read) in members {
@@ -594,9 +594,10 @@ impl Sampler {
             }
         }
         let pids: Vec<u32> = due.iter().map(|&(p, _)| p).collect();
-        for ((pid, start), others) in due.into_iter().zip(scan_d_threads(root, &pids)) {
-            self.d_scans.insert(pid, (start, others));
-        }
+        due.into_iter()
+            .zip(scan_d_threads(root, &pids))
+            .map(|((pid, start), others)| (pid, (start, others)))
+            .collect()
     }
 
     /// Le io; status, smaps_rollup e `task/` conforme a cadencia (ver o topo do
@@ -611,6 +612,7 @@ impl Sampler {
         agent: u32,
         selected: bool,
         ctx: TickCtx,
+        d_scans: &mut DScans,
     ) -> Option<(ProcessMetrics, Prev, Option<f64>)> {
         let TickCtx {
             delayacct,
@@ -680,12 +682,12 @@ impl Sampler {
         } else {
             match cached {
                 Some(c) if !selected && tick - c.d_at < self.idle_every => (c.threads_d, c.d_at),
-                _ => match self.d_scans.remove(&pid) {
-                    Some((start, others)) if start == st.starttime => {
-                        (others.map_or(0, |n| n + u32::from(st.state == 'D')), tick)
-                    }
-                    _ => (count_d_threads(root, pid, st.state, buf), tick),
-                },
+                _ => (
+                    d_threads_of(d_scans, pid, st.starttime, st.state, || {
+                        count_d_threads(root, pid, st.state, buf)
+                    }),
+                    tick,
+                ),
             }
         };
 
@@ -877,5 +879,59 @@ fn run(
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         }
+    }
+}
+
+/// Threads em `D` de um processo de varias threads: a pre-varredura do tick
+/// quando ela e do mesmo processo (mesmo `starttime`; pid reusado tem outro),
+/// senao `scan()`. A entrada sai do mapa nos dois casos.
+fn d_threads_of(
+    scans: &mut DScans,
+    pid: u32,
+    starttime: u64,
+    state: char,
+    scan: impl FnOnce() -> u32,
+) -> u32 {
+    match scans.remove(&pid) {
+        Some((start, others)) if start == starttime => {
+            others.map_or(0, |n| n + u32::from(state == 'D'))
+        }
+        _ => scan(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DScans, d_threads_of};
+
+    const SCANNED: u32 = 99;
+
+    #[test]
+    fn a_pre_scan_of_the_same_process_counts_its_threads_and_the_main_one() {
+        let mut scans = DScans::from([(7, (100, Some(2)))]);
+        assert_eq!(d_threads_of(&mut scans, 7, 100, 'D', || SCANNED), 3);
+        assert!(scans.is_empty(), "the entry is used once");
+        let mut scans = DScans::from([(7, (100, Some(2)))]);
+        assert_eq!(d_threads_of(&mut scans, 7, 100, 'S', || SCANNED), 2);
+    }
+
+    #[test]
+    fn a_pre_scan_of_a_vanished_task_dir_counts_none() {
+        let mut scans = DScans::from([(7, (100, None))]);
+        assert_eq!(d_threads_of(&mut scans, 7, 100, 'D', || SCANNED), 0);
+    }
+
+    #[test]
+    fn a_reused_pid_is_scanned_again_and_its_old_entry_dropped() {
+        let mut scans = DScans::from([(7, (100, Some(2)))]);
+        assert_eq!(d_threads_of(&mut scans, 7, 101, 'D', || SCANNED), SCANNED);
+        assert!(scans.is_empty(), "the other process's entry is dropped");
+    }
+
+    #[test]
+    fn a_process_the_pre_scan_skipped_is_scanned_on_its_own() {
+        let mut scans = DScans::from([(8, (100, Some(2)))]);
+        assert_eq!(d_threads_of(&mut scans, 7, 100, 'D', || SCANNED), SCANNED);
+        assert_eq!(scans.len(), 1, "another pid's entry stays");
     }
 }

@@ -8,7 +8,7 @@ use agentcenter_core::fixture::{FakeProc, FakeProcess, TempDir, synthetic};
 use agentcenter_core::procfs::stat::parse_stat;
 use agentcenter_core::procfs::task::{
     MAX_SCAN_WORKERS, PARALLEL_MIN_JOBS, count_d_threads, d_threads_besides_main, scan_d_threads,
-    scan_worker_count,
+    scan_d_threads_with, scan_worker_count,
 };
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
@@ -348,22 +348,31 @@ fn parallel_scan_matches_sequential_scan() {
     pids.insert(0, 90_001);
     pids.insert(pids.len() / 2, 90_002);
     pids.push(90_003);
-    assert!(
-        scan_worker_count(pids.len(), 4) > 1,
-        "o teste tem de passar pelo caminho paralelo"
-    );
-
     let mut buf = String::new();
     let mut sequential: Vec<(u32, Option<u32>)> = pids
         .iter()
         .map(|&p| (p, d_threads_besides_main(&root, p, &mut buf)))
         .collect();
+    sequential.sort_unstable();
+    // O numero de threads e forcado: com o de CPUs da maquina, uma maquina de
+    // uma CPU so passaria pelo caminho sequencial.
+    let split = |workers: usize| {
+        let mut out: Vec<(u32, Option<u32>)> = pids
+            .iter()
+            .copied()
+            .zip(scan_d_threads_with(&root, &pids, workers))
+            .collect();
+        out.sort_unstable();
+        out
+    };
+    for workers in [2, 3, MAX_SCAN_WORKERS, 7] {
+        assert_eq!(split(workers), sequential, "{workers} threads");
+    }
     let mut parallel: Vec<(u32, Option<u32>)> = pids
         .iter()
         .copied()
         .zip(scan_d_threads(&root, &pids))
         .collect();
-    sequential.sort_unstable();
     parallel.sort_unstable();
     assert_eq!(parallel, sequential);
 
@@ -400,4 +409,8 @@ fn scan_worker_count_is_bounded() {
         }
     }
     assert_eq!(scan_worker_count(10_000, 64), MAX_SCAN_WORKERS);
+    // A fronteira: o primeiro tamanho que divide.
+    assert_eq!(scan_worker_count(PARALLEL_MIN_JOBS - 1, 4), 1);
+    assert_eq!(scan_worker_count(PARALLEL_MIN_JOBS, 4), 2);
+    assert_eq!(scan_worker_count(PARALLEL_MIN_JOBS + 1, 4), 2);
 }

@@ -159,8 +159,13 @@ pub fn scan_worker_count(jobs: usize, cpus: usize) -> usize {
 /// buffer, ver [`scan_worker_count`]); o resultado nao depende de como foram
 /// divididos.
 pub fn scan_d_threads(root: &ProcRoot, pids: &[u32]) -> Vec<Option<u32>> {
-    let workers = scan_worker_count(pids.len(), cpus());
-    if workers < 2 {
+    scan_d_threads_with(root, pids, scan_worker_count(pids.len(), cpus()))
+}
+
+/// [`scan_d_threads`] com `workers` threads (o chamador conta como uma), para
+/// que os testes forcem a divisao em qualquer maquina.
+pub fn scan_d_threads_with(root: &ProcRoot, pids: &[u32], workers: usize) -> Vec<Option<u32>> {
+    if workers < 2 || pids.is_empty() {
         let mut buf = String::with_capacity(512);
         return pids
             .iter()
