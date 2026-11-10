@@ -1327,7 +1327,12 @@ impl Detail {
         // The page header repeats Handoff and Compact (shown only while the
         // detail is a pushed page): the public controls API has no second
         // instance, so each copy forwards its click to the real button.
-        let header = adw::HeaderBar::new();
+        // The page title would repeat the window's, and its width plus the
+        // two buttons and the window controls is what pushed a 360 px page to
+        // 459 px: an empty title widget has no width.
+        let header = adw::HeaderBar::builder()
+            .title_widget(&gtk::Box::new(gtk::Orientation::Horizontal, 0))
+            .build();
         for (short, long) in [("Compact", "Compact…"), ("Handoff", "Handoff…")] {
             let target = descendants(session_controls.widget.upcast_ref())
                 .into_iter()
@@ -1335,6 +1340,7 @@ impl Detail {
                 .find(|b| b.label().as_deref() == Some(long));
             let Some(target) = target else { continue };
             let copy = gtk::Button::with_label(short);
+            copy.add_css_class("header-copy");
             target
                 .bind_property("sensitive", &copy, "sensitive")
                 .sync_create()

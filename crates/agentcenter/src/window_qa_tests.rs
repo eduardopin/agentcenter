@@ -746,7 +746,16 @@ fn mid_window_shows_one_map_with_a_tokens_memory_toggle() {
 #[test]
 fn narrow_window_shows_two_labelled_strips_and_no_map() {
     gtk::test_synced(|| {
-        let window = open("io.agentcenter.LayoutNarrowQA", 360, 640, &tipico());
+        // The cockpit fixture carries token burn; tipico-40 has none, and an
+        // empty Tokens strip is left out at 360 px
+        // (at_360_the_tokens_strip_is_left_out_while_it_has_no_sessions).
+        let snap: Snapshot =
+            serde_json::from_str(include_str!("../tests/fixtures/snapshots/cockpit.json")).unwrap();
+        let window = open("io.agentcenter.LayoutNarrowQA", 360, 640, &snap);
+        assert!(
+            !window.map.token_input().sessions.is_empty(),
+            "the fixture carries token spend"
+        );
         assert_eq!(window.map.tier(), crate::map_page::Tier::Strips);
         assert_eq!(mapped_tokens_and_memory(&window), (false, false));
         let labels: Vec<String> = descendants(window.map.widget().upcast_ref())
@@ -773,6 +782,24 @@ fn a_short_window_turns_the_maps_into_strips() {
         window.map.set_height_sp(900.0);
         settle_until(|| mapped_tokens_and_memory(&window) == (true, true));
         assert_eq!(mapped_tokens_and_memory(&window), (true, true));
+        window.window.close();
+        settle();
+    });
+}
+
+/// The strips key on height as well as width: a short, wide window gets
+/// them, and with them the compact `strips` class.
+#[test]
+fn a_short_wide_window_gets_the_strips_class() {
+    gtk::test_synced(|| {
+        let window = open("io.agentcenter.ShortWideStripsQA", 1280, 800, &tipico());
+        settle();
+        assert!(!window.map.widget().has_css_class("strips"));
+        assert!(resize_until(&window, 500, (false, false)));
+        assert!(
+            window.map.widget().has_css_class("strips"),
+            "a 1280 x 500 window shows the strips without the strips class"
+        );
         window.window.close();
         settle();
     });
@@ -1834,6 +1861,579 @@ fn wide_start_detail_leaves_nothing_that_pushes_a_later_selection() {
             !window.split.shows_content(),
             "a selection alone does not push the detail"
         );
+        window.window.close();
+        settle();
+    });
+}
+
+// ---- 360 px overflow (bug 8b4af569) ------------------------------------------
+
+/// `inner` lies inside `outer` (px, half a px of rounding allowed).
+fn inside(inner: &gtk::graphene::Rect, outer: &gtk::graphene::Rect) -> bool {
+    inner.x() >= outer.x() - 0.5
+        && inner.y() >= outer.y() - 0.5
+        && inner.x() + inner.width() <= outer.x() + outer.width() + 0.5
+        && inner.y() + inner.height() <= outer.y() + outer.height() + 0.5
+}
+
+fn mapped_with_class(window: &Window, class: &str) -> Vec<gtk::Widget> {
+    descendants(window.window.upcast_ref())
+        .into_iter()
+        .filter(|w| w.is_mapped() && w.has_css_class(class))
+        .collect()
+}
+
+/// What the desktop captures run with, for the length of a test: the app's
+/// stylesheet (the widths and paddings are CSS) and an 11 pt DejaVu Sans,
+/// named outright and installed by CI (`fonts-dejavu-core`) so the pixel
+/// bounds below measure the same glyphs on every machine; `set` checks that
+/// the family resolves. The Broadway
+/// defaults (no stylesheet, Sans 10) hide the overflow. Tests run one at a
+/// time on the main thread; the drop puts both back.
+const DESKTOP_FONT: &str = "DejaVu Sans 11";
+
+struct DesktopLook {
+    provider: gtk::CssProvider,
+    font: Option<gtk::glib::GString>,
+}
+
+impl DesktopLook {
+    fn set() -> Self {
+        adw::init().expect("isolated Broadway display required");
+        let provider = gtk::CssProvider::new();
+        provider.load_from_string(crate::app::STYLESHEET);
+        gtk::style_context_add_provider_for_display(
+            &gtk::gdk::Display::default().expect("display"),
+            &provider,
+            gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+        );
+        let settings = gtk::Settings::default().expect("default settings");
+        let font = settings.gtk_font_name();
+        settings.set_gtk_font_name(Some(DESKTOP_FONT));
+        let desc = gtk::pango::FontDescription::from_string(DESKTOP_FONT);
+        let family = gtk::Label::new(None)
+            .pango_context()
+            .load_font(&desc)
+            .and_then(|f| f.describe().family())
+            .map(|f| f.to_string());
+        assert_eq!(
+            family.as_deref(),
+            Some("DejaVu Sans"),
+            "{DESKTOP_FONT} does not resolve here: install fonts-dejavu-core"
+        );
+        Self { provider, font }
+    }
+}
+
+impl Drop for DesktopLook {
+    fn drop(&mut self) {
+        if let Some(display) = gtk::gdk::Display::default() {
+            gtk::style_context_remove_provider_for_display(&display, &self.provider);
+        }
+        if let Some(settings) = gtk::Settings::default() {
+            settings.set_gtk_font_name(self.font.as_deref());
+        }
+    }
+}
+
+/// Waits for the paned to lay its top out at the position it was given. A
+/// breakpoint that flips the maps to strips lands inside a layout pass, so the
+/// top and the labels take their final size one frame later, which Broadway
+/// (no browser acknowledging frames) delays by about a second.
+fn settle_paned(window: &Window) {
+    let paned = descendants(window.window.upcast_ref())
+        .into_iter()
+        .find_map(|w| w.downcast::<gtk::Paned>().ok())
+        .expect("the window has a paned");
+    settle_until(|| {
+        paned
+            .start_child()
+            .is_some_and(|c| c.height() == paned.position())
+    });
+    settle();
+}
+
+/// The content's least width at 360 px: a minimum above the window's makes
+/// GTK allocate past the edge, which clips the header chip and the dropdowns.
+#[test]
+fn at_360_the_window_content_does_not_overflow_sideways() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360WidthQA", 360, 640, &tipico());
+        settle_paned(&window);
+        let content = window.window.content().expect("window content");
+        let (least, _, _, _) = content.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            least <= 360,
+            "content needs {least} px at the least, 360 given"
+        );
+        assert!(
+            content.width() <= 360,
+            "content allocated {} px in a 360 px window",
+            content.width()
+        );
+        let problems = crate::measure::overflow(window.window.upcast_ref(), Some(360));
+        assert!(problems.is_empty(), "overflow: {problems:?}");
+        window.window.close();
+        settle();
+    });
+}
+
+#[test]
+fn at_360_the_waiting_chip_and_both_dropdowns_lie_inside_the_window() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360ChipsQA", 360, 640, &tipico());
+        settle_paned(&window);
+        let root = window.window.clone();
+        let whole = gtk::graphene::Rect::new(0.0, 0.0, 360.0, 640.0);
+        let stack = content_stack(&window);
+        let region = bounds_in(&stack, &root);
+        let chips = mapped_with_class(&window, "chip");
+        assert!(!chips.is_empty(), "the waiting chips are shown");
+        let mut clipped = Vec::new();
+        for chip in &chips {
+            let b = bounds_in(chip, &root);
+            if !inside(&b, &whole) || !inside(&b, &region) {
+                clipped.push(format!(
+                    "chip {b:?} outside the window {whole:?} or the maps region {region:?}"
+                ));
+            }
+        }
+        let drops: Vec<gtk::Widget> = descendants(root.upcast_ref())
+            .into_iter()
+            .filter(|w| w.is_mapped() && w.is::<gtk::DropDown>())
+            .collect();
+        assert_eq!(drops.len(), 2, "sort and agent dropdowns are shown");
+        for d in &drops {
+            let b = bounds_in(d, &root);
+            if !inside(&b, &whole) {
+                clipped.push(format!("dropdown {b:?} outside the window {whole:?}"));
+            }
+            let bar = bounds_in(&window.switcher_bar, &root);
+            if window.switcher_bar.reveals() && b.y() + b.height() > bar.y() {
+                clipped.push(format!("dropdown {b:?} under the switcher bar {bar:?}"));
+            }
+        }
+        assert!(clipped.is_empty(), "{}", clipped.join("; "));
+        window.window.close();
+        settle();
+    });
+}
+
+/// The detail's header bar (Back, the empty title, Handoff and Compact copies)
+/// belongs to the pushed page: the wide pane keeps it hidden, so the empty
+/// title never shows beside the list.
+#[test]
+fn the_wide_detail_pane_hides_the_page_header() {
+    gtk::test_synced(|| {
+        let window = open_detail_at_start("io.agentcenter.WideDetailHeaderQA", 1280);
+        let tb = &window.detail.toolbar;
+        assert!(
+            settle_until(|| tb.is_mapped() && tb.height() > 100),
+            "the detail is drawn"
+        );
+        assert!(
+            !tb.reveals_top_bars(),
+            "the wide detail pane shows the pushed page's header bar"
+        );
+        window.window.close();
+        settle();
+    });
+}
+
+/// The pushed detail page at 360 px: its least width is what the window asks
+/// for, so a minimum above 360 pushes the whole window past its edge.
+#[test]
+fn at_360_the_detail_page_does_not_overflow_sideways() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open_detail_at_start("io.agentcenter.Narrow360DetailQA", 360);
+        let tb = &window.detail.toolbar;
+        assert!(
+            settle_until(|| tb.is_mapped() && tb.height() > 100),
+            "the detail is drawn"
+        );
+        // The push slides the page in; checked mid-slide it lies off the edge.
+        let root = window.window.clone();
+        assert!(
+            settle_until(|| tb.compute_bounds(&root).is_some_and(|b| b.x().abs() < 0.5)),
+            "the detail page came to rest on the window"
+        );
+        // The bin lays the page out a frame after it comes to rest; until then
+        // everything in it is 0 px wide and the walk below sees nothing.
+        let page = descendants(tb.upcast_ref())
+            .into_iter()
+            .find(|w| w.is::<adw::BreakpointBin>())
+            .expect("the detail's breakpoint bin");
+        assert!(
+            settle_until(|| page.width() > 0),
+            "the detail page is laid out"
+        );
+        let (least, _, _, _) = tb.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            least <= 360,
+            "detail page needs {least} px at the least, 360 given"
+        );
+        let content = window.window.content().expect("window content");
+        let (least, _, _, _) = content.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            least <= 360,
+            "content needs {least} px at the least with the detail shown, 360 given"
+        );
+        let problems = crate::measure::overflow(window.window.upcast_ref(), Some(360));
+        assert!(problems.is_empty(), "overflow: {problems:?}");
+        window.window.close();
+        settle();
+    });
+}
+
+#[test]
+fn at_360_the_memory_strip_is_visible() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360MemoryQA", 360, 640, &tipico());
+        settle_paned(&window);
+        let root = window.window.clone();
+        let region = bounds_in(&content_stack(&window), &root);
+        let bars = mapped_with_class(&window, "memory-bar");
+        assert_eq!(bars.len(), 1, "the memory strip is mapped");
+        let b = bounds_in(&bars[0], &root);
+        assert!(b.height() > 0.0, "the memory strip has a height");
+        assert!(
+            inside(&b, &region),
+            "memory strip {b:?} clipped by the maps region {region:?}"
+        );
+        window.window.close();
+        settle();
+    });
+}
+
+/// The strips' height follows the chips: a snapshot that brings three chips
+/// and an alert line after the window settled on a lighter one must still
+/// leave the memory strip whole (the capture's tipico-40 lost it).
+#[test]
+fn at_360_the_memory_strip_stays_visible_when_a_busier_snapshot_arrives() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let calm: Snapshot =
+            serde_json::from_str(include_str!("../tests/fixtures/snapshots/vazio.json")).unwrap();
+        let window = open("io.agentcenter.Narrow360BusyQA", 360, 640, &calm);
+        settle_paned(&window);
+        window.apply(Ok(Frame {
+            snapshot: Arc::new(tipico()),
+            history: None,
+        }));
+        settle_paned(&window);
+        let root = window.window.clone();
+        let region = bounds_in(&content_stack(&window), &root);
+        let bars = mapped_with_class(&window, "memory-bar");
+        assert_eq!(bars.len(), 1, "the memory strip is mapped");
+        let b = bounds_in(&bars[0], &root);
+        assert!(b.height() > 0.0, "the memory strip has a height");
+        assert!(
+            inside(&b, &region),
+            "memory strip {b:?} clipped by the maps region {region:?}"
+        );
+        window.window.close();
+        settle();
+    });
+}
+
+/// With no token spend the Tokens strip says "no sessions" and nothing else,
+/// and at 360 x 640 its row is the height the memory strip loses in the
+/// capture's real fonts: the strip is left out until there is spend to show.
+#[test]
+fn at_360_the_tokens_strip_is_left_out_while_it_has_no_sessions() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360NoTokensQA", 360, 640, &tipico());
+        settle_paned(&window);
+        let titled = |text: &str| {
+            descendants(window.window.upcast_ref())
+                .into_iter()
+                .filter(|w| w.is_mapped())
+                .filter_map(|w| w.downcast::<gtk::Label>().ok())
+                .any(|l| l.label() == text)
+        };
+        assert!(!titled("Tokens"), "the empty Tokens strip takes a row");
+        assert!(titled("Memory"), "the Memory strip stays");
+        window.window.close();
+        settle();
+    });
+}
+
+/// The breakpoint bin hands its child the height of its reference (wide)
+/// layout, which the stacked strips outgrow: Adwaita warns "requested 177 px,
+/// 108 px available" and the bin clips the Memory heading and bar while the
+/// paned leaves blank room below. The child gets what it asks for.
+#[test]
+fn at_360_the_maps_content_gets_the_height_it_asks_for() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360AskedQA", 360, 640, &tipico());
+        settle_paned(&window);
+        let bin = window
+            .map
+            .widget()
+            .first_child()
+            .expect("the breakpoint bin");
+        let inner = bin
+            .downcast::<adw::BreakpointBin>()
+            .unwrap()
+            .child()
+            .unwrap();
+        let asked = inner.measure(gtk::Orientation::Vertical, inner.width()).1;
+        assert!(
+            inner.height() >= asked,
+            "the maps content is {} px tall and asks for {asked}",
+            inner.height()
+        );
+        window.window.close();
+        settle();
+    });
+}
+
+fn paned_of(window: &Window) -> gtk::Paned {
+    descendants(window.window.upcast_ref())
+        .into_iter()
+        .find_map(|w| w.downcast::<gtk::Paned>().ok())
+        .expect("the window has a paned")
+}
+
+/// The top of the paned is what the strips ask for (never the 64 px default
+/// the narrow mode starts from), and the list keeps its chrome. Checked after
+/// a busier snapshot, the case the re-clamp on every map render is for.
+#[test]
+fn at_360_the_paned_top_is_at_least_what_the_maps_need() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let calm: Snapshot =
+            serde_json::from_str(include_str!("../tests/fixtures/snapshots/vazio.json")).unwrap();
+        let window = open("io.agentcenter.Narrow360PanedQA", 360, 640, &calm);
+        settle_paned(&window);
+        window.apply(Ok(Frame {
+            snapshot: Arc::new(tipico()),
+            history: None,
+        }));
+        settle_paned(&window);
+        let paned = paned_of(&window);
+        let need = window.map.needed_height(content_stack(&window).width());
+        assert!(
+            need > STRIPS_TOP_PX,
+            "the strips need {need} px, no more than the {STRIPS_TOP_PX} px default"
+        );
+        assert!(
+            paned.position() >= need,
+            "the paned top is {} px, the maps need {need}",
+            paned.position()
+        );
+        assert!(
+            paned.position() <= paned.height() - LIST_CHROME_PX,
+            "the paned top {} px leaves the list less than its {LIST_CHROME_PX} px chrome of {}",
+            paned.position(),
+            paned.height()
+        );
+        window.window.close();
+        settle();
+    });
+}
+
+/// tipico-40 with names and an agent type no 360 px window has room for:
+/// long names unbreakable at any point, so only ellipsizing keeps them in.
+fn long_names() -> Snapshot {
+    let mut snap = tipico();
+    for (i, s) in snap.sessions.iter_mut().enumerate() {
+        if let Some(o) = s.overlay.as_mut() {
+            o.name = Some(format!("{}{i}", "n".repeat(90)));
+        }
+        if i == 0 {
+            s.agent = "a".repeat(70);
+        }
+    }
+    snap
+}
+
+/// Names of any length: the chip's name and the dropdown's items give way,
+/// since a minimum above the window's makes GTK allocate past the edge.
+#[test]
+fn at_360_long_names_do_not_widen_the_window() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360LongQA", 360, 640, &long_names());
+        settle_paned(&window);
+        let root = window.window.clone();
+        let whole = gtk::graphene::Rect::new(0.0, 0.0, 360.0, 640.0);
+        let content = window.window.content().expect("window content");
+        let (least, _, _, _) = content.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            least <= 360,
+            "content needs {least} px at the least, 360 given"
+        );
+        // The longest list heading, beside the order and the subheading.
+        window.list.set_sort_key(SortKey::SinceStart);
+        settle_paned(&window);
+        let (least, _, _, _) = content.measure(gtk::Orientation::Horizontal, -1);
+        assert!(
+            least <= 360,
+            "content needs {least} px at the least with the since-start heading, 360 given"
+        );
+        assert!(
+            !mapped_with_class(&window, "chip").is_empty(),
+            "the waiting chips are shown"
+        );
+        // The stock item factory sizes the button to its longest item (155 and
+        // 122 px here, 57 and 53 with the ellipsizing label); the two together
+        // keep to half the window, or the order bar has no room for its label.
+        let least_widths: i32 = descendants(root.upcast_ref())
+            .into_iter()
+            .filter(|w| w.is_mapped() && w.is::<gtk::DropDown>())
+            .map(|d| d.measure(gtk::Orientation::Horizontal, -1).0)
+            .sum();
+        assert!(
+            least_widths <= 180,
+            "the dropdowns need {least_widths} px at the least, half the window is 180"
+        );
+        let mut clipped = Vec::new();
+        for w in descendants(root.upcast_ref())
+            .into_iter()
+            .filter(|w| w.is_mapped() && (w.has_css_class("chip") || w.is::<gtk::DropDown>()))
+        {
+            let b = bounds_in(&w, &root);
+            if !inside(&b, &whole) {
+                clipped.push(format!("{} {b:?} outside {whole:?}", w.type_().name()));
+            }
+        }
+        assert!(clipped.is_empty(), "{}", clipped.join("; "));
+        window.window.close();
+        settle();
+    });
+}
+
+/// The compact cells take 6 px all round: the 2 x 2 grid has no room for the
+/// 12 px sides of the wide row.
+#[test]
+fn at_360_the_machine_strip_cells_take_the_compact_padding() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360PaddingQA", 360, 640, &tipico());
+        settle_paned(&window);
+        let strip = descendants(window.window.upcast_ref())
+            .into_iter()
+            .find(|w| w.is_mapped() && w.has_css_class("machine-strip"))
+            .expect("the machine strip");
+        assert!(strip.has_css_class("compact"), "the strip is compact");
+        // A widget's width() is its content box; the allocation adds the padding.
+        let cell = strip.first_child().expect("a strip cell");
+        let outer = cell.compute_bounds(&strip).expect("laid out");
+        let (across, down) = (
+            outer.width() - cell.width() as f32,
+            outer.height() - cell.height() as f32,
+        );
+        assert!(
+            (across - 12.0).abs() < 0.5 && (down - 12.0).abs() < 0.5,
+            "the cell's padding takes {across} x {down} px, the compact padding is 6 + 6 each way"
+        );
+        window.window.close();
+        settle();
+    });
+}
+
+/// Session rows that lie whole inside the list's scrolled viewport.
+fn whole_list_rows(window: &Window) -> usize {
+    let rows: Vec<gtk::Widget> = mapped_with_class(window, "session-row");
+    let Some(scrolled) = rows
+        .first()
+        .and_then(|r| r.ancestor(gtk::ScrolledWindow::static_type()))
+    else {
+        return 0;
+    };
+    let viewport = bounds_in(&scrolled, &window.window);
+    rows.iter()
+        .filter(|r| inside(&bounds_in(*r, &window.window), &viewport))
+        .count()
+}
+
+/// The strips' 4 px padding is the row: with the 16 px of the wide page the
+/// list under the strips shows one whole session instead of two.
+#[test]
+fn at_360x640_the_list_keeps_2_whole_rows() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360RowsQA", 360, 640, &tipico());
+        settle_paned(&window);
+        let whole = whole_list_rows(&window);
+        assert!(
+            whole >= 2,
+            "the list shows {whole} whole session rows at 360 x 640, 2 fit"
+        );
+        window.window.close();
+        settle();
+    });
+}
+
+/// tipico-40 with every session that reports a state waiting for its user:
+/// a chip each, more than a 360 x 640 top has room for.
+fn all_waiting() -> Snapshot {
+    let mut snap = tipico();
+    for s in &mut snap.sessions {
+        if let Some(o) = s.overlay.as_mut() {
+            o.status = Some(agentcenter_core::overlay::OverlayStatus::Blocked);
+        }
+    }
+    snap
+}
+
+/// A chip per waiting session asks the strips for more height than the window has:
+/// the top stops where the list's chrome begins, and the list scrolls its rows.
+#[test]
+fn at_360_many_waiting_chips_leave_the_list_its_chrome() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open(
+            "io.agentcenter.Narrow360WaitingQA",
+            360,
+            640,
+            &all_waiting(),
+        );
+        settle_paned(&window);
+        let paned = paned_of(&window);
+        let cap = paned.height() - LIST_CHROME_PX;
+        let need = window.map.needed_height(content_stack(&window).width());
+        assert!(
+            need > cap,
+            "the chips ask for {need} px, no more than the {cap} px the top may take"
+        );
+        assert!(
+            paned.position() <= cap,
+            "the paned top is {} px, past the {cap} px that leave the list its {LIST_CHROME_PX} px chrome",
+            paned.position()
+        );
+        window.window.close();
+        settle();
+    });
+}
+
+/// Back to a wide window the strips let go: no strips class, and the bin
+/// drops the height the strips had it ask for, or the maps keep a floor
+/// as tall as the stacked strips.
+#[test]
+fn from_360_to_1280x800_the_strips_let_go_of_the_bin() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360GrowQA", 360, 640, &tipico());
+        settle_paned(&window);
+        let page = window.map.widget().clone();
+        let bin = page.first_child().expect("the breakpoint bin");
+        assert!(page.has_css_class("strips"), "360 x 640 has the strips");
+        assert!(bin.size_request().1 > 1, "the strips raised the bin");
+        window.window.set_default_size(1280, 800);
+        assert!(
+            settle_until(|| !page.has_css_class("strips")),
+            "1280 x 800 keeps the strips class"
+        );
+        settle_paned(&window);
+        assert_eq!(bin.size_request(), (280, 1), "the bin's size request");
         window.window.close();
         settle();
     });

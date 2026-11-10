@@ -711,7 +711,6 @@ pub struct Ui {
     tier: Cell<Tier>,
     shown: Cell<Shown>,
     height_sp: Cell<f64>,
-    was_strips: Cell<bool>,
     last: RefCell<(MapInput, Readout)>,
     /// The Reclaim page's own list for this tick, when the window has one.
     window_reclaim: RefCell<Option<core_reclaim::Reclaim>>,
@@ -955,7 +954,6 @@ impl Ui {
             tier: Cell::new(Tier::Wide),
             shown: Cell::new(Shown::Tokens),
             height_sp: Cell::new(f64::MAX),
-            was_strips: Cell::new(false),
             last: RefCell::default(),
             shared,
         }
@@ -1019,6 +1017,28 @@ impl Ui {
         &self.root
     }
 
+    /// The height the page needs at `width`. The bin reports the height of
+    /// its reference layout, short of what the child takes once the strips
+    /// are on, so the child is asked directly.
+    pub fn needed_height(&self, width: i32) -> i32 {
+        let (_, page, _, _) = self.root.measure(gtk::Orientation::Vertical, width);
+        let (_, bin, _, _) = self.bin.measure(gtk::Orientation::Vertical, width);
+        page + (self.child_height(width) - bin).max(0)
+    }
+
+    /// Raises the bin to its child's height at `width`. The bin allocates
+    /// its child no more than the reference layout's height and clips the
+    /// rest. `render` drops the request again when the strips go away.
+    pub fn fit_bin_to_child(&self, width: i32) {
+        self.bin.set_size_request(280, self.child_height(width));
+    }
+
+    fn child_height(&self, width: i32) -> i32 {
+        self.bin
+            .child()
+            .map_or(0, |c| c.measure(gtk::Orientation::Vertical, width).1)
+    }
+
     /// New snapshot: the map, the bar, the chips and every line of text.
     pub fn update(&self, snap: &Snapshot, r: &Readout) {
         let input = MapInput::from_snapshot(snap);
@@ -1068,7 +1088,8 @@ impl Ui {
         self.shared.on_open.borrow_mut().push(Rc::new(f));
     }
 
-    /// The maps turned into strips or back (the paned re-clamps).
+    /// The page was rendered: maps turned into strips or back, or new chips and
+    /// lines (the paned re-clamps).
     pub fn connect_layout_changed(&self, f: impl Fn() + 'static) {
         self.shared.on_layout.borrow_mut().push(Rc::new(f));
     }
@@ -1209,7 +1230,11 @@ impl Ui {
         for (pid, name, value) in &next {
             let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             content.append(&LegendGlyph::new(Mark::State(TileState::Waiting)));
-            content.append(&gtk::Label::new(Some(name)));
+            // A long name gives way to the value: the chip's least width must
+            // not push a 360 px window wider than itself.
+            let name_label = gtk::Label::new(Some(name));
+            name_label.set_ellipsize(gtk::pango::EllipsizeMode::End);
+            content.append(&name_label);
             let v = gtk::Label::new(Some(value));
             v.add_css_class("value");
             content.append(&v);
@@ -1285,6 +1310,7 @@ impl Ui {
         } else {
             gtk::Orientation::Vertical
         });
+        set_class(&self.root, "strips", strips);
         self.toggle.set_visible(tier == Tier::Toggle && !strips);
         self.maps_row.set_homogeneous(!strips);
         self.maps_row.set_orientation(if strips {
@@ -1293,7 +1319,18 @@ impl Ui {
             gtk::Orientation::Horizontal
         });
         self.maps_row.set_vexpand(!strips);
-        self.tokens_col.set_visible(show_tokens);
+        // Stacked strips close up: with the wide 10 px between the page's
+        // lines too, the list at 360 x 640 loses its second whole row.
+        if let Some(inner) = self.bin.child().and_downcast::<gtk::Box>() {
+            inner.set_spacing(if strips { 6 } else { 10 });
+        }
+        // Narrow, a Tokens strip with no spend is a heading and "no sessions":
+        // a row the memory strip needs more.
+        let idle_tokens = strips && token_input.sessions.is_empty();
+        self.tokens_col.set_visible(show_tokens && !idle_tokens);
+        if !strips {
+            self.bin.set_size_request(280, 1); // `fit_bin_to_child` raised it
+        }
         self.memory_col.set_visible(show_memory);
         self.token_map.set_visible(!strips);
         self.token_legend.set_visible(!strips);
@@ -1305,11 +1342,11 @@ impl Ui {
         self.bar.widget.set_visible(strips);
         self.note.set_label(&legend_note(input, r));
         self.legend.set_visible(!strips && show_memory && !empty);
-        if self.was_strips.replace(strips) != strips {
-            let callbacks = self.shared.on_layout.borrow().clone();
-            for f in callbacks {
-                f();
-            }
+        // Every render, not only a flip: the chips and lines a snapshot brings
+        // change the height the strips need, and the paned follows it.
+        let callbacks = self.shared.on_layout.borrow().clone();
+        for f in callbacks {
+            f();
         }
     }
 }

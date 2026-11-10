@@ -639,7 +639,15 @@ impl Window {
                 if dragged.is_some() {
                     *slot = dragged;
                 }
-                let at = paned_position(total, mode, map.is_compact(), *slot);
+                let mut at = paned_position(total, mode, map.is_compact(), *slot);
+                if mode == PanedMode::Maps && map.is_compact() {
+                    // The strips are as tall as they are: a shorter top clips
+                    // the chips and the memory strip. The list keeps its chrome
+                    // (order bar, dropdowns) and scrolls its rows.
+                    let need = map.needed_height(content.width());
+                    map.fit_bin_to_child(content.width());
+                    at = at.max(need).min((total - LIST_CHROME_PX).max(0));
+                }
                 saved.set(kept);
                 if at != paned.position() {
                     guard.set(true);

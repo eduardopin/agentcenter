@@ -49,7 +49,7 @@ timeline > label.ylabel {
 }
 
 .machine-strip.compact > .cell {
-  padding: 6px 8px;
+  padding: 6px 6px;
 }
 
 /* The two ring cells stack in the last column, two lines each; the readout
