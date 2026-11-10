@@ -106,6 +106,61 @@ fn spelled_numbers_above_twelve_are_refused_unless_in_the_findings() {
 }
 
 #[test]
+fn spelled_numbers_up_to_twelve_must_match_the_findings() {
+    let fs = pair();
+    // the findings say 3 sessions, 12 idle sessions, 75%, 91%, 2.6 GB
+    for w in [
+        "Nine", "Four", "Five", "Six", "Seven", "Eight", "Ten", "Eleven", "Zero",
+    ] {
+        let bad = GOOD.replace("Three sessions", &format!("{w} sessions"));
+        assert!(
+            reject(&bad, &fs).starts_with("number not in findings"),
+            "{w}"
+        );
+    }
+    for w in ["a dozen", "dozens of", "a billion"] {
+        let bad = GOOD.replace("Three sessions", &format!("Three sessions, {w} sessions"));
+        assert!(
+            reject(&bad, &fs).starts_with("number not in findings"),
+            "{w}"
+        );
+    }
+    // a spelled number whose digits are in the findings passes
+    let ok = GOOD.replace("Three sessions", "Three sessions, twelve of them idle,");
+    assert!(guard(&ok, &fs).is_ok());
+    // "one" and "two" are ordinary prose, as 1 and 2 are always allowed
+    let ok = GOOD.replace("Write a handoff for it", "Write one or two handoffs for it");
+    assert!(guard(&ok, &fs).is_ok());
+    // a word in the findings' own text passes
+    let mut fs2 = pair();
+    fs2[1].text = "A dozen idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.".into();
+    let ok = GOOD.replace("Three sessions", "Three sessions, a dozen idle,");
+    assert!(guard(&ok, &fs2).is_ok());
+}
+
+#[test]
+fn invisible_format_characters_are_refused() {
+    let fs = pair();
+    for c in [
+        '\u{200B}', '\u{200D}', '\u{200F}', '\u{202A}', '\u{202E}', '\u{2060}', '\u{2066}',
+        '\u{2069}', '\u{FEFF}', '\u{00AD}', '\u{061C}', '\u{E0041}',
+    ] {
+        let bad = GOOD.replace("Write a handoff", &format!("Write{c} a handoff"));
+        assert_eq!(
+            reject(&bad, &fs),
+            "control character",
+            "U+{:04X}",
+            c as u32
+        );
+    }
+    // a byte order mark at the very start is refused too
+    assert_eq!(
+        reject(&format!("\u{FEFF}{GOOD}"), &fs),
+        "control character"
+    );
+}
+
+#[test]
 fn think_blocks_are_discarded_before_the_answer() {
     let fs = pair();
     let raw =
