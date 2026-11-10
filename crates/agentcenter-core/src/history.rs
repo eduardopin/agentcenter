@@ -12,62 +12,96 @@
 use crate::cockpit::Loops;
 use crate::session::Session;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Amostras por serie: 10 min a 1 s (ARCHITECTURE, "Sampling").
 pub const HISTORY_LEN: usize = 600;
 
+/// Amostras por bloco do [`Ring`].
+const CHUNK: usize = 64;
+
 /// Buffer circular de tamanho fixo: cheio, cada `push` descarta a mais antiga.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// As amostras ficam em blocos de [`CHUNK`] atras de `Arc`: clonar o anel (o
+/// sampler clona o [`History`] em cada frame da GUI) copia so os ponteiros, e
+/// o `push` seguinte duplica apenas o bloco que escreve, enquanto o clone
+/// segura o antigo. Antes, cada clone copiava os 600 `f32` de cada uma das 11
+/// series de cada sessao.
+#[derive(Debug, Clone)]
 pub struct Ring {
-    buf: Vec<f32>,
-    /// Indice da mais antiga quando cheio; com `buf` incompleto, sempre 0.
+    chunks: Vec<Arc<[f32; CHUNK]>>,
+    /// Posicao fisica da mais antiga quando cheio; incompleto, sempre 0.
     head: usize,
+    len: usize,
     cap: usize,
 }
 
 impl Ring {
     pub fn new(cap: usize) -> Self {
+        let cap = cap.max(1);
         Self {
-            buf: Vec::with_capacity(cap),
+            chunks: Vec::with_capacity(cap.div_ceil(CHUNK)),
             head: 0,
-            cap: cap.max(1),
+            len: 0,
+            cap,
         }
     }
 
     pub fn push(&mut self, v: f32) {
-        if self.buf.len() < self.cap {
-            self.buf.push(v);
+        let pos = if self.len < self.cap {
+            let pos = self.len;
+            self.len += 1;
+            pos
         } else {
-            self.buf[self.head] = v;
+            let pos = self.head;
             self.head = (self.head + 1) % self.cap;
+            pos
+        };
+        if pos / CHUNK == self.chunks.len() {
+            self.chunks.push(Arc::new([0.0; CHUNK]));
         }
+        Arc::make_mut(&mut self.chunks[pos / CHUNK])[pos % CHUNK] = v;
     }
 
     pub fn len(&self) -> usize {
-        self.buf.len()
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.buf.is_empty()
+        self.len == 0
     }
 
     pub fn capacity(&self) -> usize {
         self.cap
     }
 
+    /// `i`-esima amostra, da mais antiga (0) para a mais nova.
+    fn at(&self, i: usize) -> f32 {
+        let pos = (self.head + i) % self.cap;
+        self.chunks[pos / CHUNK][pos % CHUNK]
+    }
+
     /// Da mais antiga para a mais nova.
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = f32> + '_ {
-        let (new, old) = self.buf.split_at(self.head);
-        old.iter().chain(new).copied()
+        (0..self.len).map(|i| self.at(i))
     }
 
     pub fn latest(&self) -> Option<f32> {
-        self.iter().next_back()
+        self.len.checked_sub(1).map(|i| self.at(i))
     }
 
     /// Copia em ordem cronologica (para a GUI desenhar sem segurar o sampler).
     pub fn to_vec(&self) -> Vec<f32> {
         self.iter().collect()
+    }
+}
+
+/// Mesma regra de antes: amostra a amostra, `NaN` nao e igual a `NaN`.
+impl PartialEq for Ring {
+    fn eq(&self, other: &Self) -> bool {
+        self.cap == other.cap
+            && self.len == other.len
+            && self.iter().zip(other.iter()).all(|(a, b)| a == b)
     }
 }
 
