@@ -1884,9 +1884,14 @@ fn mapped_with_class(window: &Window, class: &str) -> Vec<gtk::Widget> {
 }
 
 /// What the desktop captures run with, for the length of a test: the app's
-/// stylesheet (the widths and paddings are CSS) and the owner's 11 pt font.
-/// The Broadway defaults (no stylesheet, Sans 10) hide the overflow. Tests run
-/// one at a time on the main thread; the drop puts both back.
+/// stylesheet (the widths and paddings are CSS) and an 11 pt DejaVu Sans,
+/// named outright and installed by CI (`fonts-dejavu-core`) so the pixel
+/// bounds below measure the same glyphs on every machine; `set` checks that
+/// the family resolves. The Broadway
+/// defaults (no stylesheet, Sans 10) hide the overflow. Tests run one at a
+/// time on the main thread; the drop puts both back.
+const DESKTOP_FONT: &str = "DejaVu Sans 11";
+
 struct DesktopLook {
     provider: gtk::CssProvider,
     font: Option<gtk::glib::GString>,
@@ -1904,7 +1909,18 @@ impl DesktopLook {
         );
         let settings = gtk::Settings::default().expect("default settings");
         let font = settings.gtk_font_name();
-        settings.set_gtk_font_name(Some("Adwaita Sans 11"));
+        settings.set_gtk_font_name(Some(DESKTOP_FONT));
+        let desc = gtk::pango::FontDescription::from_string(DESKTOP_FONT);
+        let family = gtk::Label::new(None)
+            .pango_context()
+            .load_font(&desc)
+            .and_then(|f| f.describe().family())
+            .map(|f| f.to_string());
+        assert_eq!(
+            family.as_deref(),
+            Some("DejaVu Sans"),
+            "{DESKTOP_FONT} does not resolve here: install fonts-dejavu-core"
+        );
         Self { provider, font }
     }
 }
@@ -2007,6 +2023,27 @@ fn at_360_the_waiting_chip_and_both_dropdowns_lie_inside_the_window() {
 
 /// The pushed detail page at 360 px: its least width is what the window asks
 /// for, so a minimum above 360 pushes the whole window past its edge.
+/// The detail's header bar (Back, the empty title, Handoff and Compact copies)
+/// belongs to the pushed page: the wide pane keeps it hidden, so the empty
+/// title never shows beside the list.
+#[test]
+fn the_wide_detail_pane_hides_the_page_header() {
+    gtk::test_synced(|| {
+        let window = open_detail_at_start("io.agentcenter.WideDetailHeaderQA", 1280);
+        let tb = &window.detail.toolbar;
+        assert!(
+            settle_until(|| tb.is_mapped() && tb.height() > 100),
+            "the detail is drawn"
+        );
+        assert!(
+            !tb.reveals_top_bars(),
+            "the wide detail pane shows the pushed page's header bar"
+        );
+        window.window.close();
+        settle();
+    });
+}
+
 #[test]
 fn at_360_the_detail_page_does_not_overflow_sideways() {
     gtk::test_synced(|| {
