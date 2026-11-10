@@ -214,8 +214,14 @@ fn numbers(text: &str) -> Vec<String> {
     out
 }
 
-/// Numeros por extenso acima de doze: so passam se o texto dos achados tem a mesma palavra.
-const BIG: [&str; 18] = [
+/// Numeros por extenso sem digito em `WORDS` (zero, duzia, acima de doze): so passam se o texto
+/// dos achados tem a mesma palavra.
+const BIG: [&str; 23] = [
+    "zero",
+    "dozen",
+    "dozens",
+    "billion",
+    "trillion",
     "thirteen",
     "fourteen",
     "fifteen",
@@ -264,11 +270,29 @@ fn spell_to_digits(low: &str) -> String {
     out
 }
 
+/// Caractere que nao aparece na tela mas muda o que se le ou o que o terminal faz: controle (Cc)
+/// e os de formato (Cf) de largura zero, de direcao do texto e as tags.
+fn hidden(c: char) -> bool {
+    c.is_control()
+        || matches!(
+            c,
+            '\u{00AD}'
+                | '\u{061C}'
+                | '\u{180E}'
+                | '\u{200B}'..='\u{200F}'
+                | '\u{202A}'..='\u{202E}'
+                | '\u{2060}'..='\u{2064}'
+                | '\u{2066}'..='\u{2069}'
+                | '\u{FEFF}'
+                | '\u{E0000}'..='\u{E007F}'
+        )
+}
+
 /// Limpa e confere a saida do modelo; devolve o texto limpo ou o motivo da recusa.
 /// Ordem: vazio, longo, fora do papel, numero inventado, fato-chave ausente.
 pub fn guard(text: &str, fs: &[Finding]) -> Result<String, Rejection> {
     let t = clean(text);
-    if t.chars().any(char::is_control) {
+    if t.chars().any(hidden) {
         return Err(rejected("control character"));
     }
     let len = t.chars().count();
@@ -300,6 +324,16 @@ pub fn guard(text: &str, fs: &[Finding]) -> Result<String, Rejection> {
         if !allowed.contains(&n) && !allowed.iter().any(|a| a == trimmed) {
             return Err(rejected(format!("number not in findings: {n}")));
         }
+    }
+    // `one`..`twelve` valem pelo digito: passam se o digito esta nos achados (1 e 2 sempre
+    // estao, entao "one" de prosa comum nunca recusa) ou se a propria palavra esta la.
+    if let Some(w) = words(&low).find(|w| {
+        WORDS
+            .iter()
+            .any(|(word, d)| word == w && !allowed.iter().any(|a| a == d))
+            && !words(&known_low).any(|k| k == *w)
+    }) {
+        return Err(rejected(format!("number not in findings: {w}")));
     }
     if let Some(first) = fs.first() {
         let spelled = spell_to_digits(&low);

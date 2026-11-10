@@ -142,22 +142,24 @@ fn spelled_numbers_up_to_twelve_must_match_the_findings() {
 fn invisible_format_characters_are_refused() {
     let fs = pair();
     for c in [
-        '\u{200B}', '\u{200D}', '\u{200F}', '\u{202A}', '\u{202E}', '\u{2060}', '\u{2066}',
-        '\u{2069}', '\u{FEFF}', '\u{00AD}', '\u{061C}', '\u{E0041}',
+        '\u{200B}',
+        '\u{200D}',
+        '\u{200F}',
+        '\u{202A}',
+        '\u{202E}',
+        '\u{2060}',
+        '\u{2066}',
+        '\u{2069}',
+        '\u{FEFF}',
+        '\u{00AD}',
+        '\u{061C}',
+        '\u{E0041}',
     ] {
         let bad = GOOD.replace("Write a handoff", &format!("Write{c} a handoff"));
-        assert_eq!(
-            reject(&bad, &fs),
-            "control character",
-            "U+{:04X}",
-            c as u32
-        );
+        assert_eq!(reject(&bad, &fs), "control character", "U+{:04X}", c as u32);
     }
     // a byte order mark at the very start is refused too
-    assert_eq!(
-        reject(&format!("\u{FEFF}{GOOD}"), &fs),
-        "control character"
-    );
+    assert_eq!(reject(&format!("\u{FEFF}{GOOD}"), &fs), "control character");
 }
 
 #[test]
