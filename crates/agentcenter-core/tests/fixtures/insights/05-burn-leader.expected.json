@@ -1,0 +1,36 @@
+{
+ "findings": [
+  {
+   "id": "idle_memory",
+   "severity": "medium",
+   "score": 60,
+   "text": "5 sessions idle for 30 minutes or more hold 2.4 GB of the 3.1 GB used by agents; the largest is proj-31 (pid 39077) with 1.1 GB. Action: agentcenter-cli reclaim.",
+   "must": [
+    "2.4",
+    "reclaim"
+   ]
+  },
+  {
+   "id": "burn_leader",
+   "severity": "medium",
+   "score": 40,
+   "text": "proj-33 (pid 45033) accounts for 75% of the token burn of all 7 sessions. Action: check whether it still needs its full context.",
+   "must": [
+    "75%",
+    "45033"
+   ]
+  },
+  {
+   "id": "cache_cold",
+   "severity": "low",
+   "score": 30,
+   "text": "2 large sessions have a prompt-cache hit rate under 80%; the lowest is proj-33 (pid 45033) at 40%. Action: avoid long pauses between turns in that session.",
+   "must": [
+    "40%",
+    "45033"
+   ]
+  }
+ ],
+ "facts": "1. [medium] 5 sessions idle for 30 minutes or more hold 2.4 GB of the 3.1 GB used by agents; the largest is proj-31 (pid 39077) with 1.1 GB. Action: agentcenter-cli reclaim.\n2. [medium] proj-33 (pid 45033) accounts for 75% of the token burn of all 7 sessions. Action: check whether it still needs its full context.\n3. [low] 2 large sessions have a prompt-cache hit rate under 80%; the lowest is proj-33 (pid 45033) at 40%. Action: avoid long pauses between turns in that session.",
+ "fallback": "5 sessions idle for 30 minutes or more hold 2.4 GB of the 3.1 GB used by agents; the largest is proj-31 (pid 39077) with 1.1 GB. Action: agentcenter-cli reclaim. 2 more findings below."
+}

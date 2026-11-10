@@ -118,6 +118,19 @@ next boot:
 sudo sysctl kernel.task_delayacct=1
 ```
 
+## Insights
+
+```sh
+agentcenter-cli insights                          # findings and a briefing from fixed rules
+agentcenter-cli insights --json
+agentcenter-cli insights --llm http://127.0.0.1:8080   # a local model words the briefing
+```
+
+`insights` lists up to four findings, most urgent first, under a two-sentence briefing. By default the briefing
+is the rule text and nothing leaves the process. With `--llm` (or `AGENTCENTER_LLM`) a model on loopback words
+it, and its answer is checked before it is shown. Only loopback addresses are accepted. See
+[docs/slm/briefing.md](docs/slm/briefing.md).
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md): build and tests, `scripts/ci.sh`,

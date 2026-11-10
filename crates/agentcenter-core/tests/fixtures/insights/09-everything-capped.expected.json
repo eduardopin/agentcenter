@@ -1,0 +1,46 @@
+{
+ "findings": [
+  {
+   "id": "loop",
+   "severity": "high",
+   "score": 100,
+   "text": "3 sessions are repeating the same tool call; proj-35 (pid 42206) repeated it 35 times in a row. Action: interrupt that session and redirect it.",
+   "must": [
+    "35",
+    "42206"
+   ]
+  },
+  {
+   "id": "memory_pressure",
+   "severity": "high",
+   "score": 90,
+   "text": "Only 2.7 GB of 21.0 GB memory is available (13%), with 6.3 GB in swap; agent sessions hold 30.0 GB. Action: agentcenter-cli reclaim.",
+   "must": [
+    "2.7",
+    "reclaim"
+   ]
+  },
+  {
+   "id": "context_full",
+   "severity": "high",
+   "score": 80,
+   "text": "2 sessions are past 75% of the context window; the fullest is proj-04 (pid 33320) at 84%. Action: write a handoff and start a fresh session.",
+   "must": [
+    "84%",
+    "handoff"
+   ]
+  },
+  {
+   "id": "idle_memory",
+   "severity": "medium",
+   "score": 60,
+   "text": "30 sessions idle for 30 minutes or more hold 20.5 GB of the 30.0 GB used by agents; the largest is proj-13 (pid 37034) with 1.3 GB. Action: agentcenter-cli reclaim.",
+   "must": [
+    "20.5",
+    "reclaim"
+   ]
+  }
+ ],
+ "facts": "1. [high] 3 sessions are repeating the same tool call; proj-35 (pid 42206) repeated it 35 times in a row. Action: interrupt that session and redirect it.\n2. [high] Only 2.7 GB of 21.0 GB memory is available (13%), with 6.3 GB in swap; agent sessions hold 30.0 GB. Action: agentcenter-cli reclaim.\n3. [high] 2 sessions are past 75% of the context window; the fullest is proj-04 (pid 33320) at 84%. Action: write a handoff and start a fresh session.\n4. [medium] 30 sessions idle for 30 minutes or more hold 20.5 GB of the 30.0 GB used by agents; the largest is proj-13 (pid 37034) with 1.3 GB. Action: agentcenter-cli reclaim.",
+ "fallback": "3 sessions are repeating the same tool call; proj-35 (pid 42206) repeated it 35 times in a row. Action: interrupt that session and redirect it. 3 more findings below."
+}

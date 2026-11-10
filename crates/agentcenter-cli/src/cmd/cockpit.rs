@@ -179,21 +179,24 @@ where
     Ok(snap)
 }
 
+/// A amostragem do `cockpit`, com o `/proc` (ou a fixture) e o prazo das opcoes;
+/// o `insights` usa a mesma.
+pub fn sample_all(proc_root: Option<&str>, timeout_ms: u64) -> Result<Snapshot, String> {
+    let root = proc_root.map_or_else(ProcRoot::default, ProcRoot::new);
+    let budget = std::env::var(READ_BUDGET_ENV).ok();
+    sample(
+        &root,
+        config(budget.as_deref()),
+        Duration::from_millis(timeout_ms),
+    )
+}
+
 pub fn run(args: Vec<String>) -> Result<(), String> {
     let Some(opts) = parse(&args)? else {
         println!("{HELP}");
         return Ok(());
     };
-    let root = opts
-        .proc_root
-        .as_deref()
-        .map_or_else(ProcRoot::default, ProcRoot::new);
-    let budget = std::env::var(READ_BUDGET_ENV).ok();
-    let snap = sample(
-        &root,
-        config(budget.as_deref()),
-        Duration::from_millis(opts.timeout_ms),
-    )?;
+    let snap = sample_all(opts.proc_root.as_deref(), opts.timeout_ms)?;
 
     let stdout = std::io::stdout();
     let mut out = std::io::BufWriter::new(stdout.lock());
