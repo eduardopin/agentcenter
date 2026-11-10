@@ -309,7 +309,9 @@ struct ShortDir(std::path::PathBuf);
 
 impl ShortDir {
     fn new(prefix: &str) -> Self {
-        let p = std::path::PathBuf::from(format!("/tmp/{prefix}-{}", std::process::id()));
+        static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let p = std::path::PathBuf::from(format!("/tmp/{prefix}-{}-{n}", std::process::id()));
         let _ = fs::remove_dir_all(&p);
         fs::create_dir_all(&p).unwrap();
         Self(p)
@@ -475,7 +477,8 @@ fn task_that_is_a_fifo_does_not_hang_the_scan() {
 fn task_scan_allocations_do_not_grow_with_threads_under_a_long_root() {
     let dir = TempDir::new("ac-dscan-longroot").unwrap();
     let long = dir.path().join("d".repeat(220));
-    assert!(long.as_os_str().len() > 205);
+    // Past `PATH_STACK` (256) less "task" and the pid: the heap path.
+    assert!(long.as_os_str().len() > 240, "{long:?}");
     let fp = FakeProc::create(&long).unwrap();
     for (pid, threads) in [(100, 10), (101, 1200)] {
         let mut p = FakeProcess::new(pid, 1, "node");

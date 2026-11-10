@@ -399,8 +399,8 @@ fn budget_for_limit(soft: Option<u64>) -> usize {
 /// gasta syscalls; numa fixture (arquivo trocado por outro inode) o descompasso
 /// e possivel e a reabertura periodica o limita.
 fn is_real_proc(root: &ProcRoot) -> bool {
-    // Bytes: `Path ==` also equates "/proc/" and "/proc/.", which are not the
-    // path the kernel serves this special case for.
+    // Bytes: spelling other than the exact "/proc" takes the fixture branch
+    // and refreshes every cached fd. `/proc/` is the same real directory.
     root.path().as_os_str().as_bytes() == b"/proc"
 }
 

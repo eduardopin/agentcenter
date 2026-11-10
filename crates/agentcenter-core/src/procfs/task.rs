@@ -28,11 +28,9 @@ const O_CLOEXEC: i32 = 0x0040_0000;
 #[cfg(not(any(target_arch = "sparc", target_arch = "sparc64")))]
 const O_CLOEXEC: i32 = 0o2000000;
 
-// O_DIRECTORY: 0o200000 on x86, riscv, s390, mips; 0o40000 on arm, aarch64, powerpc;
-// 0x10000 on sparc. With it `open` fails with ENOTDIR on a FIFO or a device
+// O_DIRECTORY: 0o200000 on x86, riscv, s390, mips and sparc; 0o40000 on arm,
+// aarch64, powerpc. With it `open` fails with ENOTDIR on a FIFO or a device
 // instead of waiting for a peer.
-#[cfg(any(target_arch = "sparc", target_arch = "sparc64"))]
-const O_DIRECTORY: i32 = 0x1_0000;
 #[cfg(any(
     target_arch = "arm",
     target_arch = "aarch64",
@@ -41,8 +39,6 @@ const O_DIRECTORY: i32 = 0x1_0000;
 ))]
 const O_DIRECTORY: i32 = 0o40000;
 #[cfg(not(any(
-    target_arch = "sparc",
-    target_arch = "sparc64",
     target_arch = "arm",
     target_arch = "aarch64",
     target_arch = "powerpc",
@@ -111,8 +107,8 @@ pub fn d_threads_besides_main(root: &ProcRoot, pid: u32, buf: &mut String) -> Op
         // escreve no maximo `DENTS_BUF` bytes em `dents`, que e nosso e mutavel.
         let got = unsafe { getdents64(dfd, dents.0.as_mut_ptr().cast(), DENTS_BUF) };
         if got < 0 && first {
-            // `task` que abre mas nao lista (nao e diretorio): como o antigo
-            // `read_dir`, que falhava ja na abertura, nada a contar.
+            // `getdents64` falhou na primeira chamada: nada a contar. Um `task`
+            // que nao e diretorio ja e recusado na abertura por `O_DIRECTORY`.
             return None;
         }
         first = false;
