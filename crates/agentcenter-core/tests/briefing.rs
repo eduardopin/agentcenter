@@ -54,6 +54,68 @@ fn reject(text: &str, fs: &[Finding]) -> String {
     }
 }
 
+// ------------------------------------------------------- review findings
+
+#[test]
+fn control_characters_in_the_answer_are_refused() {
+    let fs = pair();
+    for bad in [
+        GOOD.replace("Write a handoff", "\x1b[2JWrite a handoff"),
+        GOOD.replace("Write a handoff", "\x1b]0;title\x07Write a handoff"),
+        GOOD.replace("Write", "Write\u{0}"),
+    ] {
+        assert_eq!(reject(&bad, &fs), "control character");
+    }
+}
+
+#[test]
+fn fullwidth_digits_are_numbers_too() {
+    let fs = pair();
+    let bad = GOOD.replace("2.6 GB", "\u{FF19}\u{FF19} GB");
+    assert!(
+        reject(&bad, &fs).starts_with("number not in findings"),
+        "{bad}"
+    );
+    // a numeric character with no decimal value is refused as well
+    let bad = GOOD.replace("2.6 GB", "\u{00BD} GB");
+    assert!(
+        reject(&bad, &fs).starts_with("number not in findings"),
+        "{bad}"
+    );
+    // fullwidth forms of an allowed number are fine
+    let ok = GOOD.replace("pid 4411", "pid \u{FF14}\u{FF14}\u{FF11}\u{FF11}");
+    assert!(guard(&ok, &fs).is_ok());
+}
+
+#[test]
+fn spelled_numbers_above_twelve_are_refused_unless_in_the_findings() {
+    let fs = pair();
+    for w in [
+        "twenty", "nineteen", "hundred", "thousand", "million", "thirty",
+    ] {
+        let bad = GOOD.replace("Three sessions", &format!("Three sessions, {w} sessions"));
+        assert!(
+            reject(&bad, &fs).starts_with("number not in findings"),
+            "{w}"
+        );
+    }
+    let mut fs2 = pair();
+    fs2[1].text = "Twenty idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.".into();
+    let ok = GOOD.replace("Three sessions", "Three sessions, twenty sessions");
+    assert!(guard(&ok, &fs2).is_ok());
+}
+
+#[test]
+fn think_blocks_are_discarded_before_the_answer() {
+    let fs = pair();
+    let raw =
+        format!("<think>\nLet me work out the answer.\n\nMaybe 77 things.\n</think>\n\n{GOOD}");
+    assert_eq!(guard(&raw, &fs).unwrap(), GOOD);
+    // an unclosed block swallows the rest, leaving nothing
+    let raw = format!("<think>hmm {GOOD}");
+    assert_eq!(reject(&raw, &fs), "empty");
+}
+
 // ---------------------------------------------------------------- messages
 
 #[test]
