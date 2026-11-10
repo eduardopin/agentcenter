@@ -60,7 +60,7 @@ use crate::procfs::smaps::{SmapsRollup, parse_smaps_rollup};
 use crate::procfs::stat::Stat;
 use crate::procfs::status::{Status, parse_status};
 use crate::procfs::system::{CpuTotals, delayacct_enabled, read_cpu_totals};
-use crate::procfs::task::count_d_threads;
+use crate::procfs::task::{count_d_threads, scan_d_threads};
 use crate::procfs::{ProcRoot, ReadError};
 use crate::session::{ProcessMetrics, Session};
 use crate::snapshot::{IoStallSource, Machine, SCHEMA_VERSION, Snapshot};
@@ -218,7 +218,15 @@ pub struct Sampler {
     agents: HashMap<u32, AgentInfo>,
     /// Fds abertos de `stat` e `io` dos processos de sessao (ver `procfs::fdcache`).
     fds: FdCache,
+    /// Do ultimo tick: processos de varias threads contados pela pre-varredura
+    /// e pelos que varreram `task/` sozinhos (ver [`Sampler::pre_scan_counts`]).
+    pre_scan: (u32, u32),
 }
+
+/// Varreduras de `task/` de um tick, feitas antes da leitura dos processos para
+/// rodarem em paralelo: pid -> (`starttime`, threads em `D` fora a principal).
+/// Vive so dentro de `tick`, entao nenhuma entrada passa para o tick seguinte.
+type DScans = HashMap<u32, (u64, Option<u32>)>;
 
 impl Default for Sampler {
     fn default() -> Self {
@@ -249,6 +257,7 @@ impl Sampler {
             quiet: HashSet::new(),
             agents: HashMap::new(),
             fds: FdCache::default(),
+            pre_scan: (0, 0),
         };
         s.set_config(config);
         s
@@ -296,6 +305,13 @@ impl Sampler {
     /// O cache de fds, para testes e diagnostico.
     pub fn fd_cache(&self) -> &FdCache {
         &self.fds
+    }
+
+    /// Do ultimo tick, quantos processos de varias threads tiveram as threads
+    /// em `D` contadas pela pre-varredura em paralelo e quantos varreram
+    /// `task/` sozinhos (pid reusado, ou sem entrada na pre-varredura).
+    pub fn pre_scan_counts(&self) -> (u32, u32) {
+        self.pre_scan
     }
 
     /// Series das sessoes vivas no ultimo tick.
@@ -404,17 +420,26 @@ impl Sampler {
         let mut by_agent: HashMap<u32, Vec<ProcessMetrics>> = HashMap::with_capacity(members.len());
         let mut next_prev: HashMap<u32, Prev> = HashMap::with_capacity(attribution.owner.len());
         let mut quiet: HashSet<u32> = HashSet::with_capacity(self.quiet.len());
-        for (agent, pids) in members {
+        // Quais sessoes sao lidas neste tick: a quieta, nao selecionada e sem
+        // processo novo repete as metricas do tick anterior.
+        let members: Vec<(u32, Vec<u32>, bool)> = members
+            .into_iter()
+            .map(|(agent, pids)| {
+                let read = full
+                    || self.selected == Some(agent)
+                    || !self.quiet.contains(&agent)
+                    || pids.iter().any(|p| {
+                        self.prev
+                            .get(p)
+                            .is_none_or(|pr| pr.agent != agent || pr.metrics.is_none())
+                    });
+                (agent, pids, read)
+            })
+            .collect();
+        let mut d_scans = self.scan_threads(root, &members, &stats, delayacct);
+        self.pre_scan = (0, 0);
+        for (agent, pids, read) in members {
             let selected = self.selected == Some(agent);
-            // Processo novo (ou que veio de outra sessao) acorda a sessao.
-            let read = full
-                || selected
-                || !self.quiet.contains(&agent)
-                || pids.iter().any(|p| {
-                    self.prev
-                        .get(p)
-                        .is_none_or(|pr| pr.agent != agent || pr.metrics.is_none())
-                });
             let procs = by_agent.entry(agent).or_default();
             if !read {
                 for pid in pids {
@@ -446,7 +471,8 @@ impl Sampler {
                     };
                 }
                 let st = &stats[&pid];
-                let Some((m, prev, quiet_cpu)) = self.read_process(root, st, agent, selected, ctx)
+                let Some((m, prev, quiet_cpu)) =
+                    self.read_process(root, st, agent, selected, ctx, &mut d_scans)
                 else {
                     continue; // sumiu no meio da leitura
                 };
@@ -546,6 +572,46 @@ impl Sampler {
         })
     }
 
+    /// Varre `task/` dos processos que `read_process` vai varrer neste tick, todos
+    /// de uma vez: a varredura e quase so syscall e dividida entre threads
+    /// ([`scan_d_threads`]) custa uma fracao da feita processo a processo. Quem
+    /// mudou de `starttime` ou de contagem de threads entre aqui e a leitura
+    /// (o `stat` de sessao quieta e relido la) e varrido de novo la.
+    fn scan_threads(
+        &self,
+        root: &ProcRoot,
+        members: &[(u32, Vec<u32>, bool)],
+        stats: &HashMap<u32, Stat>,
+        delayacct: bool,
+    ) -> DScans {
+        if delayacct {
+            return DScans::new();
+        }
+        let mut due: Vec<(u32, u64)> = Vec::new();
+        for (agent, pids, read) in members {
+            if !read {
+                continue;
+            }
+            let selected = self.selected == Some(*agent);
+            for &pid in pids {
+                let Some(st) = stats.get(&pid).filter(|st| st.num_threads > 1) else {
+                    continue;
+                };
+                let same = self.prev.get(&pid).filter(|p| p.starttime == st.starttime);
+                let fresh = matches!(same, Some(p) if !selected
+                    && self.tick_no - p.mem.d_at < self.idle_every);
+                if !fresh {
+                    due.push((pid, st.starttime));
+                }
+            }
+        }
+        let pids: Vec<u32> = due.iter().map(|&(p, _)| p).collect();
+        due.into_iter()
+            .zip(scan_d_threads(root, &pids))
+            .map(|((pid, start), others)| (pid, (start, others)))
+            .collect()
+    }
+
     /// Le io; status, smaps_rollup e `task/` conforme a cadencia (ver o topo do
     /// modulo). O `Option<f64>` e a CPU do processo (% de um nucleo, 0 se o
     /// contador nao andou) quando ele pode contar como quieto: tinha leitura
@@ -558,6 +624,7 @@ impl Sampler {
         agent: u32,
         selected: bool,
         ctx: TickCtx,
+        d_scans: &mut DScans,
     ) -> Option<(ProcessMetrics, Prev, Option<f64>)> {
         let TickCtx {
             delayacct,
@@ -627,7 +694,16 @@ impl Sampler {
         } else {
             match cached {
                 Some(c) if !selected && tick - c.d_at < self.idle_every => (c.threads_d, c.d_at),
-                _ => (count_d_threads(root, pid, st.state, buf), tick),
+                _ => {
+                    let (n, pre) =
+                        d_threads_of(d_scans, st, || count_d_threads(root, pid, st.state, buf));
+                    if pre {
+                        self.pre_scan.0 += 1;
+                    } else {
+                        self.pre_scan.1 += 1;
+                    }
+                    (n, tick)
+                }
             }
         };
 
@@ -819,5 +895,79 @@ fn run(
                 Err(RecvTimeoutError::Disconnected) => return,
             }
         }
+    }
+}
+
+/// Threads em `D` de um processo de varias threads, e se vieram da
+/// pre-varredura: ela vale quando e do mesmo processo (o `starttime` do `st`
+/// lido agora; pid reusado tem outro), senao `scan()`. Recebe o `Stat` inteiro
+/// para que quem chama nao possa comparar com outro `starttime`. A entrada sai
+/// do mapa nos dois casos.
+fn d_threads_of(scans: &mut DScans, st: &Stat, scan: impl FnOnce() -> u32) -> (u32, bool) {
+    match scans.remove(&st.pid) {
+        Some((start, others)) if start == st.starttime => {
+            (others.map_or(0, |n| n + u32::from(st.state == 'D')), true)
+        }
+        _ => (scan(), false),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DScans, d_threads_of};
+    use crate::fixture::FakeProcess;
+    use crate::procfs::stat::{Stat, parse_stat};
+
+    const SCANNED: u32 = 99;
+
+    fn stat(pid: u32, starttime: u64, state: char) -> Stat {
+        let mut p = FakeProcess::new(pid, 1, "x");
+        p.starttime = starttime;
+        p.state = state;
+        parse_stat(&p.stat_line()).unwrap()
+    }
+
+    #[test]
+    fn a_pre_scan_of_the_same_process_counts_its_threads_and_the_main_one() {
+        let mut scans = DScans::from([(7, (100, Some(2)))]);
+        assert_eq!(
+            d_threads_of(&mut scans, &stat(7, 100, 'D'), || SCANNED),
+            (3, true)
+        );
+        assert!(scans.is_empty(), "the entry is used once");
+        let mut scans = DScans::from([(7, (100, Some(2)))]);
+        assert_eq!(
+            d_threads_of(&mut scans, &stat(7, 100, 'S'), || SCANNED),
+            (2, true)
+        );
+    }
+
+    #[test]
+    fn a_pre_scan_of_a_vanished_task_dir_counts_none() {
+        let mut scans = DScans::from([(7, (100, None))]);
+        assert_eq!(
+            d_threads_of(&mut scans, &stat(7, 100, 'D'), || SCANNED),
+            (0, true)
+        );
+    }
+
+    #[test]
+    fn a_reused_pid_is_scanned_again_and_its_old_entry_dropped() {
+        let mut scans = DScans::from([(7, (100, Some(2)))]);
+        assert_eq!(
+            d_threads_of(&mut scans, &stat(7, 101, 'D'), || SCANNED),
+            (SCANNED, false)
+        );
+        assert!(scans.is_empty(), "the other process's entry is dropped");
+    }
+
+    #[test]
+    fn a_process_the_pre_scan_skipped_is_scanned_on_its_own() {
+        let mut scans = DScans::from([(8, (100, Some(2)))]);
+        assert_eq!(
+            d_threads_of(&mut scans, &stat(7, 100, 'D'), || SCANNED),
+            (SCANNED, false)
+        );
+        assert_eq!(scans.len(), 1, "another pid's entry stays");
     }
 }

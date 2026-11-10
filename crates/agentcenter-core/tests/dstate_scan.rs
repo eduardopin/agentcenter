@@ -6,7 +6,10 @@
 use agentcenter_core::ProcRoot;
 use agentcenter_core::fixture::{FakeProc, FakeProcess, TempDir, synthetic};
 use agentcenter_core::procfs::stat::parse_stat;
-use agentcenter_core::procfs::task::count_d_threads;
+use agentcenter_core::procfs::task::{
+    MAX_SCAN_WORKERS, PARALLEL_MIN_JOBS, count_d_threads, d_threads_besides_main, scan_d_threads,
+    scan_d_threads_with, scan_worker_count,
+};
 use std::alloc::{GlobalAlloc, Layout, System};
 use std::cell::Cell;
 use std::fs;
@@ -320,4 +323,94 @@ fn read_pid_does_not_allocate_per_read() {
     });
     assert!(buf.starts_with("Name:\tnode\n"), "{buf}");
     assert_eq!(hundred, one, "alocacoes em 100 leituras vs 1");
+}
+
+#[test]
+fn parallel_scan_matches_sequential_scan() {
+    let dir = TempDir::new("ac-dscan-par").unwrap();
+    let fp = synthetic(dir.path().join("p"), 500, 1, false).unwrap();
+    let root = fp.proc_root();
+    // Um terco das threads fora da principal em D, como no teste acima.
+    for pid in root.pids().unwrap() {
+        let Ok(tids) = fs::read_dir(root.pid_path(pid, "task")) else {
+            continue;
+        };
+        for e in tids.flatten() {
+            let tid: u32 = e.file_name().to_str().unwrap().parse().unwrap();
+            if tid != pid && tid.is_multiple_of(3) {
+                fs::write(e.path().join("stat"), thread_stat(tid, 'D')).unwrap();
+            }
+        }
+    }
+    // Todos os pids mais tres que nao existem (processo que sumiu), espalhados
+    // para cair em fatias diferentes.
+    let mut pids = root.pids().unwrap();
+    pids.insert(0, 90_001);
+    pids.insert(pids.len() / 2, 90_002);
+    pids.push(90_003);
+    let mut buf = String::new();
+    let mut sequential: Vec<(u32, Option<u32>)> = pids
+        .iter()
+        .map(|&p| (p, d_threads_besides_main(&root, p, &mut buf)))
+        .collect();
+    sequential.sort_unstable();
+    // O numero de threads e forcado: com o de CPUs da maquina, uma maquina de
+    // uma CPU so passaria pelo caminho sequencial.
+    let split = |workers: usize| {
+        let mut out: Vec<(u32, Option<u32>)> = pids
+            .iter()
+            .copied()
+            .zip(scan_d_threads_with(&root, &pids, workers))
+            .collect();
+        out.sort_unstable();
+        out
+    };
+    for workers in [2, 3, MAX_SCAN_WORKERS, 7] {
+        assert_eq!(split(workers), sequential, "{workers} threads");
+    }
+    let mut parallel: Vec<(u32, Option<u32>)> = pids
+        .iter()
+        .copied()
+        .zip(scan_d_threads(&root, &pids))
+        .collect();
+    parallel.sort_unstable();
+    assert_eq!(parallel, sequential);
+
+    // E bate com count_d_threads, que soma a principal ao resultado.
+    for &(pid, others) in &parallel {
+        assert_eq!(
+            others.map_or(0, |n| n + 1),
+            count_d_threads(&root, pid, 'D', &mut buf),
+            "pid {pid}"
+        );
+    }
+    let total: u32 = parallel.iter().filter_map(|&(_, n)| n).sum();
+    assert!(total > 0, "{total}");
+    assert_eq!(parallel.iter().filter(|(_, n)| n.is_none()).count(), 3);
+}
+
+#[test]
+fn scan_worker_count_is_bounded() {
+    for cpus in [1, 2, 4, 12, 64, 1024] {
+        for jobs in 0..5_000 {
+            let w = scan_worker_count(jobs, cpus);
+            assert!(w >= 1, "jobs {jobs} cpus {cpus}");
+            assert!(w <= MAX_SCAN_WORKERS, "jobs {jobs} cpus {cpus}: {w}");
+            assert!(w <= cpus, "jobs {jobs} cpus {cpus}: {w}");
+            if jobs < PARALLEL_MIN_JOBS {
+                assert_eq!(w, 1, "jobs {jobs} cpus {cpus}");
+            } else if w > 1 {
+                // Cada thread com ao menos metade do minimo.
+                assert!(
+                    jobs / w >= PARALLEL_MIN_JOBS / 2,
+                    "jobs {jobs} cpus {cpus}: {w}"
+                );
+            }
+        }
+    }
+    assert_eq!(scan_worker_count(10_000, 64), MAX_SCAN_WORKERS);
+    // A fronteira: o primeiro tamanho que divide.
+    assert_eq!(scan_worker_count(PARALLEL_MIN_JOBS - 1, 4), 1);
+    assert_eq!(scan_worker_count(PARALLEL_MIN_JOBS, 4), 2);
+    assert_eq!(scan_worker_count(PARALLEL_MIN_JOBS + 1, 4), 2);
 }
