@@ -1,0 +1,26 @@
+{
+ "findings": [
+  {
+   "id": "idle_memory",
+   "severity": "medium",
+   "score": 60,
+   "text": "13 sessions idle for 30 minutes or more hold 10.2 GB of the 16.5 GB used by agents; the largest is proj-02 (pid 33835) with 1.4 GB. Action: agentcenter-cli reclaim.",
+   "must": [
+    "10.2",
+    "reclaim"
+   ]
+  },
+  {
+   "id": "cache_cold",
+   "severity": "low",
+   "score": 30,
+   "text": "1 large session has a prompt-cache hit rate under 80%; the lowest is proj-32 (pid 27666) at 76%. Action: avoid long pauses between turns in that session.",
+   "must": [
+    "76%",
+    "27666"
+   ]
+  }
+ ],
+ "facts": "1. [medium] 13 sessions idle for 30 minutes or more hold 10.2 GB of the 16.5 GB used by agents; the largest is proj-02 (pid 33835) with 1.4 GB. Action: agentcenter-cli reclaim.\n2. [low] 1 large session has a prompt-cache hit rate under 80%; the lowest is proj-32 (pid 27666) at 76%. Action: avoid long pauses between turns in that session.",
+ "fallback": "13 sessions idle for 30 minutes or more hold 10.2 GB of the 16.5 GB used by agents; the largest is proj-02 (pid 33835) with 1.4 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+}

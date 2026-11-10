@@ -1,0 +1,26 @@
+{
+ "findings": [
+  {
+   "id": "idle_memory",
+   "severity": "medium",
+   "score": 60,
+   "text": "9 sessions idle for 30 minutes or more hold 4.8 GB of the 10.7 GB used by agents; the largest is proj-38 (pid 17536) with 0.7 GB. Action: agentcenter-cli reclaim.",
+   "must": [
+    "4.8",
+    "reclaim"
+   ]
+  },
+  {
+   "id": "cpu_saturated",
+   "severity": "medium",
+   "score": 55,
+   "text": "Load average is 15.7 on 12 cores. Action: pause the busiest session with agentcenter-cli signal.",
+   "must": [
+    "15.7",
+    "12"
+   ]
+  }
+ ],
+ "facts": "1. [medium] 9 sessions idle for 30 minutes or more hold 4.8 GB of the 10.7 GB used by agents; the largest is proj-38 (pid 17536) with 0.7 GB. Action: agentcenter-cli reclaim.\n2. [medium] Load average is 15.7 on 12 cores. Action: pause the busiest session with agentcenter-cli signal.",
+ "fallback": "9 sessions idle for 30 minutes or more hold 4.8 GB of the 10.7 GB used by agents; the largest is proj-38 (pid 17536) with 0.7 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+}

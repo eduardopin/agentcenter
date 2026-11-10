@@ -1,0 +1,26 @@
+{
+ "findings": [
+  {
+   "id": "memory_pressure",
+   "severity": "high",
+   "score": 90,
+   "text": "Only 2.0 GB of 21.0 GB memory is available (10%), with 1.6 GB in swap; agent sessions hold 21.6 GB. Action: agentcenter-cli reclaim.",
+   "must": [
+    "2.0",
+    "reclaim"
+   ]
+  },
+  {
+   "id": "idle_memory",
+   "severity": "medium",
+   "score": 60,
+   "text": "19 sessions idle for 30 minutes or more hold 11.7 GB of the 21.6 GB used by agents; the largest is proj-18 (pid 21296) with 1.1 GB. Action: agentcenter-cli reclaim.",
+   "must": [
+    "11.7",
+    "reclaim"
+   ]
+  }
+ ],
+ "facts": "1. [high] Only 2.0 GB of 21.0 GB memory is available (10%), with 1.6 GB in swap; agent sessions hold 21.6 GB. Action: agentcenter-cli reclaim.\n2. [medium] 19 sessions idle for 30 minutes or more hold 11.7 GB of the 21.6 GB used by agents; the largest is proj-18 (pid 21296) with 1.1 GB. Action: agentcenter-cli reclaim.",
+ "fallback": "Only 2.0 GB of 21.0 GB memory is available (10%), with 1.6 GB in swap; agent sessions hold 21.6 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+}

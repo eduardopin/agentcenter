@@ -1,0 +1,36 @@
+{
+ "findings": [
+  {
+   "id": "context_full",
+   "severity": "high",
+   "score": 80,
+   "text": "1 session is past 75% of the context window; the fullest is proj-16 (pid 16351) at 88%. Action: write a handoff and start a fresh session.",
+   "must": [
+    "88%",
+    "handoff"
+   ]
+  },
+  {
+   "id": "idle_memory",
+   "severity": "medium",
+   "score": 60,
+   "text": "10 sessions idle for 30 minutes or more hold 5.6 GB of the 9.5 GB used by agents; the largest is proj-12 (pid 18778) with 1.0 GB. Action: agentcenter-cli reclaim.",
+   "must": [
+    "5.6",
+    "reclaim"
+   ]
+  },
+  {
+   "id": "cache_cold",
+   "severity": "low",
+   "score": 30,
+   "text": "1 large session has a prompt-cache hit rate under 80%; the lowest is proj-32 (pid 27666) at 74%. Action: avoid long pauses between turns in that session.",
+   "must": [
+    "74%",
+    "27666"
+   ]
+  }
+ ],
+ "facts": "1. [high] 1 session is past 75% of the context window; the fullest is proj-16 (pid 16351) at 88%. Action: write a handoff and start a fresh session.\n2. [medium] 10 sessions idle for 30 minutes or more hold 5.6 GB of the 9.5 GB used by agents; the largest is proj-12 (pid 18778) with 1.0 GB. Action: agentcenter-cli reclaim.\n3. [low] 1 large session has a prompt-cache hit rate under 80%; the lowest is proj-32 (pid 27666) at 74%. Action: avoid long pauses between turns in that session.",
+ "fallback": "1 session is past 75% of the context window; the fullest is proj-16 (pid 16351) at 88%. Action: write a handoff and start a fresh session. 2 more findings below."
+}

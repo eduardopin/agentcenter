@@ -1,0 +1,46 @@
+{
+ "findings": [
+  {
+   "id": "memory_pressure",
+   "severity": "high",
+   "score": 90,
+   "text": "Only 2.8 GB of 21.0 GB memory is available (13%), with 2.7 GB in swap; agent sessions hold 25.5 GB. Action: agentcenter-cli reclaim.",
+   "must": [
+    "2.8",
+    "reclaim"
+   ]
+  },
+  {
+   "id": "idle_memory",
+   "severity": "medium",
+   "score": 60,
+   "text": "28 sessions idle for 30 minutes or more hold 18.9 GB of the 25.5 GB used by agents; the largest is proj-00 (pid 117339) with 2.2 GB. Action: agentcenter-cli reclaim.",
+   "must": [
+    "18.9",
+    "reclaim"
+   ]
+  },
+  {
+   "id": "cpu_saturated",
+   "severity": "medium",
+   "score": 55,
+   "text": "Load average is 39.5 on 12 cores. Action: pause the busiest session with agentcenter-cli signal.",
+   "must": [
+    "39.5",
+    "12"
+   ]
+  },
+  {
+   "id": "cache_cold",
+   "severity": "low",
+   "score": 30,
+   "text": "2 large sessions have a prompt-cache hit rate under 80%; the lowest is proj-27 (pid 32256) at 74%. Action: avoid long pauses between turns in that session.",
+   "must": [
+    "74%",
+    "32256"
+   ]
+  }
+ ],
+ "facts": "1. [high] Only 2.8 GB of 21.0 GB memory is available (13%), with 2.7 GB in swap; agent sessions hold 25.5 GB. Action: agentcenter-cli reclaim.\n2. [medium] 28 sessions idle for 30 minutes or more hold 18.9 GB of the 25.5 GB used by agents; the largest is proj-00 (pid 117339) with 2.2 GB. Action: agentcenter-cli reclaim.\n3. [medium] Load average is 39.5 on 12 cores. Action: pause the busiest session with agentcenter-cli signal.\n4. [low] 2 large sessions have a prompt-cache hit rate under 80%; the lowest is proj-27 (pid 32256) at 74%. Action: avoid long pauses between turns in that session.",
+ "fallback": "Only 2.8 GB of 21.0 GB memory is available (13%), with 2.7 GB in swap; agent sessions hold 25.5 GB. Action: agentcenter-cli reclaim. 3 more findings below."
+}

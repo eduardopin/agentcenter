@@ -1,0 +1,46 @@
+{
+ "findings": [
+  {
+   "id": "idle_memory",
+   "severity": "medium",
+   "score": 60,
+   "text": "21 sessions idle for 30 minutes or more hold 13.5 GB of the 20.7 GB used by agents; the largest is proj-19 (pid 31195) with 1.1 GB. Action: agentcenter-cli reclaim.",
+   "must": [
+    "13.5",
+    "reclaim"
+   ]
+  },
+  {
+   "id": "cpu_saturated",
+   "severity": "medium",
+   "score": 55,
+   "text": "Load average is 19.1 on 12 cores. Action: pause the busiest session with agentcenter-cli signal.",
+   "must": [
+    "19.1",
+    "12"
+   ]
+  },
+  {
+   "id": "burn_leader",
+   "severity": "medium",
+   "score": 40,
+   "text": "proj-19 (pid 31195) accounts for 75% of the token burn of all 33 sessions. Action: check whether it still needs its full context.",
+   "must": [
+    "75%",
+    "31195"
+   ]
+  },
+  {
+   "id": "cache_cold",
+   "severity": "low",
+   "score": 30,
+   "text": "2 large sessions have a prompt-cache hit rate under 80%; the lowest is proj-19 (pid 31195) at 73%. Action: avoid long pauses between turns in that session.",
+   "must": [
+    "73%",
+    "31195"
+   ]
+  }
+ ],
+ "facts": "1. [medium] 21 sessions idle for 30 minutes or more hold 13.5 GB of the 20.7 GB used by agents; the largest is proj-19 (pid 31195) with 1.1 GB. Action: agentcenter-cli reclaim.\n2. [medium] Load average is 19.1 on 12 cores. Action: pause the busiest session with agentcenter-cli signal.\n3. [medium] proj-19 (pid 31195) accounts for 75% of the token burn of all 33 sessions. Action: check whether it still needs its full context.\n4. [low] 2 large sessions have a prompt-cache hit rate under 80%; the lowest is proj-19 (pid 31195) at 73%. Action: avoid long pauses between turns in that session.",
+ "fallback": "21 sessions idle for 30 minutes or more hold 13.5 GB of the 20.7 GB used by agents; the largest is proj-19 (pid 31195) with 1.1 GB. Action: agentcenter-cli reclaim. 3 more findings below."
+}

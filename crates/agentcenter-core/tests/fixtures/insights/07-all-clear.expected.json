@@ -1,0 +1,16 @@
+{
+ "findings": [
+  {
+   "id": "all_clear",
+   "severity": "info",
+   "score": 0,
+   "text": "16 sessions are running with 10.5 GB of memory available and no session needing attention. Action: none.",
+   "must": [
+    "16",
+    "10.5"
+   ]
+  }
+ ],
+ "facts": "1. [info] 16 sessions are running with 10.5 GB of memory available and no session needing attention. Action: none.",
+ "fallback": "16 sessions are running with 10.5 GB of memory available and no session needing attention. Action: none."
+}

@@ -1,0 +1,36 @@
+{
+ "findings": [
+  {
+   "id": "loop",
+   "severity": "high",
+   "score": 100,
+   "text": "1 session is repeating the same tool call; proj-47 (pid 40680) repeated it 34 times in a row. Action: interrupt that session and redirect it.",
+   "must": [
+    "34",
+    "40680"
+   ]
+  },
+  {
+   "id": "idle_memory",
+   "severity": "medium",
+   "score": 60,
+   "text": "12 sessions idle for 30 minutes or more hold 6.0 GB of the 13.5 GB used by agents; the largest is proj-38 (pid 17536) with 1.1 GB. Action: agentcenter-cli reclaim.",
+   "must": [
+    "6.0",
+    "reclaim"
+   ]
+  },
+  {
+   "id": "cache_cold",
+   "severity": "low",
+   "score": 30,
+   "text": "1 large session has a prompt-cache hit rate under 80%; the lowest is proj-32 (pid 27666) at 74%. Action: avoid long pauses between turns in that session.",
+   "must": [
+    "74%",
+    "27666"
+   ]
+  }
+ ],
+ "facts": "1. [high] 1 session is repeating the same tool call; proj-47 (pid 40680) repeated it 34 times in a row. Action: interrupt that session and redirect it.\n2. [medium] 12 sessions idle for 30 minutes or more hold 6.0 GB of the 13.5 GB used by agents; the largest is proj-38 (pid 17536) with 1.1 GB. Action: agentcenter-cli reclaim.\n3. [low] 1 large session has a prompt-cache hit rate under 80%; the lowest is proj-32 (pid 27666) at 74%. Action: avoid long pauses between turns in that session.",
+ "fallback": "1 session is repeating the same tool call; proj-47 (pid 40680) repeated it 34 times in a row. Action: interrupt that session and redirect it. 2 more findings below."
+}
