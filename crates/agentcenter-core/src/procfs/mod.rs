@@ -332,8 +332,14 @@ mod tests {
             for pid in [0, 7, 40, 4_294_967_295] {
                 for file in ["", "stat", "task", "/abs"] {
                     let want = r.pid_path(pid, file);
+                    // Bytes, not `Path ==`: that one ignores a trailing or
+                    // doubled '/', and the kernel would not.
                     r.with_pid_path(pid, file, |p| {
-                        assert_eq!(p, want, "{root:?} {pid} {file:?}")
+                        assert_eq!(
+                            p.as_os_str().as_bytes(),
+                            want.as_os_str().as_bytes(),
+                            "{root:?} {pid} {file:?}"
+                        )
                     });
                 }
             }

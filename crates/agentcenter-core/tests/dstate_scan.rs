@@ -414,3 +414,61 @@ fn scan_worker_count_is_bounded() {
     assert_eq!(scan_worker_count(PARALLEL_MIN_JOBS, 4), 2);
     assert_eq!(scan_worker_count(PARALLEL_MIN_JOBS + 1, 4), 2);
 }
+
+/// `task` that is a FIFO: a plain `open(O_RDONLY)` waits for a writer that
+/// never comes, which would freeze the sampler tick. The scan has to open it
+/// with `O_DIRECTORY` and give up with `None` instead.
+#[test]
+fn task_that_is_a_fifo_does_not_hang_the_scan() {
+    let dir = TempDir::new("ac-dscan-fifo").unwrap();
+    fs::create_dir_all(dir.path().join("100")).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(dir.path().join("100").join("task"))
+        .status();
+    if !matches!(made, Ok(s) if s.success()) {
+        eprintln!("mkfifo is not available, skipping");
+        return;
+    }
+    let root = ProcRoot::new(dir.path());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = tx.send(d_threads_besides_main(&root, 100, &mut buf));
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Ok(got) => assert_eq!(got, None),
+        Err(_) => {
+            // Release the blocked open so the stuck thread can end.
+            let _ = fs::OpenOptions::new()
+                .write(true)
+                .open(dir.path().join("100").join("task"));
+            panic!("the scan blocked opening a FIFO named task");
+        }
+    }
+}
+
+/// The allocation count must not depend on the thread count even when the
+/// root is too long for the stack path buffer (a long `TMPDIR`), where the
+/// path falls back to the heap once per call.
+#[test]
+fn task_scan_allocations_do_not_grow_with_threads_under_a_long_root() {
+    let dir = TempDir::new("ac-dscan-longroot").unwrap();
+    let long = dir.path().join("d".repeat(220));
+    assert!(long.as_os_str().len() > 205);
+    let fp = FakeProc::create(&long).unwrap();
+    for (pid, threads) in [(100, 10), (101, 1200)] {
+        let mut p = FakeProcess::new(pid, 1, "node");
+        p.threads = threads;
+        p.d_threads = threads / 3;
+        fp.add(&p).unwrap();
+    }
+    let root = fp.proc_root();
+    let mut buf = String::with_capacity(1024);
+    assert_eq!(count_d_threads(&root, 100, 'S', &mut buf), 3);
+    let mut n = 0;
+    let small = allocs_in(|| n = count_d_threads(&root, 100, 'S', &mut buf));
+    assert_eq!(n, 3);
+    let big = allocs_in(|| n = count_d_threads(&root, 101, 'S', &mut buf));
+    assert_eq!(n, 400);
+    assert_eq!(big, small, "allocations with 1200 threads vs 10");
+}

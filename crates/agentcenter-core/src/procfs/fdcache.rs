@@ -569,6 +569,11 @@ mod tests {
         assert!(is_real_proc(&ProcRoot::default()));
         assert!(is_real_proc(&ProcRoot::new("/proc")));
         assert!(!is_real_proc(&ProcRoot::new("/proc/self")));
+        // Compared by bytes: `Path ==` would call these the real /proc, and a
+        // refresh on them would be skipped.
+        assert!(!is_real_proc(&ProcRoot::new("/proc/")));
+        assert!(!is_real_proc(&ProcRoot::new("/proc/.")));
+        assert!(!is_real_proc(&ProcRoot::new("/proc//")));
         assert!(!is_real_proc(&ProcRoot::new("/tmp/proc")));
 
         let mut child = std::process::Command::new("sleep")
