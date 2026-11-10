@@ -787,6 +787,24 @@ fn a_short_window_turns_the_maps_into_strips() {
     });
 }
 
+/// The strips key on height as well as width: a short, wide window gets
+/// them, and with them the compact `strips` class.
+#[test]
+fn a_short_wide_window_gets_the_strips_class() {
+    gtk::test_synced(|| {
+        let window = open("io.agentcenter.ShortWideStripsQA", 1280, 800, &tipico());
+        settle();
+        assert!(!window.map.widget().has_css_class("strips"));
+        assert!(resize_until(&window, 500, (false, false)));
+        assert!(
+            window.map.widget().has_css_class("strips"),
+            "a 1280 x 500 window shows the strips without the strips class"
+        );
+        window.window.close();
+        settle();
+    });
+}
+
 /// Resizes the open window to `height` and settles until the maps show
 /// `want` (tokens, memory), up to ~3.5 s.
 fn resize_until(window: &Window, height: i32, want: (bool, bool)) -> bool {
