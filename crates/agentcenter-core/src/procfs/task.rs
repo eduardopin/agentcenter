@@ -11,6 +11,7 @@ use super::{ProcRoot, read_open_into};
 use std::ffi::{c_char, c_void};
 use std::fs::File;
 use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::Mutex;
 
 unsafe extern "C" {
@@ -27,12 +28,49 @@ const O_CLOEXEC: i32 = 0x0040_0000;
 #[cfg(not(any(target_arch = "sparc", target_arch = "sparc64")))]
 const O_CLOEXEC: i32 = 0o2000000;
 
+// O_DIRECTORY: 0o200000 on x86, riscv, s390, mips; 0o40000 on arm, aarch64, powerpc;
+// 0x10000 on sparc. With it `open` fails with ENOTDIR on a FIFO or a device
+// instead of waiting for a peer.
+#[cfg(any(target_arch = "sparc", target_arch = "sparc64"))]
+const O_DIRECTORY: i32 = 0x1_0000;
+#[cfg(any(
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "powerpc",
+    target_arch = "powerpc64"
+))]
+const O_DIRECTORY: i32 = 0o40000;
+#[cfg(not(any(
+    target_arch = "sparc",
+    target_arch = "sparc64",
+    target_arch = "arm",
+    target_arch = "aarch64",
+    target_arch = "powerpc",
+    target_arch = "powerpc64"
+)))]
+const O_DIRECTORY: i32 = 0o200000;
+
 /// Buffer do `getdents64`. Cada entrada de tid ocupa 24 a 32 bytes, entao uma
 /// chamada traz ~150 threads; processos maiores pedem mais voltas.
 const DENTS_BUF: usize = 4096;
 
 /// Deslocamentos em `struct linux_dirent64 { u64 d_ino; i64 d_off;
 /// u16 d_reclen; u8 d_type; char d_name[]; }` (layout fixo da ABI do kernel).
+/// The kernel writes `u64` fields at the start of each entry, so the buffer is
+/// aligned for them on purpose and not by luck of the stack layout.
+#[repr(C, align(8))]
+struct DentsBuf([u8; DENTS_BUF]);
+
+impl DentsBuf {
+    fn new() -> Self {
+        Self([0; DENTS_BUF])
+    }
+
+    fn as_bytes(&self) -> &[u8] {
+        &self.0
+    }
+}
+
 const RECLEN_AT: usize = 16;
 const NAME_AT: usize = 19;
 
@@ -52,17 +90,26 @@ pub fn count_d_threads(root: &ProcRoot, pid: u32, main_state: char, buf: &mut St
 /// ([`scan_d_threads`]) antes de o `stat` de cada um estar fechado.
 pub fn d_threads_besides_main(root: &ProcRoot, pid: u32, buf: &mut String) -> Option<u32> {
     root.note_read(pid, "task");
-    let dir = root.with_pid_path(pid, "task", |p| File::open(p)).ok()?;
+    // `O_DIRECTORY`: a `task` that is a FIFO must fail here, not block the tick.
+    // std adds O_CLOEXEC.
+    let dir = root
+        .with_pid_path(pid, "task", |p| {
+            std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(O_DIRECTORY)
+                .open(p)
+        })
+        .ok()?;
     let dfd = dir.as_raw_fd();
     let mut n = 0u32;
-    let mut dents = [0u8; DENTS_BUF];
+    let mut dents = DentsBuf::new();
     // "<nome>/stat\0": d_name tem no maximo 255 bytes.
     let mut rel = [0u8; 256 + 6];
     let mut first = true;
     loop {
         // SAFETY: `dfd` e o fd de `dir`, vivo ate o fim da funcao; o kernel
-        // escreve no maximo `dents.len()` bytes em `dents`, que e nosso e mutavel.
-        let got = unsafe { getdents64(dfd, dents.as_mut_ptr().cast(), dents.len()) };
+        // escreve no maximo `DENTS_BUF` bytes em `dents`, que e nosso e mutavel.
+        let got = unsafe { getdents64(dfd, dents.0.as_mut_ptr().cast(), DENTS_BUF) };
         if got < 0 && first {
             // `task` que abre mas nao lista (nao e diretorio): como o antigo
             // `read_dir`, que falhava ja na abertura, nada a contar.
@@ -74,7 +121,7 @@ pub fn d_threads_besides_main(root: &ProcRoot, pid: u32, buf: &mut String) -> Op
         }
         // O kernel so devolve entradas inteiras: `got` <= DENTS_BUF e cada
         // `d_reclen` cobre a entrada toda, com `d_name` terminado em NUL.
-        let filled = &dents[..got as usize];
+        let filled = &dents.as_bytes()[..got as usize];
         let mut off = 0;
         while off + NAME_AT < filled.len() {
             let reclen = usize::from(u16::from_ne_bytes([

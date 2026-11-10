@@ -41,7 +41,8 @@ use super::stat::{Stat, parse_stat};
 use super::{ProcRoot, ReadError, pread_into, read_open_into};
 use std::collections::HashMap;
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::os::unix::ffi::OsStrExt;
+use std::path::PathBuf;
 
 /// Quantas raizes distintas o cache segura ao mesmo tempo (o benchmark do tick
 /// alterna duas; o sampler real usa uma). A menos usada cai para dar lugar.
@@ -398,7 +399,9 @@ fn budget_for_limit(soft: Option<u64>) -> usize {
 /// gasta syscalls; numa fixture (arquivo trocado por outro inode) o descompasso
 /// e possivel e a reabertura periodica o limita.
 fn is_real_proc(root: &ProcRoot) -> bool {
-    root.path() == Path::new("/proc")
+    // Bytes: `Path ==` also equates "/proc/" and "/proc/.", which are not the
+    // path the kernel serves this special case for.
+    root.path().as_os_str().as_bytes() == b"/proc"
 }
 
 /// Limite brando de fds (`Max open files`) de um `/proc/<pid>/limits`.
