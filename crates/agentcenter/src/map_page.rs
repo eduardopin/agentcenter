@@ -1304,10 +1304,6 @@ impl Ui {
         } else {
             gtk::Orientation::Vertical
         });
-        // The verdict line under the chips says the same; the caption goes.
-        if let Some(caption) = self.chips_row.first_child() {
-            caption.set_visible(!strips);
-        }
         set_class(&self.root, "strips", strips);
         self.toggle.set_visible(tier == Tier::Toggle && !strips);
         self.maps_row.set_homogeneous(!strips);
@@ -1317,10 +1313,8 @@ impl Ui {
             gtk::Orientation::Horizontal
         });
         self.maps_row.set_vexpand(!strips);
-        // Stacked strips close up: at 360 x 640 the window has no pixel to
-        // spare above the list.
-        self.maps_row.set_spacing(if strips { 6 } else { 16 });
-        self.chips.set_line_spacing(if strips { 2 } else { 6 });
+        // Stacked strips close up: with the wide 10 px between the page's
+        // lines too, the list at 360 x 640 loses its second whole row.
         if let Some(inner) = self.bin.child().and_downcast::<gtk::Box>() {
             inner.set_spacing(if strips { 6 } else { 10 });
         }

@@ -2275,3 +2275,36 @@ fn at_360_the_machine_strip_cells_take_the_compact_padding() {
         settle();
     });
 }
+
+/// Session rows that lie whole inside the list's scrolled viewport.
+fn whole_list_rows(window: &Window) -> usize {
+    let rows: Vec<gtk::Widget> = mapped_with_class(window, "session-row");
+    let Some(scrolled) = rows
+        .first()
+        .and_then(|r| r.ancestor(gtk::ScrolledWindow::static_type()))
+    else {
+        return 0;
+    };
+    let viewport = bounds_in(&scrolled, &window.window);
+    rows.iter()
+        .filter(|r| inside(&bounds_in(*r, &window.window), &viewport))
+        .count()
+}
+
+/// The strips' 4 px padding is the row: with the 16 px of the wide page the
+/// list under the strips shows one whole session instead of two.
+#[test]
+fn at_360x640_the_list_keeps_2_whole_rows() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360RowsQA", 360, 640, &tipico());
+        settle_paned(&window);
+        let whole = whole_list_rows(&window);
+        assert!(
+            whole >= 2,
+            "the list shows {whole} whole session rows at 360 x 640, 2 fit"
+        );
+        window.window.close();
+        settle();
+    });
+}

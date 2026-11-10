@@ -4,7 +4,8 @@
 .map-page {
   padding: 16px;
 }
-/* Strips (narrow or short window): every pixel above the list counts. */
+/* Strips (narrow or short window): the 24 px it saves hold the list's second
+ * whole row at 360 x 640 (at_360x640_the_list_keeps_2_whole_rows). */
 .map-page.strips {
   padding: 4px 16px;
 }
