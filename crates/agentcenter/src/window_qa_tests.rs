@@ -2350,3 +2350,28 @@ fn at_360_many_waiting_chips_leave_the_list_its_chrome() {
         settle();
     });
 }
+
+/// Back to a wide window the strips let go: no strips class, and the bin
+/// drops the height the strips had it ask for, or the maps keep a floor
+/// as tall as the stacked strips.
+#[test]
+fn from_360_to_1280x800_the_strips_let_go_of_the_bin() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360GrowQA", 360, 640, &tipico());
+        settle_paned(&window);
+        let page = window.map.widget().clone();
+        let bin = page.first_child().expect("the breakpoint bin");
+        assert!(page.has_css_class("strips"), "360 x 640 has the strips");
+        assert!(bin.size_request().1 > 1, "the strips raised the bin");
+        window.window.set_default_size(1280, 800);
+        assert!(
+            settle_until(|| !page.has_css_class("strips")),
+            "1280 x 800 keeps the strips class"
+        );
+        settle_paned(&window);
+        assert_eq!(bin.size_request(), (280, 1), "the bin's size request");
+        window.window.close();
+        settle();
+    });
+}
