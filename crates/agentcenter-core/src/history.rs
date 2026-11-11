@@ -12,62 +12,96 @@
 use crate::cockpit::Loops;
 use crate::session::Session;
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Amostras por serie: 10 min a 1 s (ARCHITECTURE, "Sampling").
 pub const HISTORY_LEN: usize = 600;
 
+/// Amostras por bloco do [`Ring`].
+const CHUNK: usize = 64;
+
 /// Buffer circular de tamanho fixo: cheio, cada `push` descarta a mais antiga.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// As amostras ficam em blocos de [`CHUNK`] atras de `Arc`: clonar o anel (o
+/// sampler clona o [`History`] em cada frame da GUI) copia so os ponteiros, e
+/// o `push` seguinte duplica apenas o bloco que escreve, enquanto o clone
+/// segura o antigo. Antes, cada clone copiava os 600 `f32` de cada uma das 11
+/// series de cada sessao.
+#[derive(Debug, Clone)]
 pub struct Ring {
-    buf: Vec<f32>,
-    /// Indice da mais antiga quando cheio; com `buf` incompleto, sempre 0.
+    chunks: Vec<Arc<[f32; CHUNK]>>,
+    /// Posicao fisica da mais antiga quando cheio; incompleto, sempre 0.
     head: usize,
+    len: usize,
     cap: usize,
 }
 
 impl Ring {
     pub fn new(cap: usize) -> Self {
+        let cap = cap.max(1);
         Self {
-            buf: Vec::with_capacity(cap),
+            chunks: Vec::with_capacity(cap.div_ceil(CHUNK)),
             head: 0,
-            cap: cap.max(1),
+            len: 0,
+            cap,
         }
     }
 
     pub fn push(&mut self, v: f32) {
-        if self.buf.len() < self.cap {
-            self.buf.push(v);
+        let pos = if self.len < self.cap {
+            let pos = self.len;
+            self.len += 1;
+            pos
         } else {
-            self.buf[self.head] = v;
+            let pos = self.head;
             self.head = (self.head + 1) % self.cap;
+            pos
+        };
+        if pos / CHUNK == self.chunks.len() {
+            self.chunks.push(Arc::new([0.0; CHUNK]));
         }
+        Arc::make_mut(&mut self.chunks[pos / CHUNK])[pos % CHUNK] = v;
     }
 
     pub fn len(&self) -> usize {
-        self.buf.len()
+        self.len
     }
 
     pub fn is_empty(&self) -> bool {
-        self.buf.is_empty()
+        self.len == 0
     }
 
     pub fn capacity(&self) -> usize {
         self.cap
     }
 
+    /// `i`-esima amostra, da mais antiga (0) para a mais nova.
+    fn at(&self, i: usize) -> f32 {
+        let pos = (self.head + i) % self.cap;
+        self.chunks[pos / CHUNK][pos % CHUNK]
+    }
+
     /// Da mais antiga para a mais nova.
     pub fn iter(&self) -> impl DoubleEndedIterator<Item = f32> + '_ {
-        let (new, old) = self.buf.split_at(self.head);
-        old.iter().chain(new).copied()
+        (0..self.len).map(|i| self.at(i))
     }
 
     pub fn latest(&self) -> Option<f32> {
-        self.iter().next_back()
+        self.len.checked_sub(1).map(|i| self.at(i))
     }
 
     /// Copia em ordem cronologica (para a GUI desenhar sem segurar o sampler).
     pub fn to_vec(&self) -> Vec<f32> {
         self.iter().collect()
+    }
+}
+
+/// Mesma regra de antes: amostra a amostra, `NaN` nao e igual a `NaN`.
+impl PartialEq for Ring {
+    fn eq(&self, other: &Self) -> bool {
+        self.cap == other.cap
+            && self.len == other.len
+            && self.iter().zip(other.iter()).all(|(a, b)| a == b)
     }
 }
 
@@ -416,5 +450,132 @@ mod tests {
             assert_eq!(r.len(), 1, "pid reusado comeca do zero");
         }
         assert_eq!(latest(&s.ctx_pct), 12.0);
+    }
+
+    // ---- Pino do conteudo e do clone (custo do clone por tick) -----------
+
+    /// Modelo de referencia: a fila das ultimas `cap` amostras.
+    fn model_push(m: &mut std::collections::VecDeque<f32>, cap: usize, v: f32) {
+        if m.len() == cap {
+            m.pop_front();
+        }
+        m.push_back(v);
+    }
+
+    #[test]
+    fn ring_matches_a_deque_model_for_odd_capacities() {
+        for cap in [1, 2, 63, 64, 65, 127, 128, 600] {
+            let mut r = Ring::new(cap);
+            let mut m = std::collections::VecDeque::new();
+            for i in 0..cap * 2 + 7 {
+                // NaN no meio: ausente tambem e amostra.
+                let v = if i % 5 == 3 { f32::NAN } else { i as f32 };
+                r.push(v);
+                model_push(&mut m, cap, v);
+                assert_eq!(r.len(), m.len());
+                assert_eq!(r.capacity(), cap);
+                let got: Vec<u32> = r.iter().map(f32::to_bits).collect();
+                let want: Vec<u32> = m.iter().map(|v| v.to_bits()).collect();
+                assert_eq!(got, want, "cap {cap} depois de {} amostras", i + 1);
+                assert_eq!(r.to_vec().len(), m.len());
+                assert_eq!(r.latest().map(f32::to_bits), m.back().map(|v| v.to_bits()));
+                let back: Vec<u32> = r.iter().rev().map(f32::to_bits).collect();
+                let want_back: Vec<u32> = m.iter().rev().map(|v| v.to_bits()).collect();
+                assert_eq!(back, want_back, "iter de tras para frente, cap {cap}");
+            }
+        }
+    }
+
+    #[test]
+    fn cloned_ring_and_history_do_not_see_later_pushes() {
+        let mut r = Ring::new(100);
+        for i in 0..150 {
+            r.push(i as f32);
+        }
+        let frozen = r.clone();
+        let before = frozen.to_vec();
+        for i in 150..400 {
+            r.push(i as f32);
+        }
+        assert_eq!(frozen.to_vec(), before, "o clone e um instantaneo");
+        assert_eq!(r.latest(), Some(399.0));
+
+        let mut h = History::new(HISTORY_LEN);
+        let mut o = SessionOverlay::default();
+        for i in 0..HISTORY_LEN {
+            o.context_pct = Some(i as f64);
+            h.record(&[with_overlay(9, o.clone())], |_| 7);
+        }
+        let frame = h.clone();
+        let before = frame.get(9).unwrap().ctx_pct.to_vec();
+        o.context_pct = Some(1000.0);
+        h.record(&[with_overlay(9, o)], |_| 7);
+        assert_eq!(frame.get(9).unwrap().ctx_pct.to_vec(), before);
+        assert_eq!(frame.get(9).unwrap().len(), HISTORY_LEN);
+        assert_eq!(latest(&h.get(9).unwrap().ctx_pct), 1000.0);
+        // Dois lados do clone divergem sem se afetar.
+        let mut other = frame.clone();
+        other.record(&[with_overlay(9, SessionOverlay::default())], |_| 7);
+        assert_eq!(frame.get(9).unwrap().ctx_pct.to_vec(), before);
+        assert_eq!(latest(&h.get(9).unwrap().ctx_pct), 1000.0);
+    }
+
+    #[test]
+    fn ring_eq_compares_samples_not_layout() {
+        // Same samples, different physical head: equal.
+        let mut wrapped = Ring::new(3);
+        for v in [0.0, 1.0, 2.0, 3.0] {
+            wrapped.push(v);
+        }
+        let mut fresh = Ring::new(3);
+        for v in [1.0, 2.0, 3.0] {
+            fresh.push(v);
+        }
+        assert_eq!(wrapped, fresh, "head differs, content equal");
+
+        // Equal prefix, different length: unequal (zip alone would stop early).
+        let mut short = Ring::new(3);
+        short.push(1.0);
+        short.push(2.0);
+        assert_ne!(fresh, short);
+        assert_ne!(short, fresh);
+
+        // NaN is never equal to NaN, not even in a clone of the same ring.
+        let mut nan = Ring::new(3);
+        nan.push(f32::NAN);
+        assert_ne!(nan, nan.clone(), "sample by sample, not by bits");
+
+        // Same samples, different capacity: unequal.
+        let mut wide = Ring::new(4);
+        for v in [1.0, 2.0, 3.0] {
+            wide.push(v);
+        }
+        assert_ne!(fresh, wide);
+    }
+
+    #[test]
+    fn every_series_is_recorded_from_the_session_fields() {
+        let mut s = agent(11);
+        s.cpu_pct = Some(12.5);
+        s.pss_bytes = Some(4096);
+        s.swap_pss_bytes = Some(1024);
+        s.read_bps = Some(7.0);
+        s.write_bps = Some(9.0);
+        s.stall_pct = Some(3.5);
+        let mut h = History::new(8);
+        h.record(&[s.clone()], |_| 1);
+        s.stall_pct = None;
+        s.threads_d = Some(2);
+        s.cpu_pct = None;
+        h.record(&[s], |_| 1);
+        let h = h.get(11).unwrap();
+        assert_eq!(h.len(), 2);
+        assert_eq!(h.cpu_pct.to_vec()[0], 12.5);
+        assert!(h.cpu_pct.to_vec()[1].is_nan());
+        assert_eq!(h.pss_bytes.to_vec(), [4096.0, 4096.0]);
+        assert_eq!(h.swap_pss_bytes.to_vec(), [1024.0, 1024.0]);
+        assert_eq!(h.read_bps.to_vec(), [7.0, 7.0]);
+        assert_eq!(h.write_bps.to_vec(), [9.0, 9.0]);
+        assert_eq!(h.stall.to_vec(), [3.5, 2.0], "fallback: threads em D");
     }
 }
