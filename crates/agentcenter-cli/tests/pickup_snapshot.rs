@@ -352,9 +352,10 @@ fn handoff_and_compact_transcript_never_put_session_content_in_snapshot_or_stder
         assert!(!o.stdout.is_empty());
         for (name, bytes) in [("stdout", &o.stdout), ("stderr", &o.stderr)] {
             let text = String::from_utf8_lossy(bytes);
-            for leak in [CANARY4, "handoff body", "session summary", "decisions"] {
-                assert!(!text.contains(leak), "{name} leaks {leak:?}: {text}");
-            }
+            // Canary only: snapshot and cockpit print every process's cmdline
+            // and cwd, so a plain word could match an unrelated process.
+            // Every content field in the fixture carries the canary.
+            assert!(!text.contains(CANARY4), "{name} leaks the canary: {text}");
         }
     }
     // The overlay did read the transcript: the Write is the one tool call.

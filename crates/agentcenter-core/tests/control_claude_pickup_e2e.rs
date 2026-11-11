@@ -157,9 +157,10 @@ fn screen() -> String {
 
 /// CC4/CC6 Escape path against the real thing: a real Claude Code with a real
 /// permission dialog open (the stub asks for a Write into `.git/`, a protected path, so
-/// the agent is `blocked`), one `agent.send_keys ["esc"]` exactly as the
-/// controller sends it from `Clearing`, and the dialog is gone, the write
-/// never happened and the agent is back at its prompt on the same session.
+/// the agent is `blocked`), one raw `agent.send_keys ["esc"]` (the payload
+/// `herdr.rs` builds for the controller's `Clearing` path, copied here, not
+/// sent through the controller), and the dialog is gone, the write never
+/// happened and the agent is back at its prompt on the same session.
 #[test]
 #[ignore = "needs scripts/e2e-claude-herdr.sh (real Claude Code + isolated Herdr)"]
 fn real_claude_escape_dismisses_an_open_permission_dialog() {
