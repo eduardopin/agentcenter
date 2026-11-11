@@ -233,7 +233,15 @@ impl Window {
         let narrow = Rc::new(Cell::new(false));
         let map = Rc::new(MapPage::new());
         let content = gtk::Stack::new();
-        content.add_named(map.widget(), Some("overview"));
+        // The strips ask for more height than the paned top may take (a chip
+        // per waiting session): the page scrolls instead of being cut off.
+        // Automatic, so a page that fits shows no bar.
+        let overview = gtk::ScrolledWindow::builder()
+            .hscrollbar_policy(gtk::PolicyType::Never)
+            .vscrollbar_policy(gtk::PolicyType::Automatic)
+            .child(map.widget())
+            .build();
+        content.add_named(&overview, Some("overview"));
         // Keep ONE NavigationPage as the split content. Nesting detail.page
         // inside another page disconnects navigation.pop and back-focus restore.
         detail.page.set_child(gtk::Widget::NONE);
