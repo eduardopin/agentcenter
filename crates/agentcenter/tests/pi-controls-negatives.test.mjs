@@ -5,13 +5,17 @@
 // session context and the model provider are synthetic; no network, no real
 // model, no existing session. Needs no Pi SDK.
 //
-//   node --test crates/agentcenter/tests/pi-controls-negatives.test.mjs
+//   PI_OFFLINE=1 node --test crates/agentcenter/tests/pi-controls-negatives.test.mjs
+// The `rust client:` tests also build and run the pi_control_step example, so they
+// need cargo (offline) and honour CARGO_TARGET_DIR.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { createConnection } from 'node:net';
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const extensionDir = fileURLToPath(new URL('../../../extensions/pi-control/', import.meta.url));
@@ -21,6 +25,19 @@ globalThis.fetch = () => { throw new Error('NETWORK FORBIDDEN'); };
 
 const DEADLINE = 60_000; // operations.mjs generation deadline, not configurable
 const SECRET = 'synthetic-private-provider-detail';
+const execute = promisify(execFile);
+const repo = resolve(fileURLToPath(new URL('../../../', import.meta.url)));
+const cargo = process.env.CARGO || join(process.env.HOME, '.cargo/bin/cargo');
+let built;
+// One step through the real Rust client. Async on purpose: the extension runs in
+// THIS process, so a blocking spawn would starve the socket it must answer.
+async function rust(runtimeDir, action, id) {
+  built ??= execute(cargo, ['build', '--offline', '-p', 'agentcenter-core', '--example', 'pi_control_step'], { cwd: repo, timeout: 120000 });
+  await built;
+  const bin = join(process.env.CARGO_TARGET_DIR || join(repo, 'target'), 'debug/examples/pi_control_step');
+  const { stdout } = await execute(bin, [runtimeDir, action, id], { cwd: repo, timeout: 15000 });
+  return JSON.parse(stdout);
+}
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 // The 60 s generation deadline is a literal in the extension; the harness
@@ -98,7 +115,7 @@ async function rig() {
     assert.equal(providerCalls, 1, 'provider was called once');
     assert.equal((await send({ ...base, operation_id: id, action: 'status' })).state, 'running');
   }
-  return { base, send, provider, artifacts, terminal, parked, until, manifest,
+  return { runtimeDir, base, send, provider, artifacts, terminal, parked, until, manifest,
     async close() {
       await handlers.get('session_shutdown')({}, ctx);
       process.env.XDG_RUNTIME_DIR = saved.runtime;
@@ -118,7 +135,10 @@ test('quota/rejection: provider 429 surfaces as failed/model_error, no detail le
     const result = await r.terminal(id);
     assert.equal(result.state, 'failed');
     assert.equal(result.code, 'model_error');
-    assert.equal(JSON.stringify(result).includes(SECRET), false, 'provider detail must not cross the socket');
+    // A failed reply is exactly these five fields (operations.mjs reply()). Provider text can
+    // only cross the socket as a NEW field (message, detail), which this key set refuses.
+    assert.deepEqual(Object.keys(result).sort(), ['code', 'metadata', 'operation_id', 'protocol_version', 'state']);
+    assert.equal(JSON.stringify(result).includes(SECRET), false);
     assert.equal(result.artifact_path, undefined);
     assert.deepEqual(await r.artifacts(), []);
     assert.equal(r.provider.calls(), 1, 'a failure is never retried behind the client');
@@ -224,4 +244,91 @@ test('late result after timeout: the answer arrives after the deadline and chang
     assert.deepEqual(await r.send({ ...r.base, operation_id: id, action: 'handoff' }), timedOut);
     assert.equal(r.provider.calls(), 1);
   } finally { restore(); await r.close(); }
+});
+
+// ---- Same scenarios with the REAL Rust client (control::pi) driving the wire ----
+// Assertions are on what the Rust client returns (state, code, parse errors).
+
+test('rust client: quota rejection parses as failed/model_error', { timeout: 60000 }, async () => {
+  const r = await rig();
+  try {
+    const id = randomUUID();
+    const first = await rust(r.runtimeDir, 'handoff', id);
+    assert.equal(first.state, 'accepted');
+    await r.parked(id);
+    r.provider.settle({ stopReason: 'error', errorMessage: `429 quota ${SECRET}`, content: [] });
+    const done = await rust(r.runtimeDir, 'poll', id);
+    assert.equal(done.state, 'failed');
+    assert.equal(done.code, 'model_error');
+    assert.equal(done.has_artifact, false);
+    assert.equal(r.provider.calls(), 1);
+  } finally { await r.close(); }
+});
+
+test('rust client: cancel during polling ends cancelled and the late result changes nothing', { timeout: 60000 }, async () => {
+  const r = await rig();
+  try {
+    const id = randomUUID();
+    assert.equal((await rust(r.runtimeDir, 'handoff', id)).state, 'accepted');
+    await r.parked(id);
+    const cancel = await rust(r.runtimeDir, 'cancel', id);
+    assert.ok(['running', 'cancelled'].includes(cancel.state), `cancel reply ${cancel.state}`);
+    const done = await rust(r.runtimeDir, 'poll', id);
+    assert.equal(done.state, 'cancelled');
+    assert.equal(done.code, 'cancelled');
+    assert.equal(done.has_artifact, false);
+    assert.equal(r.provider.signal().aborted, true);
+    r.provider.settle();
+    await wait(100);
+    const after = await rust(r.runtimeDir, 'status', id);
+    assert.equal(after.state, 'cancelled');
+    assert.equal(after.has_artifact, false);
+    assert.deepEqual(await r.artifacts(), []);
+  } finally { await r.close(); }
+});
+
+test('rust client: the deadline polls to cancelled/timeout, then a late success changes nothing', { timeout: 60000 }, async () => {
+  const restore = shortenDeadline();
+  const r = await rig();
+  try {
+    const id = randomUUID();
+    assert.equal((await rust(r.runtimeDir, 'handoff', id)).state, 'accepted');
+    const done = await rust(r.runtimeDir, 'poll', id);
+    assert.equal(done.state, 'cancelled');
+    assert.equal(done.code, 'timeout');
+    assert.ok(done.polls >= 1);
+    r.provider.settle(); // success AFTER the deadline
+    await wait(200);
+    const late = await rust(r.runtimeDir, 'status', id);
+    assert.equal(late.state, 'cancelled');
+    assert.equal(late.code, 'timeout');
+    assert.equal(late.has_artifact, false);
+    const replay = await rust(r.runtimeDir, 'handoff', id);
+    assert.equal(replay.state, 'cancelled');
+    assert.equal(r.provider.calls(), 1);
+    assert.deepEqual(await r.artifacts(), []);
+  } finally { restore(); await r.close(); }
+});
+
+test('rust client: same-ID status and replay return the stored reply; other action is refused; stranger is unknown', { timeout: 60000 }, async () => {
+  const r = await rig();
+  try {
+    const id = randomUUID();
+    await rust(r.runtimeDir, 'handoff', id);
+    await r.parked(id);
+    r.provider.settle();
+    const done = await rust(r.runtimeDir, 'poll', id);
+    assert.equal(done.state, 'completed');
+    assert.equal(done.has_artifact, true);
+    assert.equal((await rust(r.runtimeDir, 'status', id)).state, 'completed');
+    assert.equal((await rust(r.runtimeDir, 'handoff', id)).state, 'completed');
+    assert.equal(r.provider.calls(), 1);
+    assert.equal((await r.artifacts()).length, 1);
+    const mismatch = await rust(r.runtimeDir, 'compact', id);
+    assert.equal(mismatch.state, 'rejected');
+    assert.equal(mismatch.code, 'duplicate_mismatch');
+    const stranger = await rust(r.runtimeDir, 'status', randomUUID());
+    assert.equal(stranger.state, 'unknown');
+    assert.equal(stranger.code, 'unknown_operation');
+  } finally { await r.close(); }
 });

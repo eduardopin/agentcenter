@@ -111,7 +111,7 @@ offline and against a fake Pi socket plus a fake Herdr that reports the Pi pane
 by session file (`kind:"path"`):
 
 ```sh
-PI_OFFLINE=1 node --test extensions/pi-control/*.test.mjs
+PI_OFFLINE=1 node --test extensions/pi-control/*.test.mjs crates/agentcenter/tests/pi-controls-negatives.test.mjs
 cargo test -p agentcenter-core --lib control::
 cargo test -p agentcenter-core --test control_pi_pickup
 ```
@@ -119,10 +119,12 @@ cargo test -p agentcenter-core --test control_pi_pickup
 Negative paths of the Pi control wire (provider quota, cancel while polling,
 generation deadline, same-ID status and replay, late provider result) run
 through the real extension entry point and its Unix socket, with a synthetic
-session context and provider. They need no Pi SDK and no GTK display:
+session context and provider; the `rust client:` tests drive the same wire
+through `control::pi` (example `pi_control_step`, built offline with cargo). They
+need no Pi SDK and no GTK display (the glob above also runs them):
 
 ```sh
-node --test crates/agentcenter/tests/pi-controls-negatives.test.mjs
+PI_OFFLINE=1 node --test crates/agentcenter/tests/pi-controls-negatives.test.mjs
 ```
 
 An end-to-end run with the real `claude` binary in an isolated Herdr (temporary
