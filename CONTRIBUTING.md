@@ -116,6 +116,15 @@ cargo test -p agentcenter-core --lib control::
 cargo test -p agentcenter-core --test control_pi_pickup
 ```
 
+Negative paths of the Pi control wire (provider quota, cancel while polling,
+generation deadline, same-ID status and replay, late provider result) run
+through the real extension entry point and its Unix socket, with a synthetic
+session context and provider. They need no Pi SDK and no GTK display:
+
+```sh
+node --test crates/agentcenter/tests/pi-controls-negatives.test.mjs
+```
+
 An end-to-end run with the real `claude` binary in an isolated Herdr (temporary
 socket and `HOME`, `ANTHROPIC_BASE_URL` pointing at a local stub) is not part
 of the suite yet.
