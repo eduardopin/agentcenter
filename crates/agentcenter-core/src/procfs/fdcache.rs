@@ -768,8 +768,9 @@ mod tests {
             .spawn()
             .unwrap();
         let pid = child.id();
-        // spawn returns after fork, before exec: until then the child still
-        // carries the test thread's comm. Wait for exec, bounded at 5 s.
+        // posix_spawn (CLONE_VFORK) releases the parent at exec_mmap, before
+        // the kernel sets the new comm: spawn can return while the child still
+        // carries this test thread's comm. Wait for it, bounded at 5 s.
         let mut comm = String::new();
         for _ in 0..500 {
             comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
@@ -778,7 +779,11 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert_eq!(comm.trim_end(), "sleep", "child {pid} never exec'd sleep");
+        assert_eq!(
+            comm.trim_end(),
+            "sleep",
+            "comm of {pid} never became sleep: {comm:?}"
+        );
         let root = ProcRoot::default();
         let mut c = cache();
         let mut buf = String::new();
