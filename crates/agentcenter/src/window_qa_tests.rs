@@ -2445,13 +2445,36 @@ fn at_360_many_waiting_chips_leave_the_memory_strip_reachable() {
         let bar = bounds_in(&bars[0], &root);
         assert!(bar.height() > 0.0, "the memory strip has a height");
         let page = bounds_in(&content_stack(&window), &root);
-        let scrolls = std::iter::successors(bars[0].parent(), |w| w.parent())
+        if inside(&bar, &shown) && inside(&page, &shown) {
+            window.window.close();
+            settle();
+            return;
+        }
+        // Cut off, so a vertical scroller must hold the page and be able to
+        // bring the strip into view: one present but sized to the full child
+        // has no range to scroll and fails here.
+        let scroller = std::iter::successors(bars[0].parent(), |w| w.parent())
             .take_while(|w| w != content_stack(&window).upcast_ref::<gtk::Widget>())
-            .filter_map(|w| w.downcast::<gtk::ScrolledWindow>().ok())
-            .any(|sw| sw.vscrollbar_policy() != gtk::PolicyType::Never);
+            .find_map(|w| w.downcast::<gtk::ScrolledWindow>().ok())
+            .unwrap_or_else(|| {
+                panic!(
+                    "the maps page {page:?} (memory strip {bar:?}) is cut off by the {shown:?} the paned top shows, and no scroller holds it"
+                )
+            });
+        assert_ne!(scroller.vscrollbar_policy(), gtk::PolicyType::Never);
+        let adj = scroller.vadjustment();
         assert!(
-            (inside(&bar, &shown) && inside(&page, &shown)) || scrolls,
-            "the maps page {page:?} (memory strip {bar:?}) is cut off by the {shown:?} the paned top shows, and no vertical scroller holds it"
+            adj.upper() > adj.page_size() + 1.0,
+            "the scroller has no range: upper {} for a page of {}",
+            adj.upper(),
+            adj.page_size()
+        );
+        adj.set_value(adj.upper() - adj.page_size());
+        settle();
+        let bar = bounds_in(&bars[0], &root);
+        assert!(
+            inside(&bar, &shown),
+            "scrolled to the end the memory strip {bar:?} is still outside the {shown:?} the paned top shows"
         );
         window.window.close();
         settle();
