@@ -768,6 +768,17 @@ mod tests {
             .spawn()
             .unwrap();
         let pid = child.id();
+        // spawn returns after fork, before exec: until then the child still
+        // carries the test thread's comm. Wait for exec, bounded at 5 s.
+        let mut comm = String::new();
+        for _ in 0..500 {
+            comm = std::fs::read_to_string(format!("/proc/{pid}/comm")).unwrap_or_default();
+            if comm.trim_end() == "sleep" {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert_eq!(comm.trim_end(), "sleep", "child {pid} never exec'd sleep");
         let root = ProcRoot::default();
         let mut c = cache();
         let mut buf = String::new();
