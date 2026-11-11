@@ -521,6 +521,39 @@ mod tests {
     }
 
     #[test]
+    fn ring_eq_compares_samples_not_layout() {
+        // Same samples, different physical head: equal.
+        let mut wrapped = Ring::new(3);
+        for v in [0.0, 1.0, 2.0, 3.0] {
+            wrapped.push(v);
+        }
+        let mut fresh = Ring::new(3);
+        for v in [1.0, 2.0, 3.0] {
+            fresh.push(v);
+        }
+        assert_eq!(wrapped, fresh, "head differs, content equal");
+
+        // Equal prefix, different length: unequal (zip alone would stop early).
+        let mut short = Ring::new(3);
+        short.push(1.0);
+        short.push(2.0);
+        assert_ne!(fresh, short);
+        assert_ne!(short, fresh);
+
+        // NaN is never equal to NaN, not even in a clone of the same ring.
+        let mut nan = Ring::new(3);
+        nan.push(f32::NAN);
+        assert_ne!(nan, nan.clone(), "sample by sample, not by bits");
+
+        // Same samples, different capacity: unequal.
+        let mut wide = Ring::new(4);
+        for v in [1.0, 2.0, 3.0] {
+            wide.push(v);
+        }
+        assert_ne!(fresh, wide);
+    }
+
+    #[test]
     fn every_series_is_recorded_from_the_session_fields() {
         let mut s = agent(11);
         s.cpu_pct = Some(12.5);
