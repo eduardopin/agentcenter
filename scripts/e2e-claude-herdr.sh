@@ -96,6 +96,8 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 CLAUDE_CODE_DISABLE_FEEDBACK_S
 # real HOME: without this the owner's ~/.claude/CLAUDE.md would be read.
 export CLAUDE_CODE_DISABLE_CLAUDE_MDS=1
 export STUB_HANDOFF_DIR=$repo/.claude/handoffs
+# Debug only: E2E_STUB_DUMP=<file> makes the stub append each request it gets.
+[[ -n ${E2E_STUB_DUMP:-} ]] && export STUB_DUMP=$E2E_STUB_DUMP
 export STUB_GRANT_PATH=$repo/.claude/e2e-grant.md
 # Inside .git/, a protected path: Claude Code asks even under acceptEdits (Escape E2E).
 export STUB_DIALOG_PATH=$repo/.git/e2e-dialog.txt

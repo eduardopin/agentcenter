@@ -13,7 +13,7 @@ one):
   (the script grants the session the project's .claude/ folder on it);
 - `e2e dialog`: one `Write` of `<STUB_DIALOG_PATH>` (into .git/, a protected path, so
   Claude Code opens a permission dialog; the Escape E2E dismisses it);
-- a `tool_result` in the turn: a short closing text;
+- a `tool_result` as the last message (no prompt after it): a short closing text;
 - anything else (and every turn without tools): a short text.
 
 Usage: e2e-claude-stub.py <port-file> <log-file>. The port it bound on
@@ -64,9 +64,13 @@ def decide(body):
         if m.get("role") != "user":
             break
         content = m.get("content")
-        if isinstance(content, list) and any(b.get("type") == "tool_result" for b in content):
-            return "text", None
         turn[:0] = texts(m)
+        if isinstance(content, list) and any(b.get("type") == "tool_result" for b in content):
+            # A tool_result closes the turn unless a prompt came with it: after
+            # an Escape on a dialog, Claude Code sends the rejected tool_result,
+            # the interrupt notice and the next prompt in one user message, and
+            # that prompt is a new turn.
+            break
     text = "\n".join(turn)
     m = OP.search(text)
     if m:
