@@ -2414,6 +2414,76 @@ fn at_360_many_waiting_chips_leave_the_list_its_chrome() {
     });
 }
 
+/// What the paned's top child shows: the paned's width and its first
+/// `position` px. The content stack inside can be taller (and is then clipped
+/// at the divider), so its own bounds say nothing about what is visible.
+fn shown_by_paned_top(window: &Window) -> gtk::graphene::Rect {
+    let paned = paned_of(window);
+    let b = bounds_in(&paned, &window.window);
+    gtk::graphene::Rect::new(b.x(), b.y(), b.width(), paned.position() as f32)
+}
+
+/// The memory strip under 40 waiting chips at 360 x 640 is reachable: the
+/// maps page lies whole inside what the paned top shows, or sits in a vertical
+/// scroller. Today the page asks for 1241 px, the top is capped at the list's
+/// chrome, and the overflow is cut off above the status line and the chips.
+#[test]
+fn at_360_many_waiting_chips_leave_the_memory_strip_reachable() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open(
+            "io.agentcenter.Narrow360WaitingStripQA",
+            360,
+            640,
+            &all_waiting(),
+        );
+        settle_paned(&window);
+        let root = window.window.clone();
+        let shown = shown_by_paned_top(&window);
+        let bars = mapped_with_class(&window, "memory-bar");
+        assert_eq!(bars.len(), 1, "the memory strip is mapped");
+        let bar = bounds_in(&bars[0], &root);
+        assert!(bar.height() > 0.0, "the memory strip has a height");
+        let page = bounds_in(&content_stack(&window), &root);
+        let scrolls = std::iter::successors(bars[0].parent(), |w| w.parent())
+            .take_while(|w| w != content_stack(&window).upcast_ref::<gtk::Widget>())
+            .filter_map(|w| w.downcast::<gtk::ScrolledWindow>().ok())
+            .any(|sw| sw.vscrollbar_policy() != gtk::PolicyType::Never);
+        assert!(
+            (inside(&bar, &shown) && inside(&page, &shown)) || scrolls,
+            "the maps page {page:?} (memory strip {bar:?}) is cut off by the {shown:?} the paned top shows, and no vertical scroller holds it"
+        );
+        window.window.close();
+        settle();
+    });
+}
+
+/// The wider windows show the maps whole inside what the paned top shows,
+/// whatever the narrow fix does about the chips.
+#[test]
+fn at_1280x800_and_840x700_the_memory_map_is_inside_the_paned_top() {
+    for (w, h) in [(1280, 800), (840, 700)] {
+        gtk::test_synced(move || {
+            let _font = DesktopLook::set();
+            let window = open(
+                &format!("io.agentcenter.WideStripQA{w}"),
+                w,
+                h,
+                &all_waiting(),
+            );
+            settle_paned(&window);
+            let page = bounds_in(&content_stack(&window), &window.window);
+            let shown = shown_by_paned_top(&window);
+            assert!(
+                inside(&page, &shown),
+                "{w} x {h}: maps page {page:?} outside the {shown:?} the paned top shows"
+            );
+            window.window.close();
+            settle();
+        });
+    }
+}
+
 /// Back to a wide window the strips let go: no strips class, and the bin
 /// drops the height the strips had it ask for, or the maps keep a floor
 /// as tall as the stacked strips.
