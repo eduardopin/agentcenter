@@ -1,5 +1,5 @@
 //! E2E against a REAL Claude Code in a REAL, isolated Herdr: the CC4 Handoff
-//! and Compact to `completed`, and the CC6 handoff-pickup to `pickup_loaded`.
+//! and Compact to `completed`, the Escape into a real open dialog, and the CC6 handoff-pickup to `pickup_loaded`.
 //! Both run on the same pane, one after the other (`--test-threads=1`); each
 //! reads the pane's current session from Herdr, so the order does not matter.
 //! `#[ignore]`: they only run under `scripts/e2e-claude-herdr.sh`,
@@ -146,6 +146,63 @@ fn settle(c: &mut Controller, op: &str) -> Outcome {
     }
 }
 
+/// The pane's screen, as Herdr reads it.
+fn screen() -> String {
+    let out = std::process::Command::new("herdr")
+        .args(["pane", "read", &var("AC_E2E_PANE")])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// CC4/CC6 Escape path against the real thing: a real Claude Code with a real
+/// permission dialog open (the stub asks for a Write into `.git/`, a protected path, so
+/// the agent is `blocked`), one `agent.send_keys ["esc"]` exactly as the
+/// controller sends it from `Clearing`, and the dialog is gone, the write
+/// never happened and the agent is back at its prompt on the same session.
+#[test]
+#[ignore = "needs scripts/e2e-claude-herdr.sh (real Claude Code + isolated Herdr)"]
+fn real_claude_escape_dismisses_an_open_permission_dialog() {
+    let socket = var("AC_E2E_SOCKET");
+    let pane = var("AC_E2E_PANE");
+    let dialog_file = PathBuf::from(var("AC_E2E_DIALOG_PATH"));
+    let before = wait_idle(&socket);
+    let session = before["result"]["agent"]["agent_session"]["value"].clone();
+    let sent = raw(
+        &socket,
+        "agent.prompt",
+        serde_json::json!({"target": pane, "text": "e2e dialog"}),
+    );
+    assert_eq!(sent["result"]["type"], "agent_prompted", "{sent}");
+    let end = Instant::now() + Duration::from_secs(60);
+    loop {
+        let got = raw(&socket, "agent.get", serde_json::json!({"target": pane}));
+        if got["result"]["agent"]["agent_status"] == "blocked" {
+            break;
+        }
+        assert!(Instant::now() < end, "never blocked on the dialog: {got}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    // Herdr reports `blocked` a moment before the dialog takes keys; the
+    // controller only sends Escape after its clear timeout, never that early.
+    std::thread::sleep(Duration::from_secs(2));
+    assert!(screen().contains("Do you want to create"), "{}", screen());
+
+    let esc = raw(
+        &socket,
+        "agent.send_keys",
+        serde_json::json!({"target": pane, "keys": ["esc"]}),
+    );
+    println!("e2e: escape reply on a real dialog: {esc}");
+    assert_eq!(esc["result"], serde_json::json!({"type": "ok"}), "{esc}");
+
+    let after = wait_idle(&socket);
+    assert_eq!(after["result"]["agent"]["agent_session"]["value"], session);
+    let screen = screen();
+    assert!(!screen.contains("Do you want to create"), "{screen}");
+    assert!(!dialog_file.exists(), "the write was refused, not done");
+}
+
 /// CC4 E2E: Handoff and Compact on the real Claude Code, each to `completed`
 /// with its evidence (persisted artifact; manual compact boundary).
 #[test]
@@ -154,10 +211,12 @@ fn real_claude_handoff_and_compact_complete() {
     let (_home, mut c, subject) = arrangement();
     let repo = PathBuf::from(var("AC_E2E_REPO"));
 
+    let t0 = Instant::now();
     let o = c.start(HANDOFF_OP, Action::Handoff, &subject);
     println!("e2e: handoff start {:?} {}", o.state, o.code);
     let o = settle(&mut c, HANDOFF_OP);
     println!("e2e: handoff {:?} {} {:?}", o.state, o.code, o.evidence);
+    println!("e2e: measure handoff_ms={}", t0.elapsed().as_millis());
     assert_eq!(
         (o.state, o.code),
         (State::Completed, code::PERSISTED),
@@ -173,10 +232,12 @@ fn real_claude_handoff_and_compact_complete() {
     assert_eq!(a.size, fs::metadata(&a.path).unwrap().len());
 
     wait_idle(&var("AC_E2E_SOCKET"));
+    let t0 = Instant::now();
     let o = c.start(COMPACT_OP, Action::Compact, &subject);
     println!("e2e: compact start {:?} {}", o.state, o.code);
     let o = settle(&mut c, COMPACT_OP);
     println!("e2e: compact {:?} {} {:?}", o.state, o.code, o.evidence);
+    println!("e2e: measure compact_ms={}", t0.elapsed().as_millis());
     assert_eq!(
         (o.state, o.code),
         (State::Completed, code::COMPACTED),

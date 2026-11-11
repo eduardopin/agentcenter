@@ -11,6 +11,8 @@ one):
 - `pickup <absolute path>`: one `Read` of that path;
 - `e2e warm-up`: one `Write` of `<STUB_GRANT_PATH>`
   (the script grants the session the project's .claude/ folder on it);
+- `e2e dialog`: one `Write` of `<STUB_DIALOG_PATH>` (into .git/, a protected path, so
+  Claude Code opens a permission dialog; the Escape E2E dismisses it);
 - a `tool_result` in the turn: a short closing text;
 - anything else (and every turn without tools): a short text.
 
@@ -29,6 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HANDOFF_DIR = os.environ["STUB_HANDOFF_DIR"]
 GRANT_PATH = os.environ["STUB_GRANT_PATH"]
+DIALOG_PATH = os.environ.get("STUB_DIALOG_PATH")
 OP = re.compile(r"handoff agentcenter-op:([0-9a-f-]{36})")
 PICKUP = re.compile(r"pickup (/[^\s<>]+)")
 LOG = None
@@ -72,6 +75,8 @@ def decide(body):
         return "Write", {"file_path": path, "content": body}
     if "e2e warm-up" in text:
         return "Write", {"file_path": GRANT_PATH, "content": "e2e grant\n"}
+    if DIALOG_PATH and "e2e dialog" in text:
+        return "Write", {"file_path": DIALOG_PATH, "content": "e2e dialog\n"}
     m = PICKUP.search(text)
     if m:
         return "Read", {"file_path": m.group(1)}
