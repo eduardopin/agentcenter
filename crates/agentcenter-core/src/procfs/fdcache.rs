@@ -41,7 +41,8 @@ use super::stat::{Stat, parse_stat};
 use super::{ProcRoot, ReadError, pread_into, read_open_into};
 use std::collections::HashMap;
 use std::fs::File;
-use std::path::{Path, PathBuf};
+use std::os::unix::ffi::OsStrExt;
+use std::path::PathBuf;
 
 /// Quantas raizes distintas o cache segura ao mesmo tempo (o benchmark do tick
 /// alterna duas; o sampler real usa uma). A menos usada cai para dar lugar.
@@ -398,7 +399,9 @@ fn budget_for_limit(soft: Option<u64>) -> usize {
 /// gasta syscalls; numa fixture (arquivo trocado por outro inode) o descompasso
 /// e possivel e a reabertura periodica o limita.
 fn is_real_proc(root: &ProcRoot) -> bool {
-    root.path() == Path::new("/proc")
+    // Bytes: spelling other than the exact "/proc" takes the fixture branch
+    // and refreshes every cached fd. `/proc/` is the same real directory.
+    root.path().as_os_str().as_bytes() == b"/proc"
 }
 
 /// Limite brando de fds (`Max open files`) de um `/proc/<pid>/limits`.
@@ -569,6 +572,11 @@ mod tests {
         assert!(is_real_proc(&ProcRoot::default()));
         assert!(is_real_proc(&ProcRoot::new("/proc")));
         assert!(!is_real_proc(&ProcRoot::new("/proc/self")));
+        // Compared by bytes: `Path ==` would call these the real /proc, and a
+        // refresh on them would be skipped.
+        assert!(!is_real_proc(&ProcRoot::new("/proc/")));
+        assert!(!is_real_proc(&ProcRoot::new("/proc/.")));
+        assert!(!is_real_proc(&ProcRoot::new("/proc//")));
         assert!(!is_real_proc(&ProcRoot::new("/tmp/proc")));
 
         let mut child = std::process::Command::new("sleep")

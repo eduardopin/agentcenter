@@ -304,13 +304,36 @@ fn task_scan_allocations_do_not_grow_with_threads() {
     assert_eq!(big, small, "alocacoes com 1200 threads vs 10");
 }
 
+/// Scratch directory under `/tmp`, removed on drop.
+struct ShortDir(std::path::PathBuf);
+
+impl ShortDir {
+    fn new(prefix: &str) -> Self {
+        static SEQ: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        let n = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let p = std::path::PathBuf::from(format!("/tmp/{prefix}-{}-{n}", std::process::id()));
+        let _ = fs::remove_dir_all(&p);
+        fs::create_dir_all(&p).unwrap();
+        Self(p)
+    }
+}
+
+impl Drop for ShortDir {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
 #[test]
 fn read_pid_does_not_allocate_per_read() {
     // O caminho <raiz>/<pid>/<file> vai na pilha e a leitura reaproveita o
     // `buf`: 100 leituras alocam o mesmo que 1 (antes, PathBuf + to_string
     // em cada uma).
-    let dir = TempDir::new("ac-dscan-readpid").unwrap();
-    let fp = FakeProc::create(dir.path()).unwrap();
+    // Under /tmp whatever TMPDIR says: a root over ~240 bytes does not fit the
+    // stack buffer and takes the heap path by design (see the long-root test).
+    let dir = ShortDir::new("ac-readpid");
+    assert!(dir.0.as_os_str().len() < 100, "{:?}", dir.0);
+    let fp = FakeProc::create(&dir.0).unwrap();
     fp.add(&FakeProcess::new(110, 1, "node")).unwrap();
     let root = fp.proc_root();
     let mut buf = String::with_capacity(4096);
@@ -413,4 +436,63 @@ fn scan_worker_count_is_bounded() {
     assert_eq!(scan_worker_count(PARALLEL_MIN_JOBS - 1, 4), 1);
     assert_eq!(scan_worker_count(PARALLEL_MIN_JOBS, 4), 2);
     assert_eq!(scan_worker_count(PARALLEL_MIN_JOBS + 1, 4), 2);
+}
+
+/// `task` that is a FIFO: a plain `open(O_RDONLY)` waits for a writer that
+/// never comes, which would freeze the sampler tick. The scan has to open it
+/// with `O_DIRECTORY` and give up with `None` instead.
+#[test]
+fn task_that_is_a_fifo_does_not_hang_the_scan() {
+    let dir = TempDir::new("ac-dscan-fifo").unwrap();
+    fs::create_dir_all(dir.path().join("100")).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(dir.path().join("100").join("task"))
+        .status();
+    if !matches!(made, Ok(s) if s.success()) {
+        eprintln!("mkfifo is not available, skipping");
+        return;
+    }
+    let root = ProcRoot::new(dir.path());
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut buf = String::new();
+        let _ = tx.send(d_threads_besides_main(&root, 100, &mut buf));
+    });
+    match rx.recv_timeout(std::time::Duration::from_secs(5)) {
+        Ok(got) => assert_eq!(got, None),
+        Err(_) => {
+            // Release the blocked open so the stuck thread can end.
+            let _ = fs::OpenOptions::new()
+                .write(true)
+                .open(dir.path().join("100").join("task"));
+            panic!("the scan blocked opening a FIFO named task");
+        }
+    }
+}
+
+/// The allocation count must not depend on the thread count even when the
+/// root is too long for the stack path buffer (a long `TMPDIR`), where the
+/// path falls back to the heap once per call.
+#[test]
+fn task_scan_allocations_do_not_grow_with_threads_under_a_long_root() {
+    let dir = TempDir::new("ac-dscan-longroot").unwrap();
+    let long = dir.path().join("d".repeat(220));
+    // Past `PATH_STACK` (256) less "task" and the pid: the heap path.
+    assert!(long.as_os_str().len() > 240, "{long:?}");
+    let fp = FakeProc::create(&long).unwrap();
+    for (pid, threads) in [(100, 10), (101, 1200)] {
+        let mut p = FakeProcess::new(pid, 1, "node");
+        p.threads = threads;
+        p.d_threads = threads / 3;
+        fp.add(&p).unwrap();
+    }
+    let root = fp.proc_root();
+    let mut buf = String::with_capacity(1024);
+    assert_eq!(count_d_threads(&root, 100, 'S', &mut buf), 3);
+    let mut n = 0;
+    let small = allocs_in(|| n = count_d_threads(&root, 100, 'S', &mut buf));
+    assert_eq!(n, 3);
+    let big = allocs_in(|| n = count_d_threads(&root, 101, 'S', &mut buf));
+    assert_eq!(n, 400);
+    assert_eq!(big, small, "allocations with 1200 threads vs 10");
 }
