@@ -10,8 +10,8 @@ distributed WITHOUT ANY WARRANTY; see the license for details.
 Additional terms under section 7 of the GNU AGPL
 ------------------------------------------------
 
-(b) Author attribution. Any copy, modified version or work based on
-    AgentCenter must preserve this NOTICE file and must show, in its About
+(b) Author attribution. Any copy must preserve this NOTICE file. A modified
+    version or a work based on AgentCenter must also show, in its About
     dialog or equivalent "Appropriate Legal Notices", the line:
     "Based on AgentCenter by Eduardo José Pin -
     https://github.com/eduardopin/agentcenter".

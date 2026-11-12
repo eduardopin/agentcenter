@@ -36,7 +36,7 @@ GPU, per-process network bytes, Windows.
 | 4 | Linux `/proc` reader of our own, no `sysinfo` in the hot path | We need `smaps_rollup`, `io`, `delayacct_blkio_ticks` and per-tree attribution that generic crates don't expose; reading only what we need keeps a tick under a few ms. A macOS backend comes later behind the same trait. |
 | 5 | Read-only and local by default | Never sends data anywhere. Transcripts are parsed for metadata only (model, token counts, timestamps, tool call ids as hashes), never for prompt or answer content. The cockpit (C21) keeps to the same rule: everything in it comes from those counts, the transcript's mtime and the declared provider. The handoff age comes from `readdir` + `stat` of the handoff directories only; no handoff file is ever opened or read. Amended by the owner on 17/10/2026 (C23): to detect a loop, the parser reads each tool call's arguments into the canonical form of `contexto.py`'s `norm_args` (`sort_keys`, cut at 400 characters), hashes it with the tool name into one `u64` and drops the text right away; only the last 30 hashes per session stay in memory, and only `max_streak` and `repeated_max` leave the core. No argument is ever stored in a `String` field or written to the snapshot. |
 | 6 | Ghidra and REA are development tools, not dependencies | They help contributors discover where closed-source agents keep session state, so an adapter can be written. They are documented in CONTRIBUTING, never linked or shipped. |
-| 7 | License MIT | Open-source distribution and embedding; preserve third-party licenses. Earlier revisions' dual-license grants remain valid. |
+| 7 | License AGPL-3.0-or-later, name and icon reserved as marks | Free software that a fork must keep free, credited and under its own name (owner, 2026-11-11; NOTICE section 7 terms and TRADEMARKS.md); preserve third-party licenses. Revisions before 2026-11-11 keep their MIT (earlier MIT OR Apache-2.0) grants. |
 | 8 | Optional local model for the `insights` briefing | Off the sampler path and loopback-only, in line with decision 5: no `--llm`, no call. The model sees finding lines only, never transcript content or session names, and a guard falls back to the rule text. See `docs/slm/briefing.md`. |
 
 ## Layout
@@ -545,7 +545,7 @@ Mission Center and Resources both gather data in a separate helper process.
 We keep the sampler in-process on its own thread (one binary, no IPC
 serialization) and revisit only if privilege separation is needed. Their
 source (GPL-3.0) is reference for ideas only; no code is copied into this
-MIT/Apache project.
+project.
 
 ## Adapters (v0.1)
 

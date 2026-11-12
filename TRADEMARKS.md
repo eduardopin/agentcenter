@@ -1,8 +1,9 @@
 # AgentCenter name and icon
 
-The code is free software under the [AGPL-3.0-or-later](LICENSE). The name
-and the icon are not. They tell people where a build comes from, so they stay
-with this project.
+The code, the icon file included, is free software under the
+[AGPL-3.0-or-later](LICENSE). The license grants no trademark rights (its
+section 7(e), in [NOTICE](NOTICE)): the name and the icon, used as marks, tell
+people where a build comes from, so they stay with this project.
 
 Covered here: the name "AgentCenter", the application id
 `io.github.eduardopin.AgentCenter`, and the icon in `data/icons/`.

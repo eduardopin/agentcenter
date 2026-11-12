@@ -144,8 +144,9 @@ change and share it. If you distribute a modified version, or run one for
 users over a network, you must publish its source under the same license and
 keep the author attribution described in [NOTICE](NOTICE).
 
-The name AgentCenter and its icon are not covered by the license: a fork has
-to use another name and icon, and say it is derived from AgentCenter. See
+The license grants no trademark rights: a fork may not use the name
+AgentCenter or its icon as its own mark. It ships under another name and icon
+and says it is derived from AgentCenter. See
 [TRADEMARKS.md](TRADEMARKS.md).
 
 Contributions are accepted under the same license. Third-party code retains

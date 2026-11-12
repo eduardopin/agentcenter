@@ -39,6 +39,11 @@ pre-alpha.
 
 ### Changed
 
+- AgentCenter is now licensed AGPL-3.0-or-later, with section 7 terms in
+  NOTICE (keep the author credit, mark modified versions, no trademark rights)
+  and TRADEMARKS.md for the name, app id and icon. Revisions before 2026-11-11
+  keep their MIT (and earlier MIT OR Apache-2.0) grants.
+
 - The interface was redesigned: the dashboard, machine header and counter
   filter are gone, the session list sits on the left and the maps take the
   rest of the window.
