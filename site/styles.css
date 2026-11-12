@@ -722,6 +722,20 @@ pre:focus-visible {
   background: var(--terminal);
 }
 
+/* On a phone the terminal keeps a readable size and scrolls sideways
+   inside its frame; the page itself never scrolls horizontally. */
+@media (max-width: 520px) {
+  .cli-shot .shot-frame {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .cli-shot .shot-frame img {
+    width: 600px;
+    max-width: none;
+    height: auto;
+  }
+}
+
 .contribute-steps {
   margin-bottom: 40px;
 }

@@ -4,7 +4,7 @@
   <rect width="960" height="1388" fill="#07100c"/>
   <style>
     text { font: 20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #dce8e0; white-space: pre; }
-    .summary { fill: #79e2c3; font-weight: 700; }
+    .summary { fill: #79e2c3; font-weight: 700; font-size: 18px; }
     .header { fill: #8ea399; font-weight: 700; }
     .total { fill: #ffbe63; }
     .machine { fill: #a8c5b6; }

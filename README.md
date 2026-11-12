@@ -51,7 +51,7 @@ uninstall options.
 > AgentCenter.
 
 **Help wanted:** adapters for more agents, tests, accessibility evidence and
-the failing performance gates. Build and run the full gate:
+the performance gates that pass with almost no headroom. Build and run the full gate:
 
 ```sh
 git clone https://github.com/eduardopin/agentcenter.git && cd agentcenter
