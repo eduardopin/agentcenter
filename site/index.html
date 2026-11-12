@@ -3,10 +3,10 @@
   <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>AgentCenter — resource monitoring for AI coding sessions</title>
-    <meta name="description" content="See the CPU, memory, swap, disk throughput, and I/O stall of each AI coding session on Linux.">
-    <meta name="theme-color" content="#0b100e" media="(prefers-color-scheme: dark)">
-    <meta name="theme-color" content="#f6f7f3" media="(prefers-color-scheme: light)">
+    <title>AgentCenter — what each AI coding session costs your Linux machine</title>
+    <meta name="description" content="A Linux resource monitor, written in Rust, that groups each AI coding session with every process it starts. Pre-alpha; contributors welcome.">
+    <meta name="theme-color" content="#15161c" media="(prefers-color-scheme: dark)">
+    <meta name="theme-color" content="#eef0f4" media="(prefers-color-scheme: light)">
     <link rel="canonical" href="https://eduardopin.github.io/agentcenter/">
     <link rel="icon" href="favicon.svg" type="image/svg+xml">
     <link rel="stylesheet" href="styles.css">
@@ -19,7 +19,7 @@
     <meta property="og:image" content="https://eduardopin.github.io/agentcenter/og.png">
     <meta property="og:image:width" content="1280">
     <meta property="og:image:height" content="640">
-    <meta property="og:image:alt" content="AgentCenter logo and the promise: Know what every coding agent costs your machine.">
+    <meta property="og:image:alt" content="AgentCenter: know what every coding agent costs your machine. Linux, GTK4 and a headless CLI, pre-alpha.">
 
     <meta name="twitter:card" content="summary_large_image">
     <meta name="twitter:title" content="Know what every coding agent costs your machine.">
@@ -38,7 +38,7 @@
           <span>AgentCenter</span>
         </a>
         <div class="nav-links">
-          <a href="#features">Features</a>
+          <a href="#features">What it does</a>
           <a href="#install">Install</a>
           <a href="#cli">CLI</a>
           <a href="#contribute">Contribute</a>
@@ -53,67 +53,86 @@
           <a class="status-badge" href="https://github.com/eduardopin/agentcenter/blob/main/docs/KNOWN_LIMITATIONS.md">
             <span aria-hidden="true"></span> Pre-alpha · limits documented
           </a>
-          <p class="eyebrow">A session-first resource monitor for Linux</p>
           <h1 id="hero-title">Know what every coding agent costs your machine.</h1>
-          <p class="lede">AgentCenter rolls an agent and everything it launches into one live view—CPU, PSS and swap, disk throughput, and I/O stall.</p>
-          <div class="hero-actions">
-            <a class="button button-primary" href="#install">Install from source</a>
-            <a class="button button-secondary" href="#cli">Explore the CLI</a>
+          <p class="lede">AgentCenter is a Linux resource monitor that groups each AI coding session with every process it starts, then shows CPU, memory, swap, disk and I/O stall per session.</p>
+          <div class="hero-side">
+            <div class="hero-actions">
+              <a class="button button-primary" href="#contribute">Start contributing</a>
+              <a class="button button-secondary" href="#install">Install from source</a>
+            </div>
+            <p class="platform-note">Linux · Rust · GTK4 + libadwaita · headless CLI</p>
           </div>
-          <p class="platform-note">Linux · GTK4 + libadwaita · MIT licensed</p>
         </div>
 
-        <figure class="terminal-shot">
-          <div class="window-bar" aria-hidden="true">
-            <span></span><span></span><span></span>
-            <small>agentcenter-cli snapshot</small>
+        <figure class="shot">
+          <div class="shot-frame">
+            <picture>
+              <source media="(max-width: 520px) and (prefers-color-scheme: dark)" srcset="img/app-sessions-narrow-dark.webp" width="360" height="640">
+              <source media="(max-width: 520px)" srcset="img/app-sessions-narrow-light.webp" width="360" height="640">
+              <source media="(prefers-color-scheme: dark)" srcset="img/app-sessions-dark.webp" width="1280" height="800">
+              <img src="img/app-sessions-light.webp" width="1280" height="800" alt="The AgentCenter sessions page: CPU, RAM, swap and memory stall for the machine at the top; a token map and a memory map with one tile per session; below them, sessions ranked by token spend over the last 30 minutes.">
+            </picture>
           </div>
-          <img src="img/cli-snapshot.svg" width="960" height="368" alt="AgentCenter CLI output from a real release-build run, reformatted for narrow screens. Session display names and working directories are replaced; PIDs and displayed measurements are as printed by the tool. Machine CPU and PSI fields are omitted.">
-          <figcaption>Real release-build output, reformatted for legibility. Session display NAME and CWD replaced; PIDs and displayed values as printed by the tool; machine CPU/PSI omitted.</figcaption>
+          <figcaption>The sessions page of the current build, fed a real snapshot taken on a 16-core workstation. Session names and folders are replaced; every number is as sampled.</figcaption>
         </figure>
       </section>
 
       <section class="problem section-rule" aria-labelledby="problem-title">
         <div class="shell problem-grid">
-          <p class="section-kicker">The problem</p>
+          <p class="section-kicker">Why it matters</p>
           <div>
-            <h2 id="problem-title">The expensive part is often the process tree you cannot see.</h2>
-            <p>AI coding sessions launch MCP servers, shells, builds, and other children. CPU, memory, swap, and disk activity get scattered across those processes, so the session responsible is hard to identify.</p>
-            <p>AgentCenter groups the whole tree under the agent that started it, then samples that session as one unit.</p>
+            <h2 id="problem-title">A coding agent is rarely one process.</h2>
+            <p>Claude Code, Codex and pi start MCP servers, shells, test runners and builds. In <code>top</code> their CPU, memory and disk traffic land on dozens of unrelated rows, so when the machine starts swapping you cannot tell which session caused it.</p>
+            <p>AgentCenter rolls each process tree up under the agent that started it and samples that session as one unit.</p>
           </div>
         </div>
       </section>
 
       <section class="features shell" id="features" aria-labelledby="features-title">
         <div class="section-heading">
-          <p class="section-kicker">What it does</p>
-          <h2 id="features-title">A clearer unit than a process list.</h2>
+          <p class="section-kicker">What it does today</p>
+          <h2 id="features-title">Four things the code already does.</h2>
         </div>
         <div class="feature-grid">
           <article class="feature-card">
-            <span class="feature-index">01</span>
             <h3>One session, whole tree</h3>
-            <p>Each agent is shown with every process below it, including MCP servers, shells, and builds.</p>
+            <p>Each agent is shown with every process below it, including MCP servers, shells and builds. Ten agents are detected out of the box; <code>AGENTCENTER_EXTRA_AGENTS</code> adds more by process name.</p>
           </article>
           <article class="feature-card">
-            <span class="feature-index">02</span>
-            <h3>Live resource accounting</h3>
-            <p>See CPU, proportional memory and swap, reads and writes per second, plus I/O stall for each session. Stall percentages need <code>kernel.task_delayacct=1</code>; otherwise AgentCenter reports the count of threads in <code>D</code> state. <a href="https://github.com/eduardopin/agentcenter/blob/main/docs/ARCHITECTURE.md#metrics-per-process-aggregated-per-session-and-per-machine">Metric details</a>.</p>
+            <h3>Kernel accounting</h3>
+            <p>Proportional memory and swap (PSS, SwapPss), CPU and disk rates from two samples, and I/O stall per session. Stall percentages need <code>kernel.task_delayacct=1</code>; otherwise AgentCenter counts threads in <code>D</code> state. <a href="https://github.com/eduardopin/agentcenter/blob/main/docs/ARCHITECTURE.md#metrics-per-process-aggregated-per-session-and-per-machine">Metric details</a>.</p>
           </article>
           <article class="feature-card">
-            <span class="feature-index">03</span>
             <h3>Desktop and headless</h3>
-            <p>Use the GTK4 desktop app or take table and JSON snapshots with <code>agentcenter-cli</code>.</p>
+            <p>A GTK4 + libadwaita app that follows the system's light or dark style, and <code>agentcenter-cli</code> for table and JSON snapshots from any terminal.</p>
           </article>
           <article class="feature-card">
-            <span class="feature-index">04</span>
             <h3>Local monitoring</h3>
             <p>Resource sampling is local and read-only. Transcript overlays retain metadata and hashes: tool-call arguments are normalized, hashed, and immediately discarded. Handoff is a separate opt-in action that can send bounded projected session text to the provider selected in Pi. Read the <a href="https://github.com/eduardopin/agentcenter/blob/main/docs/ARCHITECTURE.md#decisions">privacy design</a> and <a href="https://github.com/eduardopin/agentcenter/blob/main/docs/KNOWN_LIMITATIONS.md#session-actions">Handoff limits</a>.</p>
           </article>
         </div>
       </section>
 
-      <section class="agents section-rule" aria-labelledby="agents-title">
+      <section class="detail section-rule" aria-labelledby="detail-title">
+        <div class="shell detail-grid">
+          <div>
+            <p class="section-kicker">Session detail</p>
+            <h2 id="detail-title">Open a session to see its cost and its transcript.</h2>
+            <p>The detail page lists the agent, model, terminal pane and folder, then what the transcript says: context used, tokens in and out, tool calls in flight and live subagents.</p>
+          </div>
+          <figure class="shot">
+            <div class="shot-frame">
+              <picture>
+                <source media="(prefers-color-scheme: dark)" srcset="img/app-detail-dark.webp" width="1280" height="456">
+                <img src="img/app-detail-light.webp" width="1280" height="456" loading="lazy" alt="Detail of one Claude Code session: busy, 42 processes, context 15 percent, 157.4 million tokens in, 590 tool calls with one in flight, 3 live subagents.">
+              </picture>
+            </div>
+            <figcaption>Top of the detail page, from the same recorded snapshot. In recorded-snapshot mode the app turns terminal actions off and says so on the page.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="agents" aria-labelledby="agents-title">
         <div class="shell agents-grid">
           <div>
             <p class="section-kicker">Built-in detection</p>
@@ -135,7 +154,7 @@
         </div>
       </section>
 
-      <section class="install shell" id="install" aria-labelledby="install-title">
+      <section class="install shell section-rule" id="install" aria-labelledby="install-title">
         <div class="section-heading">
           <p class="section-kicker">Install</p>
           <h2 id="install-title">Build and install for your user.</h2>
@@ -161,23 +180,29 @@ bash install.sh</code></pre>
             <p class="section-kicker">Headless by design</p>
             <h2 id="cli-title">Take a snapshot from any terminal.</h2>
             <p>The CLI samples twice so CPU and disk rates are deltas. Its default interval is one second, and the same snapshot can be emitted as JSON.</p>
-            <a class="text-link" href="https://github.com/eduardopin/agentcenter#usage">Read the CLI usage guide <span aria-hidden="true">→</span></a>
-          </div>
-          <div class="code-panel compact">
-            <div class="code-toolbar">
-              <span>Examples</span>
-              <button class="copy-button" type="button" data-copy-target="cli-code" aria-label="Copy CLI examples">
-                <span class="copy-label">Copy</span>
-              </button>
-            </div>
-            <pre id="cli-code" tabindex="0" aria-label="AgentCenter CLI examples"><code>agentcenter-cli snapshot
+            <div class="code-panel compact">
+              <div class="code-toolbar">
+                <span>Examples</span>
+                <button class="copy-button" type="button" data-copy-target="cli-code" aria-label="Copy CLI examples">
+                  <span class="copy-label">Copy</span>
+                </button>
+              </div>
+              <pre id="cli-code" tabindex="0" aria-label="AgentCenter CLI examples"><code>agentcenter-cli snapshot
 agentcenter-cli snapshot --json
 agentcenter-cli snapshot --interval-ms 2000
 
 # Add agents by process name
 AGENTCENTER_EXTRA_AGENTS=my-agent \
   agentcenter-cli snapshot</code></pre>
+            </div>
+            <p><a class="text-link" href="https://github.com/eduardopin/agentcenter#usage">Read the CLI usage guide <span aria-hidden="true">→</span></a></p>
           </div>
+          <figure class="shot cli-shot">
+            <div class="shot-frame">
+              <img src="img/cli-snapshot.svg" width="960" height="1388" loading="lazy" alt="agentcenter-cli snapshot output from a real release-build run: 14 sessions (claude 6, codex 2, pi 6), 9 busy, with PID, process count, CPU, PSS, swap, disk rates and stall per session, then a total row and machine memory. Session names and folders are replaced.">
+            </div>
+            <figcaption>Real release-build output, reformatted for narrow screens. Session NAME and CWD replaced; PIDs and values as printed; machine CPU and PSI omitted.</figcaption>
+          </figure>
         </div>
       </section>
 
@@ -198,26 +223,46 @@ AGENTCENTER_EXTRA_AGENTS=my-agent \
         <div class="shell">
           <div class="section-heading">
             <p class="section-kicker">Contribute</p>
-            <h2 id="contribute-title">Help make session costs easier to see.</h2>
-            <p>Start with the contributor path, choose a small issue, or review the open acceptance work. The project needs testing, documentation, adapter work, accessibility evidence, and performance fixes.</p>
+            <h2 id="contribute-title">Three commands to a green build.</h2>
+            <p>AgentCenter is Rust in three crates: <code>agentcenter-core</code> (sampler, process trees, adapters), <code>agentcenter-cli</code> and the GTK app <code>agentcenter</code>. Help is wanted on adapters for more agents, tests, accessibility evidence and the failing performance gates.</p>
+          </div>
+          <div class="contribute-steps">
+            <div class="code-panel">
+              <div class="code-toolbar">
+                <span>Build and test</span>
+                <button class="copy-button" type="button" data-copy-target="contribute-code" aria-label="Copy build and test commands">
+                  <span class="copy-label">Copy</span>
+                </button>
+              </div>
+              <pre id="contribute-code" tabindex="0" aria-label="Build and test commands"><code>git clone https://github.com/eduardopin/agentcenter.git && cd agentcenter
+cargo build --release -p agentcenter -p agentcenter-cli
+bash scripts/ci.sh</code></pre>
+            </div>
+            <p class="install-note"><code>scripts/ci.sh</code> is the full gate: installer test, <code>cargo fmt</code>, <code>clippy</code> with warnings as errors, the workspace tests and the tick benchmark. GUI tests run on a headless display and need <code>gtk4-broadwayd</code> (package <code>libgtk-4-bin</code>). <a class="text-link" href="https://github.com/eduardopin/agentcenter/blob/main/CONTRIBUTING.md#build-and-test">Build and test details</a>.</p>
           </div>
           <div class="contribute-grid">
             <a href="https://github.com/eduardopin/agentcenter/blob/main/CONTRIBUTING.md#your-first-contribution">
               <span>Start here</span>
               <strong>Your first contribution</strong>
-              <small>Build, test, and project rules</small>
+              <small>Where each area lives, and the rules every change follows</small>
             </a>
             <a href="https://github.com/eduardopin/agentcenter/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22">
               <span>Pick a task</span>
               <strong>Good first issues</strong>
-              <small>Small, scoped ways to help</small>
+              <small>Small, scoped issues. None open? Ask for one in Discussions</small>
+            </a>
+            <a href="https://github.com/eduardopin/agentcenter/discussions">
+              <span>Ask</span>
+              <strong>Discussions</strong>
+              <small>Questions and ideas before you write code</small>
             </a>
             <a href="https://github.com/eduardopin/agentcenter/blob/main/PENDENCIAS.md">
               <span>See the work</span>
               <strong>Open acceptance work</strong>
-              <small>Acceptance work without promises</small>
+              <small>What is still unproven, listed without promises</small>
             </a>
           </div>
+          <p class="license-note">Free software (AGPL-3.0). <a href="https://github.com/eduardopin/agentcenter/blob/main/LICENSE">See LICENSE</a>.</p>
         </div>
       </section>
     </main>
@@ -228,10 +273,10 @@ AGENTCENTER_EXTRA_AGENTS=my-agent \
           <img src="favicon.svg" width="28" height="28" alt="">
           <span>AgentCenter</span>
         </div>
-        <p>MIT licensed. Built for Linux. Currently pre-alpha.</p>
+        <p>Free software (AGPL-3.0), <a href="https://github.com/eduardopin/agentcenter/blob/main/LICENSE">see LICENSE</a>. Built for Linux. Pre-alpha.</p>
         <div class="footer-links">
           <a href="https://github.com/eduardopin/agentcenter">GitHub</a>
-          <a href="https://github.com/eduardopin/agentcenter/blob/main/LICENSE">License</a>
+          <a href="https://github.com/eduardopin/agentcenter/blob/main/CONTRIBUTING.md">Contributing</a>
           <a href="https://github.com/eduardopin/agentcenter/blob/main/docs/ARCHITECTURE.md">Architecture</a>
         </div>
       </div>

@@ -23,43 +23,43 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="640" v
       <rect x="44" y="80" width="24" height="12" rx="6" fill="#e6ebf0"/>
     </symbol>
     <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
-      <path d="M48 0H0V48" fill="none" stroke="#69d9bd" stroke-opacity=".055"/>
+      <path d="M48 0H0V48" fill="none" stroke="#f2a93f" stroke-opacity=".055"/>
     </pattern>
     <radialGradient id="glow" cx="82%" cy="35%" r="45%">
-      <stop offset="0" stop-color="#69d9bd" stop-opacity=".22"/>
-      <stop offset="1" stop-color="#69d9bd" stop-opacity="0"/>
+      <stop offset="0" stop-color="#f2a93f" stop-opacity=".22"/>
+      <stop offset="1" stop-color="#f2a93f" stop-opacity="0"/>
     </radialGradient>
     <filter id="shadow" x="-40%" y="-40%" width="180%" height="180%">
       <feDropShadow dx="0" dy="28" stdDeviation="32" flood-color="#000000" flood-opacity=".46"/>
     </filter>
   </defs>
 
-  <rect width="1280" height="640" fill="#0b100e"/>
+  <rect width="1280" height="640" fill="#15161c"/>
   <rect width="1280" height="640" fill="url(#grid)"/>
   <rect width="1280" height="640" fill="url(#glow)"/>
 
   <use href="#app-icon" x="82" y="72" width="52" height="52"/>
-  <text x="151" y="108" fill="#f1f5f2" font-family="system-ui, sans-serif" font-size="27" font-weight="700">AgentCenter</text>
+  <text x="151" y="108" fill="#e9eaf0" font-family="system-ui, sans-serif" font-size="27" font-weight="700">AgentCenter</text>
 
-  <text x="82" y="205" fill="#69d9bd" font-family="monospace" font-size="16" font-weight="700" letter-spacing="2">RESOURCE MONITORING FOR AI CODING SESSIONS</text>
-  <text x="82" y="285" fill="#f1f5f2" font-family="system-ui, sans-serif" font-size="67" font-weight="750" letter-spacing="-3">
+  <text x="82" y="205" fill="#f2a93f" font-family="monospace" font-size="16" font-weight="700" letter-spacing="2">RESOURCE MONITORING FOR AI CODING SESSIONS</text>
+  <text x="82" y="285" fill="#e9eaf0" font-family="system-ui, sans-serif" font-size="67" font-weight="750" letter-spacing="-3">
     <tspan x="82" dy="0">Know what every coding</tspan>
     <tspan x="82" dy="69">agent costs your machine.</tspan>
   </text>
 
-  <g font-family="system-ui, sans-serif" font-size="18" fill="#aebbb2">
-    <rect x="82" y="480" width="77" height="42" rx="21" fill="#121a16" stroke="#34443b"/>
+  <g font-family="system-ui, sans-serif" font-size="18" fill="#a7aab8">
+    <rect x="82" y="480" width="77" height="42" rx="21" fill="#1c1d24" stroke="#30323d"/>
     <text x="103" y="507">Linux</text>
-    <rect x="173" y="480" width="128" height="42" rx="21" fill="#121a16" stroke="#34443b"/>
+    <rect x="173" y="480" width="128" height="42" rx="21" fill="#1c1d24" stroke="#30323d"/>
     <text x="194" y="507">GTK4 + CLI</text>
-    <rect x="315" y="480" width="64" height="42" rx="21" fill="#121a16" stroke="#34443b"/>
-    <text x="334" y="507">MIT</text>
+    <rect x="315" y="480" width="72" height="42" rx="21" fill="#1c1d24" stroke="#30323d"/>
+    <text x="336" y="507">Rust</text>
   </g>
 
   <g transform="rotate(3 1070 320)" filter="url(#shadow)">
-    <rect x="908" y="124" width="324" height="390" rx="42" fill="#121a16" fill-opacity=".95" stroke="#3d5045"/>
+    <rect x="908" y="124" width="324" height="390" rx="42" fill="#1c1d24" fill-opacity=".95" stroke="#30323d"/>
     <use href="#app-icon" x="953" y="184" width="234" height="234"/>
-    <text x="1070" y="476" text-anchor="middle" fill="#ffbd63" font-family="monospace" font-size="13" font-weight="700" letter-spacing="2">PRE-ALPHA</text>
+    <text x="1070" y="476" text-anchor="middle" fill="#ff7590" font-family="monospace" font-size="13" font-weight="700" letter-spacing="2">PRE-ALPHA</text>
   </g>
 </svg>
 `;
