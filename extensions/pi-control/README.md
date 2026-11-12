@@ -37,7 +37,9 @@ confirmed request for status/cancel: a changed leaf does not authorize a silent
 refresh. Same ID and same identity/action replay the previous operation without
 another effect. Each instance retains at most 128 tombstones; after 30 minutes
 an existing ID returns `unknown/expired`, never restarts. Timeout after sending
-means unknown; query the same ID instead of issuing another write.
+means unknown; query the same ID instead of issuing another write. The 60 s
+generation deadline is different: it ends the operation as `cancelled`/`timeout`
+(terminal, no artifact), whereas a client-side transport timeout is `unknown`.
 
 Discovery manifests under `$XDG_RUNTIME_DIR/ac-*/manifest.json` contain the
 protocol, native/process identity, nonce, socket, expected snapshot,
