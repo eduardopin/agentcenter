@@ -36,10 +36,12 @@ Linux only. This builds and installs the GTK desktop app and headless CLI for
 your user. See [install details](#install-details) for dependencies, paths, and
 uninstall options.
 
-> **Pre-alpha: the current performance and GUI gates fail.** The 500-process
-> D-state fixture measured a 5.036 ms median against a budget below 5 ms. GUI
-> first frame measured 456.4 ms against 300 ms, and CPU measured 12.198% of one
-> core against 2%. Session actions still have incomplete acceptance evidence.
+> **Pre-alpha: the D-state gate passes with almost no headroom, and the last GUI
+> validation failed.** In CI on commit 014a336 the 500-process D-state fixture
+> measured a 4.727 ms median against a budget below 5 ms (1.06x headroom). The
+> last recorded GUI validation measured a 456.4 ms first frame against 300 ms
+> and 12.198% of one core against 2%. Session actions still have incomplete
+> acceptance evidence.
 > Read the [known limitations](docs/KNOWN_LIMITATIONS.md) before relying on
 > AgentCenter.
 

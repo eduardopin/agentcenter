@@ -5,13 +5,17 @@ performance or review gates have passed. Do not treat it as a stable release.
 
 ## Current validation
 
-The integrated Rust workspace passed 412 tests in the latest development run,
-with no failures and one pre-existing helper marked ignored; that helper is
-invoked by its parent test. The Pi extension passed 22 tests separately.
-These results apply to the tested development sources, not to a future release.
+The Rust workspace passed 919 tests with no failures and 9 ignored in CI on
+commit 014a336 (GitHub Actions run 42175066068, 6 November 2026). CI does not
+run the Pi extension's tests; its last local run recorded 22 passing tests.
+These results apply to the tested development sources, not to a future
+release.
 
-The full CI gate failed: its 500-process D-state fixture measured a median
-5.036 ms against a budget below 5 ms. The current GUI validation also failed
+The CI bench gate passed in the same run, with almost no headroom: its
+500-process D-state fixture measured a median 4.727 ms against a budget below
+5 ms (1.06x). Earlier recorded runs measured 5.036 ms and failed. Green
+runner medians on 6 November 2026 ranged from 3.227 ms (run 42174573944) to
+4.993 ms (run 42166828185). The last recorded GUI validation failed
 its 300 ms first-frame and 2% CPU budgets: the integrated candidate measured
 456.4 ms and 12.198% of one core. PSS was 50.1 MiB, within the 80 MiB budget.
 The baseline also exceeded the first-frame budget. These observations do not
