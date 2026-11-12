@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/eduardopin/agentcenter/actions/workflows/ci.yml"><img src="https://github.com/eduardopin/agentcenter/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-146c5b" alt="License: MIT"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-146c5b" alt="License: AGPL-3.0-or-later"></a>
   <a href="docs/KNOWN_LIMITATIONS.md"><img src="https://img.shields.io/badge/status-pre--alpha-b36b00" alt="Status: pre-alpha"></a>
 </p>
 
@@ -138,10 +138,19 @@ how to add an adapter or an overlay, and the privacy rules.
 
 ## License
 
-Licensed under the [MIT license](LICENSE) (SPDX: `MIT`). Contributions are
-accepted under the same license. Third-party code retains its own notices
-and license; see [NOTICE](NOTICE) and the Pi integration's
+AgentCenter is free software under the [GNU Affero General Public License
+v3.0 or later](LICENSE) (SPDX: `AGPL-3.0-or-later`). You may use, study,
+change and share it. If you distribute a modified version, or run one for
+users over a network, you must publish its source under the same license and
+keep the author attribution described in [NOTICE](NOTICE).
+
+The name AgentCenter and its icon are not covered by the license: a fork has
+to use another name and icon, and say it is derived from AgentCenter. See
+[TRADEMARKS.md](TRADEMARKS.md).
+
+Contributions are accepted under the same license. Third-party code retains
+its own notices and license; see [NOTICE](NOTICE) and the Pi integration's
 [license](integrations/pi-guarded-compaction/LICENSE.pi).
 
-Earlier revisions were offered under `MIT OR Apache-2.0`; this revision uses
-MIT. Existing grants for earlier revisions are unchanged.
+Revisions published before 2026-11-11 were offered under `MIT` (and earlier
+`MIT OR Apache-2.0`); those grants are unchanged for those revisions.

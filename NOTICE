@@ -1,7 +1,32 @@
 AgentCenter
 Copyright (c) 2026 Eduardo José Pin e contribuidores do AgentCenter
 
-Licensed under the MIT license (LICENSE; also provided as LICENSE-MIT).
+This program is free software: you can redistribute it and/or modify it
+under the terms of the GNU Affero General Public License as published by the
+Free Software Foundation, either version 3 of the License, or (at your
+option) any later version (LICENSE; SPDX: AGPL-3.0-or-later). It is
+distributed WITHOUT ANY WARRANTY; see the license for details.
+
+Additional terms under section 7 of the GNU AGPL
+------------------------------------------------
+
+(b) Author attribution. Any copy, modified version or work based on
+    AgentCenter must preserve this NOTICE file and must show, in its About
+    dialog or equivalent "Appropriate Legal Notices", the line:
+    "Based on AgentCenter by Eduardo José Pin -
+    https://github.com/eduardopin/agentcenter".
+
+(c) Origin of modified versions. A modified version must be marked as
+    changed and must not be presented as the original AgentCenter.
+
+(e) Trademarks. No rights are granted to use the name "AgentCenter", the
+    application id io.github.eduardopin.AgentCenter or the AgentCenter icon
+    to identify a modified version or a work based on it. See TRADEMARKS.md.
+
+Revisions published before 2026-11-11 were offered under the MIT license
+(and earlier MIT OR Apache-2.0); those grants are unchanged for those
+revisions.
+
 Third-party notices and licenses remain applicable to their respective code.
 
 Reference credits
@@ -19,7 +44,7 @@ the file it went into and the license notice it carries.
   Resources (GPL-3.0) - https://github.com/nokyan/resources
   Desktop resource monitors used as the performance baseline and as a source
   of ideas only (UI layout, helper-process design). GPL-3.0 code is never
-  copied into this MIT-licensed project.
+  copied into this project.
 
 - Stacer - https://github.com/oguzhaninan/Stacer
   Measured as part of the same performance baseline; no code used.

@@ -41,7 +41,7 @@ the unit. The sampler walks `/proc`, identifies known agent processes, attaches
 their descendants, and reports CPU deltas, proportional memory and swap, disk
 rate, and I/O stall. The CLI emits the same snapshot as a table or JSON.
 
-It is MIT licensed and pre-alpha. The repository documents failing performance
+It is AGPL-3.0 licensed and pre-alpha. The repository documents failing performance
 and GUI gates rather than calling them done: the recorded 500-process D-state
 median is 5.036 ms against a budget below 5 ms, and current GUI first-frame and
 CPU measurements miss their budgets. I am especially interested in review of
@@ -96,7 +96,7 @@ action.
 I built AgentCenter to show which AI coding session owns the CPU, memory, swap,
 and disk activity hidden in its process tree.
 
-Rust + GTK4 on Linux, with a table/JSON CLI. MIT licensed and honestly
+Rust + GTK4 on Linux, with a table/JSON CLI. AGPL-3.0 licensed and honestly
 pre-alpha: current performance and GUI gates still fail.
 
 https://eduardopin.github.io/agentcenter/
@@ -112,7 +112,7 @@ agent and its process tree, then reports CPU, proportional memory and swap, disk
 throughput, and I/O stall. The project includes a GTK4/libadwaita desktop app
 and a Rust CLI with table and JSON output.
 
-AgentCenter is public under the MIT license, but it is pre-alpha—not a finished
+AgentCenter is public under the AGPL-3.0 license, but it is pre-alpha—not a finished
 release. The repository documents that the current full performance gate and
 the latest GUI first-frame and CPU budgets fail, and that some session-action
 acceptance work remains open. I am looking for contributors interested in

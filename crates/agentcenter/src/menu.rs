@@ -170,7 +170,7 @@ pub fn about_dialog() -> adw::AboutDialog {
         .developer_name("Eduardo Pin")
         .developers(["Eduardo Pin"])
         .copyright("© 2026 Eduardo José Pin and the AgentCenter contributors")
-        .license_type(gtk::License::MitX11)
+        .license_type(gtk::License::Agpl30)
         .website("https://github.com/eduardopin/agentcenter")
         .issue_url("https://github.com/eduardopin/agentcenter/issues")
         .build()
@@ -270,7 +270,7 @@ mod tests {
             assert_eq!(d.application_name(), "AgentCenter");
             assert_eq!(d.developer_name(), "Eduardo Pin");
             assert!(d.version().starts_with(env!("CARGO_PKG_VERSION")));
-            assert_eq!(d.license_type(), gtk::License::MitX11);
+            assert_eq!(d.license_type(), gtk::License::Agpl30);
             let date = build_date(env!("AGENTCENTER_BUILD_EPOCH").parse().unwrap());
             assert!(
                 d.release_notes_version().contains(&date) || d.comments().contains(&date),
