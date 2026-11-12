@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!-- AgentCenter app icon (placeholder). Original work, same license as the
-     project (MIT). A slate plate with three session rows; the
+     project (AGPL-3.0-or-later); as a mark it is reserved, see TRADEMARKS.md. A slate plate with three session rows; the
      middle one is amber: the session the FLAG column marks as waiting on disk. -->
 <svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">
   <title>AgentCenter</title>

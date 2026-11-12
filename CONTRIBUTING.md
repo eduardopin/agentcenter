@@ -5,8 +5,8 @@ coding session; [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) explains the
 model, the performance budget and the decisions behind it. Read it before a
 large change.
 
-Contributions are accepted under the project's MIT license (see
-[License](#license)). Third-party licenses and notices must be preserved.
+Contributions are accepted under the project's license, AGPL-3.0-or-later
+(see [License](#license)). Third-party licenses and notices must be preserved.
 
 ## Your first contribution
 
@@ -454,15 +454,14 @@ that on-disk or on-socket interface.
 
 - **Mission Center and Resources are GPL-3.0.** They are reference for ideas
   only (layout, what to measure, helper-process design). Never copy, port or
-  translate their code into this MIT-licensed project, not even a small
-  function.
+  translate their code into this project, not even a small function.
 - **MBrassey/agtop is MIT.** When you consult it for a change, credit it: add
   or update its entry in [NOTICE](NOTICE) and mention it in the commit
   message. Copying MIT code also requires keeping its copyright notice in the
   file it goes into; say so in the change.
 - Code from any other project needs license compatibility review and a
-  NOTICE entry. Preserve its copyright and license; the project's MIT
-  license does not relicense third-party code. When in doubt, write it yourself.
+  NOTICE entry. Preserve its copyright and license; the project's license
+  does not relicense third-party code. When in doubt, write it yourself.
 
 ## Commits and changes
 
@@ -473,8 +472,10 @@ that on-disk or on-socket interface.
 
 ## License
 
-AgentCenter is licensed under the [MIT license](LICENSE), also provided as
-[LICENSE-MIT](LICENSE-MIT). Contributions are accepted under MIT. Third-party
-code retains its original license and notices.
+AgentCenter is licensed under the [GNU AGPL v3.0 or later](LICENSE).
+Contributions are accepted under the same license. Third-party code retains
+its original license and notices. The AgentCenter name and icon are covered
+by [TRADEMARKS.md](TRADEMARKS.md), not by the license.
 
-Existing license grants for earlier dual-licensed revisions are unchanged.
+Revisions published before 2026-11-11 keep the MIT (and earlier
+`MIT OR Apache-2.0`) grants they were offered under.
