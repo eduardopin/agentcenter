@@ -242,3 +242,133 @@ fn pickup_transcripts_never_put_handoff_content_in_snapshot_or_stderr() {
         assert!(table.contains(&pid.to_string()), "{table}");
     }
 }
+
+const CANARY4: &str = "AGENTCENTER-CANARY-cc4";
+
+/// CC4: the transcript of a session that went through a Handoff and a Compact
+/// carries the handoff body (`Write` input and result), the compact focus
+/// instructions, the summary Claude Code writes after the boundary and the
+/// assistant's text. The snapshot names none of it: it reads the transcript
+/// for counters (tool calls, model, context), never for words.
+#[test]
+fn handoff_and_compact_transcript_never_put_session_content_in_snapshot_or_stderr() {
+    let dir = TempDir::new("ac-cli-cc4").unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let repo = root.join("repo");
+    fs::create_dir_all(repo.join(".git")).unwrap();
+    let home = root.join("home");
+    let handoff = repo.join(".claude/handoffs/e2e-cc4.md");
+    fs::create_dir_all(handoff.parent().unwrap()).unwrap();
+    fs::write(&handoff, format!("{CANARY4} handoff body\n")).unwrap();
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let line = |n: u64, v: Value| {
+        let mut v = v;
+        v["sessionId"] = OLD.into();
+        v["timestamp"] = iso(now + n).into();
+        format!("{v}\n")
+    };
+    let mut text = String::new();
+    text += &line(
+        0,
+        serde_json::json!({"type":"assistant","requestId":"req_cc4",
+            "message":{"model":"claude-opus-5-5",
+            "content":[{"type":"text","text":format!("{CANARY4} resumo")}],
+            "usage":{"input_tokens":1000,"cache_creation_input_tokens":0,
+                     "cache_read_input_tokens":20000,"output_tokens":50}}}),
+    );
+    text += &line(
+        1,
+        serde_json::json!({"type":"user","message":{"role":"user","content":format!(
+            "<command-message>handoff</command-message>\n<command-name>/handoff</command-name>\n\
+             <command-args>handoff agentcenter-op:{OP} {CANARY4} focus</command-args>")}}),
+    );
+    text += &line(
+        2,
+        serde_json::json!({"type":"assistant","message":{"content":[{"type":"tool_use",
+            "id":"toolu_cc4","name":"Write","input":{"file_path":handoff,
+            "content":format!("{CANARY4} handoff body")}}]}}),
+    );
+    text += &line(
+        3,
+        serde_json::json!({"type":"user","message":{"role":"user","content":[{"type":"tool_result",
+            "tool_use_id":"toolu_cc4","content":format!("{CANARY4} created")}]},
+            "toolUseResult":{"type":"create","filePath":handoff,
+            "content":format!("{CANARY4} handoff body")}}),
+    );
+    text += &line(
+        4,
+        serde_json::json!({"type":"user","message":{"role":"user","content":format!(
+            "<command-name>/compact</command-name>\n<command-args>Keep {CANARY4} decisions\
+             </command-args>")}}),
+    );
+    text += &line(
+        5,
+        serde_json::json!({"type":"system","subtype":"compact_boundary",
+            "content":format!("Conversation compacted {CANARY4}"),
+            "compactMetadata":{"trigger":"manual","preTokens":21000}}),
+    );
+    text += &line(
+        6,
+        serde_json::json!({"type":"user","isCompactSummary":true,"isVisibleInTranscriptOnly":true,
+            "message":{"role":"user","content":format!(
+            "This session is being continued from a previous conversation. Summary: {CANARY4} \
+             session summary")}}),
+    );
+    assert!(text.matches(CANARY4).count() >= 7);
+    let projects = home.join(".claude/projects/-repo");
+    fs::create_dir_all(&projects).unwrap();
+    fs::write(projects.join(format!("{OLD}.jsonl")), text).unwrap();
+
+    let bin = root.join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let exe = fake_claude(&bin);
+    let sessions = home.join(".claude/sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    let agent = spawn(&exe, &repo);
+    let pid = agent.0.id();
+    fs::write(
+        sessions.join(format!("{pid}.json")),
+        format!(
+            "{{\"pid\":{pid},\"sessionId\":\"{OLD}\",\"procStart\":\"{}\",\
+             \"cwd\":\"{}\",\"status\":\"idle\"}}",
+            starttime(pid),
+            repo.display()
+        ),
+    )
+    .unwrap();
+
+    let outputs = [
+        run(&root, &["snapshot", "--json", "--interval-ms", "50"]),
+        run(&root, &["snapshot", "--interval-ms", "50"]),
+        run(&root, &["cockpit", "--all", "--timeout-ms", "3000"]),
+        run(&root, &["cockpit", "--json", "--timeout-ms", "3000"]),
+    ];
+    for o in &outputs {
+        assert!(o.status.success(), "{o:?}");
+        assert!(!o.stdout.is_empty());
+        for (name, bytes) in [("stdout", &o.stdout), ("stderr", &o.stderr)] {
+            let text = String::from_utf8_lossy(bytes);
+            // Canary only: snapshot and cockpit print every process's cmdline
+            // and cwd, so a plain word could match an unrelated process.
+            // Every content field in the fixture carries the canary.
+            assert!(!text.contains(CANARY4), "{name} leaks the canary: {text}");
+        }
+    }
+    // The overlay did read the transcript: the Write is the one tool call.
+    let snap: Value = serde_json::from_slice(&outputs[0].stdout).unwrap();
+    let s = snap["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["pid"].as_u64() == Some(u64::from(pid)))
+        .unwrap_or_else(|| panic!("{pid} not in the snapshot"));
+    let o = &s["overlay"];
+    assert_eq!(o["agent_session_id"], OLD, "{o}");
+    assert_eq!(o["tool_calls"], 1, "{o}");
+    assert_eq!(o["model"], "claude-opus-5-5", "{o}");
+    assert!(o["context_pct"].as_f64().is_some(), "{o}");
+}

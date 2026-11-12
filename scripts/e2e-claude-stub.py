@@ -11,7 +11,9 @@ one):
 - `pickup <absolute path>`: one `Read` of that path;
 - `e2e warm-up`: one `Write` of `<STUB_GRANT_PATH>`
   (the script grants the session the project's .claude/ folder on it);
-- a `tool_result` in the turn: a short closing text;
+- `e2e dialog`: one `Write` of `<STUB_DIALOG_PATH>` (into .git/, a protected path, so
+  Claude Code opens a permission dialog; the Escape E2E dismisses it);
+- a `tool_result` as the last message (no prompt after it): a short closing text;
 - anything else (and every turn without tools): a short text.
 
 Usage: e2e-claude-stub.py <port-file> <log-file>. The port it bound on
@@ -29,6 +31,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 HANDOFF_DIR = os.environ["STUB_HANDOFF_DIR"]
 GRANT_PATH = os.environ["STUB_GRANT_PATH"]
+DIALOG_PATH = os.environ.get("STUB_DIALOG_PATH")
 OP = re.compile(r"handoff agentcenter-op:([0-9a-f-]{36})")
 PICKUP = re.compile(r"pickup (/[^\s<>]+)")
 LOG = None
@@ -61,9 +64,13 @@ def decide(body):
         if m.get("role") != "user":
             break
         content = m.get("content")
-        if isinstance(content, list) and any(b.get("type") == "tool_result" for b in content):
-            return "text", None
         turn[:0] = texts(m)
+        if isinstance(content, list) and any(b.get("type") == "tool_result" for b in content):
+            # A tool_result closes the turn unless a prompt came with it: after
+            # an Escape on a dialog, Claude Code sends the rejected tool_result,
+            # the interrupt notice and the next prompt in one user message, and
+            # that prompt is a new turn.
+            break
     text = "\n".join(turn)
     m = OP.search(text)
     if m:
@@ -72,6 +79,8 @@ def decide(body):
         return "Write", {"file_path": path, "content": body}
     if "e2e warm-up" in text:
         return "Write", {"file_path": GRANT_PATH, "content": "e2e grant\n"}
+    if DIALOG_PATH and "e2e dialog" in text:
+        return "Write", {"file_path": DIALOG_PATH, "content": "e2e dialog\n"}
     m = PICKUP.search(text)
     if m:
         return "Read", {"file_path": m.group(1)}

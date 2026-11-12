@@ -96,7 +96,12 @@ export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1 CLAUDE_CODE_DISABLE_FEEDBACK_S
 # real HOME: without this the owner's ~/.claude/CLAUDE.md would be read.
 export CLAUDE_CODE_DISABLE_CLAUDE_MDS=1
 export STUB_HANDOFF_DIR=$repo/.claude/handoffs
+# Debug only: E2E_STUB_DUMP=<file> makes the stub append each request it gets.
+[[ -n ${E2E_STUB_DUMP:-} ]] && export STUB_DUMP=$E2E_STUB_DUMP
 export STUB_GRANT_PATH=$repo/.claude/e2e-grant.md
+# Inside .git/, a protected path: Claude Code asks even under acceptEdits (Escape E2E).
+export STUB_DIALOG_PATH=$repo/.git/e2e-dialog.txt
+export AC_E2E_DIALOG_PATH=$STUB_DIALOG_PATH
 unset XDG_CONFIG_HOME XDG_STATE_HOME XDG_DATA_HOME XDG_CACHE_HOME
 
 git -C "$repo" init -q
@@ -153,21 +158,27 @@ pane=$(jq -r '.result.root_pane.pane_id' <<<"$ws")
 # in this project's .claude folder for this session") is chosen once, here,
 # before any operation; the controller then runs without any help.
 asked() { grep -qs '"type":"user"' "$home"/.claude/projects/*/*.jsonl; }
-for _ in $(seq 5); do
-  "$herdr_bin" agent prompt "$pane" "e2e warm-up" >"$root/warmup.json" 2>&1 \
-    || { echo "e2e: warm-up prompt failed" >&2; cat "$root/warmup.json" >&2; exit 1; }
-  for _ in $(seq 20); do asked && break; sleep 0.2; done
-  asked && break
-done
 dialog="2. Yes, and allow Claude to edit files in this project's .claude folder"
-for _ in $(seq 100); do
-  "$herdr_bin" pane read "$pane" 2>/dev/null | grep -qF "$dialog" && break
-  sleep 0.2
+dialog_up() { "$herdr_bin" pane read "$pane" 2>/dev/null | grep -qF "$dialog"; }
+# The dialog can open before the transcript shows the turn (and a blocked
+# agent refuses a second prompt), so it also ends the resend loop. A key sent
+# while the dialog is still starting up is dropped: option 2 is sent again
+# only while the dialog is on screen and the grant file is still missing,
+# never blindly (a late "2" would land in the prompt box).
+for _ in $(seq 5); do
+  dialog_up && break
+  "$herdr_bin" agent prompt "$pane" "e2e warm-up" >"$root/warmup.json" 2>&1 \
+    || { dialog_up && break; echo "e2e: warm-up prompt failed" >&2; cat "$root/warmup.json" >&2; exit 1; }
+  for _ in $(seq 20); do asked && break; dialog_up && break; sleep 0.2; done
+  asked && break
+  dialog_up && break
 done
-if "$herdr_bin" pane read "$pane" 2>/dev/null | grep -qF "$dialog"; then
-  "$herdr_bin" agent send-keys "$pane" 2 >/dev/null
-fi
-for _ in $(seq 100); do [[ -f $STUB_GRANT_PATH ]] && break; sleep 0.2; done
+for _ in $(seq 10); do
+  [[ -f $STUB_GRANT_PATH ]] && break
+  for _ in $(seq 100); do dialog_up && break; sleep 0.2; done
+  dialog_up && "$herdr_bin" agent send-keys "$pane" 2 >/dev/null
+  for _ in $(seq 15); do [[ -f $STUB_GRANT_PATH ]] && break; sleep 0.2; done
+done
 if [[ ! -f $STUB_GRANT_PATH ]]; then
   echo "e2e: warm-up did not write $STUB_GRANT_PATH" >&2
   "$herdr_bin" pane read "$pane" >&2 || true
