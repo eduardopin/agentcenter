@@ -1,41 +1,45 @@
 :root {
   color-scheme: light dark;
-  --bg: #f6f7f3;
+  /* Palette of the app itself (docs/DESIGN.md, crates/agentcenter/resources/tokens.css):
+     Ice surfaces, Ink text, Amber = work and action, Crimson = needs attention. */
+  --bg: #eef0f4;
   --bg-elevated: #ffffff;
-  --bg-soft: #edf1eb;
-  --ink: #111713;
-  --muted: #4f5b53;
-  --border: #cdd5ce;
-  --border-strong: #9daaa0;
-  --brand: #075e4f;
+  --bg-soft: #f7f8fa;
+  --ink: #15161c;
+  --muted: #474a58;
+  --border: #d5d9e1;
+  --border-strong: #8d92a3;
+  --brand: #9a5800;
+  --brand-text: #7a4300;
   --brand-ink: #ffffff;
-  --accent: #a95500;
-  --focus: #0067c5;
-  --terminal: #0a100d;
-  --terminal-ink: #dce8e0;
-  --terminal-muted: #92a59a;
-  --shadow: 0 24px 70px rgb(17 23 19 / 13%);
-  --radius: 18px;
+  --accent: #b3123f;
+  --focus: #9a5800;
+  --terminal: #101116;
+  --terminal-ink: #e9eaf0;
+  --terminal-muted: #a7aab8;
+  --terminal-border: #30323d;
+  --shadow: 0 24px 70px rgb(21 22 28 / 14%);
+  --radius: 14px;
   --shell: min(1160px, calc(100% - 40px));
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #0b100e;
-    --bg-elevated: #121a16;
-    --bg-soft: #17221c;
-    --ink: #f1f5f2;
-    --muted: #aebbb2;
-    --border: #2f3d35;
-    --border-strong: #526259;
-    --brand: #69d9bd;
-    --brand-ink: #07110d;
-    --accent: #ffbd63;
-    --focus: #72b7ff;
-    --terminal: #060a08;
-    --terminal-ink: #dce8e0;
-    --terminal-muted: #92a59a;
-    --shadow: 0 30px 90px rgb(0 0 0 / 32%);
+    --bg: #15161c;
+    --bg-elevated: #1c1d24;
+    --bg-soft: #101116;
+    --ink: #e9eaf0;
+    --muted: #a7aab8;
+    --border: #30323d;
+    --border-strong: #5a5e6e;
+    --brand: #f2a93f;
+    --brand-text: #f2a93f;
+    --brand-ink: #241500;
+    --accent: #ff7590;
+    --focus: #f2a93f;
+    --terminal: #101116;
+    --terminal-border: #30323d;
+    --shadow: 0 30px 90px rgb(0 0 0 / 36%);
   }
 }
 
@@ -52,14 +56,17 @@ html {
 body {
   margin: 0;
   min-width: 320px;
-  background:
-    radial-gradient(circle at 80% -10%, color-mix(in srgb, var(--brand) 13%, transparent), transparent 35rem),
-    var(--bg);
+  background: var(--bg);
   color: var(--ink);
-  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: system-ui, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 16px;
   line-height: 1.6;
   text-rendering: optimizeLegibility;
+  font-variant-numeric: tabular-nums;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--brand) 28%, transparent);
 }
 
 img,
@@ -153,6 +160,12 @@ a {
 }
 
 .nav-links a,
+.footer-links a {
+  display: inline-block;
+  padding: 4px 2px;
+}
+
+.nav-links a,
 .nav-github,
 .footer-links a {
   color: var(--muted);
@@ -175,11 +188,36 @@ a {
 
 .hero {
   display: grid;
-  grid-template-columns: minmax(0, 0.95fr) minmax(520px, 1.15fr);
-  align-items: center;
-  gap: clamp(40px, 6vw, 84px);
-  min-height: 720px;
-  padding-block: 90px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: clamp(36px, 5vw, 64px);
+  padding-block: clamp(52px, 8vw, 96px) clamp(64px, 9vw, 120px);
+}
+
+.hero-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1.1fr) minmax(0, 0.9fr);
+  column-gap: clamp(32px, 6vw, 84px);
+  align-items: end;
+}
+
+.hero-copy > :not(.hero-side) {
+  grid-column: 1;
+}
+
+.hero-copy > .status-badge {
+  justify-self: start;
+  margin-bottom: 22px;
+}
+
+.hero-copy > #hero-title {
+  grid-column: 1 / -1;
+  max-width: 20ch;
+}
+
+.hero-side {
+  grid-column: 2;
+  grid-row: 3;
+  align-self: end;
 }
 
 .status-badge {
@@ -209,7 +247,7 @@ a {
 .eyebrow,
 .section-kicker {
   margin: 24px 0 10px;
-  color: var(--brand);
+  color: var(--brand-text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.75rem;
   font-weight: 750;
@@ -225,7 +263,7 @@ p {
 }
 
 h1 {
-  max-width: 12ch;
+  max-width: 14ch;
   margin-bottom: 24px;
   font-size: clamp(3rem, 5.8vw, 5.3rem);
   font-weight: 790;
@@ -302,11 +340,10 @@ h3 {
   min-width: 0;
   margin: 0;
   overflow: hidden;
-  border: 1px solid #28332d;
+  border: 1px solid var(--terminal-border);
   border-radius: var(--radius);
   background: var(--terminal);
   box-shadow: var(--shadow);
-  transform: rotate(1deg);
 }
 
 .terminal-shot img {
@@ -320,7 +357,7 @@ h3 {
   align-items: center;
   gap: 7px;
   padding: 0 16px;
-  border-bottom: 1px solid #263129;
+  border-bottom: 1px solid var(--terminal-border);
   color: var(--terminal-muted);
 }
 
@@ -328,11 +365,11 @@ h3 {
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: #526159;
+  background: #4a4d5c;
 }
 
 .window-bar > span:nth-child(2) {
-  background: #a46f28;
+  background: #9a5800;
 }
 
 .window-bar small {
@@ -362,6 +399,12 @@ h3 {
   grid-template-columns: 0.65fr 1.35fr;
   gap: clamp(40px, 8vw, 120px);
   padding-block: clamp(80px, 10vw, 136px);
+}
+
+.problem-grid > *,
+.agents-grid > *,
+.cli-grid > * {
+  min-width: 0;
 }
 
 .problem-grid .section-kicker,
@@ -401,32 +444,10 @@ h3 {
 }
 
 .feature-card {
-  min-height: 275px;
   padding: 24px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: color-mix(in srgb, var(--bg-elevated) 82%, transparent);
-}
-
-.feature-card:nth-child(2) {
-  transform: translateY(18px);
-}
-
-.feature-card:nth-child(3) {
-  transform: translateY(36px);
-}
-
-.feature-card:nth-child(4) {
-  transform: translateY(54px);
-}
-
-.feature-index {
-  display: block;
-  margin-bottom: 62px;
-  color: var(--accent);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 0.75rem;
-  font-weight: 760;
 }
 
 .feature-card p {
@@ -485,7 +506,7 @@ pre {
 
 .code-panel {
   overflow: hidden;
-  border: 1px solid #344138;
+  border: 1px solid var(--terminal-border);
   border-radius: var(--radius);
   background: var(--terminal);
   box-shadow: var(--shadow);
@@ -498,7 +519,7 @@ pre {
   align-items: center;
   justify-content: space-between;
   padding: 0 12px 0 18px;
-  border-bottom: 1px solid #27332c;
+  border-bottom: 1px solid var(--terminal-border);
   color: var(--terminal-muted);
   font-size: 0.75rem;
   font-weight: 700;
@@ -510,9 +531,9 @@ pre {
   min-width: 64px;
   min-height: 32px;
   padding: 5px 10px;
-  border: 1px solid #46554c;
+  border: 1px solid #4a4d5c;
   border-radius: 7px;
-  background: #18221c;
+  background: #1c1d24;
   color: var(--terminal-ink);
   cursor: pointer;
   font: inherit;
@@ -521,7 +542,7 @@ pre {
 }
 
 .copy-button:hover {
-  border-color: #799082;
+  border-color: #f2a93f;
 }
 
 pre {
@@ -550,7 +571,9 @@ pre:focus-visible {
 }
 
 .text-link {
-  color: var(--brand);
+  display: inline-block;
+  padding-block: 2px;
+  color: var(--brand-text);
   font-weight: 720;
 }
 
@@ -565,9 +588,8 @@ pre:focus-visible {
   padding: clamp(28px, 5vw, 60px);
   border: 1px solid var(--border-strong);
   border-radius: calc(var(--radius) + 6px);
-  background:
-    linear-gradient(135deg, color-mix(in srgb, var(--accent) 8%, transparent), transparent 48%),
-    var(--bg-elevated);
+  border-left: 4px solid var(--accent);
+  background: var(--bg-elevated);
 }
 
 .status-card h2 {
@@ -581,7 +603,7 @@ pre:focus-visible {
 
 .contribute-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(4, 1fr);
   gap: 14px;
 }
 
@@ -603,7 +625,7 @@ pre:focus-visible {
 }
 
 .contribute-grid span {
-  color: var(--brand);
+  color: var(--brand-text);
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
   font-size: 0.7rem;
   font-weight: 750;
@@ -643,31 +665,129 @@ pre:focus-visible {
   gap: 18px;
 }
 
+/* Screenshots of the app: real captures, theme follows the page. */
+.shot {
+  min-width: 0;
+  margin: 0;
+}
+
+.shot-frame {
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow);
+}
+
+.shot-frame img {
+  width: 100%;
+  height: auto;
+}
+
+.shot-narrow {
+  max-width: 360px;
+  margin-inline: auto;
+}
+
+.shot figcaption {
+  max-width: 78ch;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 0.84rem;
+}
+
+.detail {
+  padding-block: clamp(80px, 10vw, 136px);
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.7fr) minmax(0, 1.3fr);
+  gap: clamp(32px, 6vw, 84px);
+  align-items: center;
+}
+
+.detail-grid > div > p {
+  max-width: 62ch;
+  color: var(--muted);
+  font-size: 1.04rem;
+}
+
+.cli-shot {
+  max-width: 640px;
+}
+
+.cli-shot .shot-frame {
+  border-color: var(--terminal-border);
+  background: var(--terminal);
+}
+
+/* On a phone the terminal keeps a readable size and scrolls sideways
+   inside its frame; the page itself never scrolls horizontally. */
+@media (max-width: 520px) {
+  .cli-shot .shot-frame {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .cli-shot .shot-frame img {
+    width: 600px;
+    max-width: none;
+    height: auto;
+  }
+}
+
+.contribute-steps {
+  margin-bottom: 40px;
+}
+
+.contribute-steps .install-note {
+  margin-top: 16px;
+}
+
+.license-note {
+  margin: 36px 0 0;
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.license-note a,
+.footer-grid p a {
+  color: var(--brand-text);
+  font-weight: 650;
+}
+
 @media (max-width: 980px) {
-  .hero {
-    grid-template-columns: 1fr;
-    min-height: 0;
+  .contribute-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .hero-copy {
-    max-width: 720px;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .hero-side {
+    grid-column: 1;
+    grid-row: auto;
+  }
+
+  .lede {
+    margin-bottom: 28px;
+  }
+
+  .detail-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   h1 {
     max-width: 13ch;
   }
 
-  .terminal-shot {
-    transform: none;
-  }
-
   .feature-grid {
     grid-template-columns: repeat(2, 1fr);
   }
 
-  .feature-card:nth-child(n) {
-    min-height: 240px;
-    transform: none;
+  .feature-card {
+    min-height: 0;
   }
 
   .status-card {
@@ -764,26 +884,9 @@ pre:focus-visible {
     width: 100%;
   }
 
-  .terminal-shot img {
-    width: 180%;
-    max-width: none;
-  }
-
-  .terminal-shot {
-    overflow-x: auto;
-  }
-
   .feature-grid,
   .agent-list {
     grid-template-columns: 1fr;
-  }
-
-  .feature-card:nth-child(n) {
-    min-height: 0;
-  }
-
-  .feature-index {
-    margin-bottom: 38px;
   }
 
   pre {

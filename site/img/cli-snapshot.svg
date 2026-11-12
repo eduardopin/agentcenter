@@ -1,23 +1,53 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="960" height="368" viewBox="0 0 960 368" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" width="960" height="1388" viewBox="0 0 960 1388" role="img" aria-labelledby="title desc">
   <title id="title">AgentCenter CLI snapshot</title>
   <desc id="desc">Output from a real release-build run, reformatted for narrow screens. Session display names and working directories are replaced. PIDs and displayed measurements are as printed by the tool. Machine CPU and PSI fields are omitted.</desc>
-  <rect width="960" height="368" fill="#07100c"/>
+  <rect width="960" height="1388" fill="#07100c"/>
   <style>
     text { font: 20px ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; fill: #dce8e0; white-space: pre; }
-    .summary { fill: #79e2c3; font-weight: 700; }
+    .summary { fill: #79e2c3; font-weight: 700; font-size: 18px; }
     .header { fill: #8ea399; font-weight: 700; }
     .total { fill: #ffbe63; }
     .machine { fill: #a8c5b6; }
     .note { fill: #8ea399; font-size: 14px; }
   </style>
-  <text class="summary" x="32" y="48">1 session (codex 1) | 1 busy, 0 blocked | 2 active processes</text>
-  <text class="header" x="32" y="82">AGENT  PID  PROCS  CPU%  PSS  SWAP  READ/s  WRITE/s  STALL</text>
-  <text class="row" x="32" y="116">codex  1    4      2.0   14M  0B    88K     0B       0%</text>
-  <text class="header" x="32" y="150">FLAG  NAME   STATUS  CTX  CWD</text>
-  <text class="row" x="32" y="184">-     local  busy    29%  ~/project</text>
-  <text class="total" x="32" y="218">TOTAL 1  PID -  PROCS 4/4  CPU% 2.0  PSS 14M  SWAP 0B</text>
-  <text class="total" x="32" y="252">         READ/s 88K  WRITE/s 0B  STALL delayacct  FLAG 0</text>
-  <text class="machine" x="32" y="286">machine: 16 cores, mem 27G/38G, swap 20G/27G</text>
-  <line x1="32" y1="324" x2="928" y2="324" stroke="#2a3a32"/>
-  <text class="note" x="32" y="352">Real release run · display NAME/CWD replaced · PIDs and values as printed · machine CPU/PSI omitted</text>
+  <text class="summary" x="32" y="48">14 sessions (claude 6, codex 2, pi 6) | 9 busy, 0 blocked | 22 active processes</text>
+  <text class="header" x="32" y="82">AGENT   PID      PROCS  CPU%    PSS   SWAP  READ/s  WRITE/s  STALL</text>
+  <text class="row" x="32" y="116">claude  2119363  28     218.6*  1.4G  115M  834K*   51K*     0%*</text>
+  <text class="row" x="32" y="150">claude  27252    27     131.1*  1.2G  227M  34M*    0B*      0%*</text>
+  <text class="row" x="32" y="184">claude  285783   38     178.8*  1.2G  186M  1.5M*   2.1K*    38%*</text>
+  <text class="row" x="32" y="218">claude  313747   18     10.6    424M  201M  14M     0B       0%</text>
+  <text class="row" x="32" y="252">pi      2370786  5      90.2    555M  33M   0B      0B       0%</text>
+  <text class="row" x="32" y="286">claude  2079745  7      24.4*   411M  112M  41M*    0B*      6%*</text>
+  <text class="row" x="32" y="320">pi      2321974  3      81.7    292M  103M  4.2K    13M      0%</text>
+  <text class="row" x="32" y="354">claude  703415   5      0.5     157M  236M  0B      0B       0%</text>
+  <text class="row" x="32" y="388">pi      2208161  5      73.8    244M  64M   0B      0B       0%</text>
+  <text class="row" x="32" y="422">pi      2205274  4      61.0    250M  42M   41M     0B       8%</text>
+  <text class="row" x="32" y="456">pi      2465635  5      0.5*    158M  81M   0B*     0B*      0%*</text>
+  <text class="row" x="32" y="490">codex   2437436  3      0.5     225M  0B    0B      0B       0%</text>
+  <text class="row" x="32" y="524">codex   2434368  3      1.1     214M  0B    0B      0B       0%</text>
+  <text class="row" x="32" y="558">pi      2436546  1      0.0     117M  0B    0B      0B       0%</text>
+  <text class="row" x="32" y="592">herdr   2619     9      5.8     15M   45M   11K     0B       0%</text>
+  <text class="row" x="32" y="626">herdr   16450    1      1.1     6.4M  704K  0B      0B       0%</text>
+  <text class="header" x="32" y="660">FLAG  NAME   STATUS  CTX  CWD</text>
+  <text class="row" x="32" y="694">-     local  busy    28%  ~/project</text>
+  <text class="row" x="32" y="728">-     local  busy    21%  ~/project</text>
+  <text class="row" x="32" y="762">-     local  busy    18%  ~/project</text>
+  <text class="row" x="32" y="796">-     local  busy    32%  ~/project</text>
+  <text class="row" x="32" y="830">-     local  -       -    ~/project</text>
+  <text class="row" x="32" y="864">-     local  busy    16%  ~/project</text>
+  <text class="row" x="32" y="898">-     local  busy    69%  ~/project</text>
+  <text class="row" x="32" y="932">-     local  idle    12%  ~/project</text>
+  <text class="row" x="32" y="966">-     local  -       -    ~/project</text>
+  <text class="row" x="32" y="1000">-     local  busy    84%  ~/project</text>
+  <text class="row" x="32" y="1034">-     local  -       -    ~/project</text>
+  <text class="row" x="32" y="1068">-     local  busy    31%  ~/project</text>
+  <text class="row" x="32" y="1102">-     local  busy    38%  ~/project</text>
+  <text class="row" x="32" y="1136">-     local  -       -    ~/project</text>
+  <text class="row" x="32" y="1170">-     local  -       -    ~/project</text>
+  <text class="row" x="32" y="1204">-     local  -       -    ~/project</text>
+  <text class="total" x="32" y="1238">TOTAL 16  PID -  PROCS 162/680  CPU% 879.9*  PSS 6.8G  SWAP 1.4G</text>
+  <text class="total" x="32" y="1272">         READ/s 133M*  WRITE/s 13M*  STALL delayacct  FLAG 0</text>
+  <text class="machine" x="32" y="1306">machine: 16 cores, mem 19G/38G, swap 10G/27G</text>
+  <line x1="32" y1="1344" x2="928" y2="1344" stroke="#2a3a32"/>
+  <text class="note" x="32" y="1372">Real release run · display NAME/CWD replaced · PIDs and values as printed · machine CPU/PSI omitted</text>
 </svg>

@@ -19,10 +19,17 @@
 </p>
 
 <p align="center">
-  <img src="site/img/cli-snapshot.svg" width="960" alt="AgentCenter CLI output from a real release-build run. Session display names and working directories are replaced; PIDs and displayed measurements are as printed by the tool. Machine CPU and PSI fields are omitted.">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/img/app-sessions-dark.webp">
+    <img src="site/img/app-sessions-light.webp" width="960" alt="The AgentCenter sessions page: machine CPU, RAM, swap and memory stall at the top, a token map and a memory map with one tile per session, and sessions ranked by token spend over the last 30 minutes.">
+  </picture>
 </p>
 
-<p align="center"><sub>Real release-build output, reformatted for legibility. Session display NAME and CWD replaced; PIDs and displayed values as printed by the tool; machine CPU/PSI omitted.</sub></p>
+<p align="center"><sub>The sessions page of the current build, fed a real snapshot from a 16-core workstation. Session names and folders replaced; every number as sampled.</sub></p>
+
+AgentCenter is a Linux resource monitor that groups each AI coding session with
+every process it starts, then shows CPU, memory, swap, disk and I/O stall per
+session, in a GTK4 app and a headless CLI.
 
 ## Quick install
 
@@ -45,8 +52,18 @@ uninstall options.
 > Read the [known limitations](docs/KNOWN_LIMITATIONS.md) before relying on
 > AgentCenter.
 
-**Help wanted:** follow [Your first contribution](CONTRIBUTING.md#your-first-contribution)
-or browse [good first issues](https://github.com/eduardopin/agentcenter/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22).
+**Help wanted:** adapters for more agents, tests, accessibility evidence and
+the performance gates that pass with almost no headroom. Build and run the full gate:
+
+```sh
+git clone https://github.com/eduardopin/agentcenter.git && cd agentcenter
+cargo build --release -p agentcenter -p agentcenter-cli
+bash scripts/ci.sh
+```
+
+Then follow [Your first contribution](CONTRIBUTING.md#your-first-contribution),
+browse [good first issues](https://github.com/eduardopin/agentcenter/issues?q=is%3Aissue%20is%3Aopen%20label%3A%22good%20first%20issue%22)
+or ask in [Discussions](https://github.com/eduardopin/agentcenter/discussions).
 
 ## What it measures
 
@@ -106,6 +123,10 @@ agentcenter-cli snapshot --json              # same snapshot as JSON
 agentcenter-cli snapshot --interval-ms 2000  # sample over 2 s instead of 1 s
 AGENTCENTER_EXTRA_AGENTS=my-agent agentcenter-cli snapshot  # extra agents by comm
 ```
+
+<p align="center">
+  <img src="site/img/cli-snapshot.svg" width="640" alt="agentcenter-cli snapshot output from a real release-build run. Session names and working directories are replaced; PIDs and displayed measurements are as printed by the tool. Machine CPU and PSI fields are omitted.">
+</p>
 
 `snapshot` takes two samples `--interval-ms` apart (default 1000) so CPU and
 disk rates are real deltas, and prints one row per session: the agent
