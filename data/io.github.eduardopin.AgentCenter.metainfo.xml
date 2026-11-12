@@ -3,7 +3,7 @@
 <component type="desktop-application">
   <id>io.github.eduardopin.AgentCenter</id>
   <metadata_license>CC0-1.0</metadata_license>
-  <project_license>MIT</project_license>
+  <project_license>AGPL-3.0-or-later</project_license>
 
   <name>AgentCenter</name>
   <summary>See what each AI coding session costs your machine</summary>

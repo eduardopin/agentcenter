@@ -8,7 +8,7 @@
 
 <p align="center">
   <a href="https://github.com/eduardopin/agentcenter/actions/workflows/ci.yml"><img src="https://github.com/eduardopin/agentcenter/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-see%20LICENSE-474a58" alt="License: see LICENSE"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-AGPL--3.0-146c5b" alt="License: AGPL-3.0-or-later"></a>
   <a href="docs/KNOWN_LIMITATIONS.md"><img src="https://img.shields.io/badge/status-pre--alpha-b36b00" alt="Status: pre-alpha"></a>
 </p>
 
@@ -43,10 +43,12 @@ Linux only. This builds and installs the GTK desktop app and headless CLI for
 your user. See [install details](#install-details) for dependencies, paths, and
 uninstall options.
 
-> **Pre-alpha: the current performance and GUI gates fail.** The 500-process
-> D-state fixture measured a 5.036 ms median against a budget below 5 ms. GUI
-> first frame measured 456.4 ms against 300 ms, and CPU measured 12.198% of one
-> core against 2%. Session actions still have incomplete acceptance evidence.
+> **Pre-alpha: the D-state gate passes with almost no headroom, and the last GUI
+> validation failed.** In CI on commit 014a336 the 500-process D-state fixture
+> measured a 4.727 ms median against a budget below 5 ms (1.06x headroom). The
+> last recorded GUI validation measured a 456.4 ms first frame against 300 ms
+> and 12.198% of one core against 2%. Session actions still have incomplete
+> acceptance evidence.
 > Read the [known limitations](docs/KNOWN_LIMITATIONS.md) before relying on
 > AgentCenter.
 
@@ -159,10 +161,20 @@ how to add an adapter or an overlay, and the privacy rules.
 
 ## License
 
-Licensed under the [MIT license](LICENSE) (SPDX: `MIT`). Contributions are
-accepted under the same license. Third-party code retains its own notices
-and license; see [NOTICE](NOTICE) and the Pi integration's
+AgentCenter is free software under the [GNU Affero General Public License
+v3.0 or later](LICENSE) (SPDX: `AGPL-3.0-or-later`). You may use, study,
+change and share it. If you distribute a modified version, or run one for
+users over a network, you must publish its source under the same license and
+keep the author attribution described in [NOTICE](NOTICE).
+
+The license grants no trademark rights: a fork may not use the name
+AgentCenter or its icon as its own mark. It ships under another name and icon
+and says it is derived from AgentCenter. See
+[TRADEMARKS.md](TRADEMARKS.md).
+
+Contributions are accepted under the same license. Third-party code retains
+its own notices and license; see [NOTICE](NOTICE) and the Pi integration's
 [license](integrations/pi-guarded-compaction/LICENSE.pi).
 
-Earlier revisions were offered under `MIT OR Apache-2.0`; this revision uses
-MIT. Existing grants for earlier revisions are unchanged.
+Revisions published before 2026-11-11 were offered under `MIT` (and earlier
+`MIT OR Apache-2.0`); those grants are unchanged for those revisions.
