@@ -594,3 +594,80 @@ fn pickup_loaded_rejects_another_command_whose_args_carry_the_copy() {
     assert!(!check(format!("/other {args}"), "handoff"));
     let _ = fs::remove_dir_all(&d);
 }
+
+fn bash_call(ts: u64, id: &str, command: &str) -> String {
+    serde_json::json!({"type":"assistant","sessionId":SID,"timestamp":iso(ts),
+        "message":{"content":[{"type":"tool_use","id":id,"name":"Bash",
+        "input":{"command":command,"description":"Commit the handoff"}}]}})
+    .to_string()
+}
+fn bash_result(ts: u64, id: &str) -> String {
+    serde_json::json!({"type":"user","sessionId":SID,"timestamp":iso(ts),
+        "message":{"content":[{"type":"tool_result","tool_use_id":id,"content":"ok"}]},
+        "toolUseResult":{"stdout":"ok","stderr":"","interrupted":false}})
+    .to_string()
+}
+
+/// What the permission dialog holds back is read from the transcript: a tool
+/// call after the operation mark with no result yet. The handoff skill runs
+/// git and agenfk through `Bash`, so an open `Bash` call is that dialog too,
+/// whatever its command and wherever it points (no path to check against the
+/// roots).
+fn pending_after_mark(calls: impl FnOnce(u64) -> Vec<String>) -> bool {
+    let h = Handoff::new();
+    let s = h.sent;
+    let mut lines = vec![user(
+        s + 1,
+        SID,
+        &format!(
+            "<command-name>/clear-pickup</command-name><command-args>handoff {MARK}{OP}</command-args>"
+        ),
+    )];
+    lines.extend(calls(s));
+    let t = transcript(&h.dir, &lines);
+    let roots = [h.dir.join("handoffs")];
+    let (evidence, pending) = scan(Action::Handoff, &t, 0, s, SID, OP, &roots, h.uid).unwrap();
+    assert_eq!(evidence, None);
+    pending
+}
+
+#[test]
+fn open_bash_call_during_handoff_is_a_pending_permission_dialog() {
+    for command in [
+        "git add .claude/handoffs/h.md",
+        "agenfk comment 0ed33f55 \"handoff written\"",
+    ] {
+        assert!(
+            pending_after_mark(|s| vec![bash_call(s + 2, "toolu_b", command)]),
+            "{command}"
+        );
+    }
+}
+
+#[test]
+fn answered_bash_call_is_not_a_pending_dialog() {
+    assert!(!pending_after_mark(|s| vec![
+        bash_call(s + 2, "toolu_b", "git status --short"),
+        bash_result(s + 3, "toolu_b"),
+    ]));
+}
+
+#[test]
+fn bash_call_before_the_operation_mark_is_not_a_pending_dialog() {
+    let h = Handoff::new();
+    let s = h.sent;
+    let lines = [
+        bash_call(s, "toolu_b", "git status --short"),
+        user(
+            s + 1,
+            SID,
+            &format!(
+                "<command-name>/clear-pickup</command-name><command-args>handoff {MARK}{OP}</command-args>"
+            ),
+        ),
+    ];
+    let t = transcript(&h.dir, &lines);
+    let roots = [h.dir.join("handoffs")];
+    let (_, pending) = scan(Action::Handoff, &t, 0, s, SID, OP, &roots, h.uid).unwrap();
+    assert!(!pending);
+}
