@@ -566,6 +566,49 @@ fn handoff_waiting_on_write_permission_reports_it_instead_of_timing_out() {
     }
 }
 
+/// The handoff skill also runs git and agenfk through `Bash`; an open `Bash`
+/// call with the pane `blocked` is that tool's permission dialog. It reports
+/// `permission_prompt` like the Write dialog, and ends `unknown` when the pane
+/// is not `blocked`.
+#[test]
+fn handoff_waiting_on_bash_permission_reports_it_instead_of_timing_out() {
+    for (status, asking) in [("blocked", true), ("working", false)] {
+        let w = world(vec![SID], "idle");
+        let t = w.transcript.clone();
+        w.on_prompt(Box::new(move |text| {
+            let op = text.rsplit(':').next().unwrap().to_string();
+            let ts = now_ms() + 1;
+            // The mark and a Bash call, no result: the dialog is open.
+            append(
+                &t,
+                &[
+                    json!({"type":"user","sessionId":SID,"timestamp":iso(ts),"message":{"content":
+                        format!("<command-name>/clear-pickup</command-name><command-args>handoff agentcenter-op:{op}</command-args>")}}),
+                    json!({"type":"assistant","sessionId":SID,"timestamp":iso(ts + 1),"message":{"content":[
+                        {"type":"tool_use","id":format!("toolu_{op}"),"name":"Bash",
+                         "input":{"command":"git add .claude/handoffs/h.md","description":"Stage the handoff"}}]}}),
+                ],
+            );
+        }));
+        w.after_prompt(status);
+        let mut c = w.controller();
+        c.evidence_timeout = Duration::from_millis(50);
+        let o = c.start(OP, Action::Handoff, &w.subject);
+        assert_eq!(o.state, State::Running, "{status}: {o:?}");
+        std::thread::sleep(Duration::from_millis(80));
+        let o = c.status(OP).unwrap();
+        if asking {
+            assert_eq!((o.state, o.code), (State::Running, "permission_prompt"));
+        } else {
+            assert_eq!(
+                (o.state, o.code),
+                (State::Unknown, code::TIMEOUT),
+                "{status}"
+            );
+        }
+    }
+}
+
 /// A dialog nobody answers cannot hold the session forever: the dialog resets
 /// the evidence timeout, but `permission_timeout` from the send is the ceiling.
 #[test]
@@ -598,6 +641,42 @@ fn permission_prompt_has_an_upper_bound_from_the_send() {
     // Unknown never revives and the session is held, not freed.
     let o2 = c.start(OP2, Action::Compact, &w.subject);
     assert_eq!((o2.state, o2.code), (State::Rejected, code::PENDING));
+}
+
+/// Any open `Bash` call after the mark counts as the dialog, not only the
+/// handoff's own: an unrelated one with the pane `blocked` reports
+/// `permission_prompt`, and `permission_timeout` from the send still ends it.
+#[test]
+fn unrelated_open_bash_call_is_a_dialog_bounded_by_the_ceiling() {
+    let w = world(vec![SID], "idle");
+    let t = w.transcript.clone();
+    w.on_prompt(Box::new(move |text| {
+        let op = text.rsplit(':').next().unwrap().to_string();
+        let ts = now_ms() + 1;
+        append(
+            &t,
+            &[
+                json!({"type":"user","sessionId":SID,"timestamp":iso(ts),"message":{"content":
+                    format!("<command-name>/clear-pickup</command-name><command-args>handoff agentcenter-op:{op}</command-args>")}}),
+                json!({"type":"assistant","sessionId":SID,"timestamp":iso(ts + 1),"message":{"content":[
+                    {"type":"tool_use","id":"toolu_unrelated","name":"Bash",
+                     "input":{"command":"cargo build","description":"Build something else"}}]}}),
+            ],
+        );
+    }));
+    w.after_prompt("blocked");
+    let mut c = w.controller();
+    c.evidence_timeout = Duration::from_millis(1000);
+    c.permission_timeout = Duration::from_millis(150);
+    let o = c.start(OP, Action::Handoff, &w.subject);
+    assert_eq!(
+        (o.state, o.code),
+        (State::Running, "permission_prompt"),
+        "{o:?}"
+    );
+    std::thread::sleep(Duration::from_millis(200));
+    let o = c.status(OP).unwrap();
+    assert_eq!((o.state, o.code), (State::Unknown, code::TIMEOUT), "{o:?}");
 }
 
 /// Sets up a Handoff whose transcript carries the mark and the Write call

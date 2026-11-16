@@ -144,7 +144,7 @@ via Herdr (CC4), gauges por linha (CC8) e gráficos de cockpit no detalhe (CC9).
   empacotar as licenças e avisos das dependências efetivamente distribuídas.
   Os binários atuais são apenas locais.
 
-- [ ] Handoff permission dialogs: `permission_prompt` covers only a pending Write under the accepted roots. A Handoff stuck on a Bash permission dialog (the handoff skill runs git and agenfk) still ends Unknown/timeout 600 s after the send.
+- [ ] Handoff permission dialogs: a Bash permission dialog during a Handoff is now detected as `permission_prompt` (PR #29), like the Write one. Still open: a real-session E2E for a Bash dialog (the E2E only exercises a Write dialog), and any open Bash call counts, not only the handoff's.
 
 ## Evidências locais, não publicadas
 

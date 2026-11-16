@@ -518,11 +518,20 @@ Permission dialog in a real session (seen in the E2E with Claude Code
 2.1.308): `<repo>/.claude/` is a protected path, so the skill's `Write` of
 `<repo>/.claude/handoffs/…` asks for confirmation even under `acceptEdits`, and
 no `allow` rule lifts it; the E2E grants it once for the session during setup.
-In the owner's session without that grant, the Handoff stops at the dialog:
-no `Write` reaches the transcript, the stage stays `handoff_running` until
-`evidence_timeout` and ends `unknown`/`timeout`; nothing is cleared. The
-dialog is the owner's to answer; AgentCenter neither answers it nor sends
-Escape at that stage.
+The skill's `Bash` calls (git, agenfk) ask per command. The E2E observes the
+dialog on screen and Herdr reporting `blocked`; it does not observe when the
+call reaches the transcript, so the detection rests on the transcript shape
+the controller reads: a `Write` under an accepted root, or any `Bash` call,
+after the operation mark and with no `tool_result` yet. Each `status` poll
+reads the transcript again; when it finds such an open call and the pane is
+`blocked`, the Handoff stays `running` with `permission_prompt`, the evidence
+timeout counts from that sighting, and `permission_timeout` from the send is
+the ceiling. It still ends `unknown`/`timeout` when no such open call is in
+the transcript at the polls (the dialog opened before the transcript shows the
+turn, or the call is a `Write` outside the accepted roots), when the pane is
+not `blocked`, and at the ceiling. Nothing is cleared. The dialog is the
+owner's to answer; AgentCenter neither answers it nor sends Escape at that
+stage. Any open `Bash` call counts, not only the handoff's own.
 
 ## Performance budget (measured, gated in CI where possible)
 
