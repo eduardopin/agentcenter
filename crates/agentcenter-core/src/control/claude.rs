@@ -30,9 +30,10 @@
 //! any symlink, owned by the UID and modified at or after the send. Its size
 //! and sha256 are recorded; its bytes are never kept or shown.
 //!
-//! A Handoff whose `Write` under an allowed root has no result yet while the
-//! Herdr pane reports `blocked` is waiting on Claude Code's permission dialog
-//! (`.claude` is a protected path, asked even under acceptEdits): it stays
+//! A Handoff whose `Write` under an allowed root, or any `Bash` call (the skill
+//! runs git and agenfk), has no result yet while the Herdr pane reports
+//! `blocked` is waiting on Claude Code's permission dialog (`.claude` is a
+//! protected path, asked even under acceptEdits; Bash asks per command): it stays
 //! `running` with code `permission_prompt`, and its evidence timeout counts
 //! from the last time the dialog was seen, never from the send.
 //!
@@ -123,7 +124,7 @@ pub mod code {
     pub const TRANSCRIPT_UNREADABLE: &str = "transcript_unreadable";
     pub const COMPACTED: &str = "compacted";
     pub const PERSISTED: &str = "persisted";
-    /// Running: the handoff's Write waits on the session's permission dialog.
+    /// Running: the handoff's Write or Bash call waits on the session's permission dialog.
     pub const PERMISSION_PROMPT: &str = "permission_prompt";
     pub const UNKNOWN_OPERATION: &str = "unknown_operation";
     // Handoff-pickup (CC6). Running codes name the stage just reached.
@@ -1008,8 +1009,8 @@ pub(crate) fn evidence(
     .map(|(e, _)| e)
 }
 
-/// As [`evidence`], plus whether a handoff `Write` to a path under `roots`
-/// has no result yet (what a permission dialog holds back).
+/// As [`evidence`], plus whether a handoff `Write` to a path under `roots`, or
+/// any `Bash` call, has no result yet (what a permission dialog holds back).
 #[allow(clippy::too_many_arguments)]
 fn scan(
     action: Action,
@@ -1025,6 +1026,7 @@ fn scan(
     let mut command_ms: Option<u64> = None;
     let mut boundaries = Vec::new();
     let mut writes: HashMap<String, String> = HashMap::new();
+    let mut bashes: Vec<String> = Vec::new();
     let mut written = Vec::new();
     let mut answered: std::collections::HashSet<String> = Default::default();
     entries(transcript, offset, session_id, sent_ms, |v, ts| {
@@ -1082,14 +1084,23 @@ fn scan(
                     {
                         writes.insert(id.to_string(), path.to_string());
                     }
+                    // The skill runs git and agenfk through Bash: no path to
+                    // check, the open call itself is the dialog.
+                    if b["type"] == "tool_use"
+                        && b["name"] == "Bash"
+                        && let Some(id) = b["id"].as_str()
+                    {
+                        bashes.push(id.to_string());
+                    }
                 }
             }
             _ => {}
         }
     })?;
-    let pending = writes.iter().any(|(id, path)| {
-        !answered.contains(id) && roots.iter().any(|r| Path::new(path).starts_with(r))
-    });
+    let pending = bashes.iter().any(|id| !answered.contains(id))
+        || writes.iter().any(|(id, path)| {
+            !answered.contains(id) && roots.iter().any(|r| Path::new(path).starts_with(r))
+        });
     Ok(match action {
         Action::Compact => (
             command_ms
