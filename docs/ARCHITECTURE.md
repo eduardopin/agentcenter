@@ -523,6 +523,9 @@ no `Write` reaches the transcript, the stage stays `handoff_running` until
 `evidence_timeout` and ends `unknown`/`timeout`; nothing is cleared. The
 dialog is the owner's to answer; AgentCenter neither answers it nor sends
 Escape at that stage.
+The skill's `Bash` calls (git, agenfk) ask per command: an open `Bash` call in
+the transcript with the pane `blocked` reports `permission_prompt` the same way,
+instead of ending `unknown`.
 
 ## Performance budget (measured, gated in CI where possible)
 
