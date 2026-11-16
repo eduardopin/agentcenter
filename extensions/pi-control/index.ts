@@ -20,8 +20,9 @@ export default function piControl(pi) {
     // Drain an already-started timer write before removing its private directory.
     await deferredPublication;
     // Revoke discovery/connections before waiting for cooperative cancellation.
-    await previousListener?.close();
-    await previousOperations?.close();
+    // Operations must close even when the listener cannot (its 60 s deadline
+    // timer would keep the process alive); the listener error is still reported.
+    try { await previousListener?.close(); } finally { await previousOperations?.close(); }
   }
   pi.on('session_start', (_event, ctx) => {
     lifecycle = lifecycle.catch(() => {}).then(async () => {
