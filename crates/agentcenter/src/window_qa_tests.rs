@@ -2463,6 +2463,7 @@ fn at_360_many_waiting_chips_leave_the_memory_strip_reachable() {
             });
         assert_ne!(scroller.vscrollbar_policy(), gtk::PolicyType::Never);
         let adj = scroller.vadjustment();
+        settle_until(|| adj.upper() > adj.page_size() + 1.0);
         assert!(
             adj.upper() > adj.page_size() + 1.0,
             "the scroller has no range: upper {} for a page of {}",
@@ -2470,7 +2471,7 @@ fn at_360_many_waiting_chips_leave_the_memory_strip_reachable() {
             adj.page_size()
         );
         adj.set_value(adj.upper() - adj.page_size());
-        settle();
+        settle_until(|| inside(&bounds_in(&bars[0], &root), &shown));
         let bar = bounds_in(&bars[0], &root);
         assert!(
             inside(&bar, &shown),
@@ -2495,11 +2496,24 @@ fn at_1280x800_and_840x700_the_memory_map_is_inside_the_paned_top() {
                 &all_waiting(),
             );
             settle_paned(&window);
-            let page = bounds_in(&content_stack(&window), &window.window);
+            // The maps page itself, not the content stack: the stack is sized
+            // to the paned top whatever the page inside it asks for.
+            let page = bounds_in(window.map.widget(), &window.window);
             let shown = shown_by_paned_top(&window);
             assert!(
                 inside(&page, &shown),
                 "{w} x {h}: maps page {page:?} outside the {shown:?} the paned top shows"
+            );
+            let scroller = std::iter::successors(window.map.widget().parent(), |w| w.parent())
+                .take_while(|w| w != content_stack(&window).upcast_ref::<gtk::Widget>())
+                .find_map(|w| w.downcast::<gtk::ScrolledWindow>().ok())
+                .expect("the maps page sits in a scroller");
+            let adj = scroller.vadjustment();
+            assert!(
+                adj.upper() <= adj.page_size() + 1.0,
+                "{w} x {h}: a bar shows for a page that fits: upper {} for a page of {}",
+                adj.upper(),
+                adj.page_size()
             );
             window.window.close();
             settle();
