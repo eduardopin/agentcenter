@@ -2440,8 +2440,11 @@ fn at_360_many_waiting_chips_leave_the_memory_strip_reachable() {
         settle_paned(&window);
         let root = window.window.clone();
         let shown = shown_by_paned_top(&window);
+        assert!(
+            settle_until(|| mapped_with_class(&window, "memory-bar").len() == 1),
+            "the memory strip is mapped"
+        );
         let bars = mapped_with_class(&window, "memory-bar");
-        assert_eq!(bars.len(), 1, "the memory strip is mapped");
         let bar = bounds_in(&bars[0], &root);
         assert!(bar.height() > 0.0, "the memory strip has a height");
         let page = bounds_in(&content_stack(&window), &root);
