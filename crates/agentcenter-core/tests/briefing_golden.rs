@@ -8,11 +8,12 @@ use agentcenter_core::Snapshot;
 use agentcenter_core::briefing::{Endpoint, brief, messages};
 use agentcenter_core::insights::{Finding, fallback, findings};
 use serde_json::json;
-use std::io::{Read, Write};
-use std::net::TcpListener;
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
+
+mod slm_support;
+use slm_support::fake;
 
 fn fixtures() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/insights")
@@ -22,46 +23,16 @@ fn golden_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/briefing_golden.json")
 }
 
-/// One-shot server: returns the endpoint, and a handle with the request it received.
+/// The shared one-shot server, with the port rewritten so the golden does not depend on it.
 fn stub(content: &str) -> (Endpoint, thread::JoinHandle<String>) {
-    let l = TcpListener::bind("127.0.0.1:0").unwrap();
-    let port = l.local_addr().unwrap().port();
-    let body =
-        json!({"choices": [{"message": {"role": "assistant", "content": content}}]}).to_string();
+    let (ep, h) = fake(content, Duration::ZERO);
+    let port = ep.addr().port();
     let h = thread::spawn(move || {
-        let (mut s, _) = l.accept().unwrap();
-        s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
-        let mut buf = Vec::new();
-        let mut chunk = [0u8; 4096];
-        loop {
-            let n = s.read(&mut chunk).unwrap_or(0);
-            if n == 0 {
-                break;
-            }
-            buf.extend_from_slice(&chunk[..n]);
-            if let Some(h) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
-                let head = String::from_utf8_lossy(&buf[..h]).to_lowercase();
-                let len = head
-                    .lines()
-                    .find_map(|l| l.strip_prefix("content-length:"))
-                    .map(|v| v.trim().parse::<usize>().unwrap())
-                    .unwrap_or(0);
-                if buf.len() >= h + 4 + len {
-                    break;
-                }
-            }
-        }
-        let reply = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
-            body.len()
-        );
-        let _ = s.write_all(reply.as_bytes());
-        String::from_utf8_lossy(&buf).replace(&format!("127.0.0.1:{port}"), "127.0.0.1:PORT")
+        h.join()
+            .unwrap()
+            .replace(&format!("127.0.0.1:{port}"), "127.0.0.1:PORT")
     });
-    (
-        Endpoint::parse(&format!("http://127.0.0.1:{port}")).unwrap(),
-        h,
-    )
+    (ep, h)
 }
 
 fn scenario(stem: &str) -> serde_json::Value {

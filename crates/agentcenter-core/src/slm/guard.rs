@@ -3,7 +3,7 @@
 
 use serde_json::Value;
 
-/// Por que a saida foi recusada (`empty`, `not_json`, `missing_field`, `label_not_allowed`).
+/// Por que a saida foi recusada (`empty`, `not_json`, `missing_field`, `field_not_string`, `label_not_allowed`).
 #[derive(Debug, Clone, PartialEq)]
 pub struct Refusal {
     pub reason: String,
@@ -64,8 +64,9 @@ impl Guard {
                 let Ok(v) = serde_json::from_str::<Value>(t) else {
                     return refused("not_json");
                 };
-                match v.get(f).and_then(Value::as_str) {
-                    Some(s) => s.to_string(),
+                match v.get(f) {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(_) => return refused("field_not_string"),
                     None => return refused("missing_field"),
                 }
             }

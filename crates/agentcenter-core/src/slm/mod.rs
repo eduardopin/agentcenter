@@ -8,7 +8,7 @@ mod endpoint;
 mod guard;
 mod job;
 
-pub use client::{ClientError, complete, connections_opened};
+pub use client::{ClientError, complete, connection_attempts};
 pub use endpoint::{Endpoint, EndpointError};
 pub use guard::{Guard, Refusal, Verdict};
 pub use job::{DEFAULT_MAX_TOKENS, Job, Message};
@@ -32,25 +32,25 @@ pub struct Outcome {
 }
 
 /// Roda `job` no `endpoint` e passa a resposta pelo `guard`; a saida e do modelo so se passar.
-/// Sem endpoint, erro do cliente, estouro do prazo ou recusa: o `rules`, com `source = rules`.
+/// Sem endpoint, erro do cliente, estouro do prazo ou recusa: o texto de `rules`, com `source = rules`.
 pub fn run(endpoint: Option<&Endpoint>, job: &Job, guard: &Guard, rules: &str) -> Outcome {
-    let rules = |refused: Option<String>| Outcome {
+    let fallback = |refused: Option<String>| Outcome {
         text: rules.to_string(),
         source: Source::Rules,
         refused,
     };
     let Some(endpoint) = endpoint else {
-        return rules(None);
+        return fallback(None);
     };
     match complete(endpoint, job) {
-        Err(e) => rules(Some(e.to_string())),
+        Err(e) => fallback(Some(e.to_string())),
         Ok(raw) => match guard.check(&raw) {
             Verdict::Accepted(text) => Outcome {
                 text,
                 source: Source::Model,
                 refused: None,
             },
-            Verdict::Refused(r) => rules(Some(r.reason)),
+            Verdict::Refused(r) => fallback(Some(r.reason)),
         },
     }
 }

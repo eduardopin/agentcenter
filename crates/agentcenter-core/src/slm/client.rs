@@ -14,12 +14,13 @@ const MAX_BODY: usize = 64 * 1024;
 /// Teto do cabecalho HTTP da resposta.
 const MAX_HEAD: usize = 16 * 1024;
 
-/// Conexoes abertas por este processo; os testes leem para provar que sem endpoint ha zero.
-static CONNECTIONS: AtomicUsize = AtomicUsize::new(0);
+/// Tentativas de conexao deste processo, contadas antes do `connect`; os testes leem para provar
+/// que sem endpoint ha zero.
+static CONNECTION_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
 
-/// Quantas conexoes TCP o cliente abriu neste processo.
-pub fn connections_opened() -> usize {
-    CONNECTIONS.load(Ordering::SeqCst)
+/// Quantas conexoes TCP o cliente tentou abrir neste processo (inclui as recusadas).
+pub fn connection_attempts() -> usize {
+    CONNECTION_ATTEMPTS.load(Ordering::SeqCst)
 }
 
 /// Falha ao falar com o modelo.
@@ -197,7 +198,7 @@ pub fn complete(endpoint: &Endpoint, job: &Job) -> Result<String, ClientError> {
         body.len()
     );
     let timeout = remaining(deadline)?;
-    CONNECTIONS.fetch_add(1, Ordering::SeqCst);
+    CONNECTION_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
     let mut s = TcpStream::connect_timeout(&endpoint.addr(), timeout).map_err(io_err)?;
     s.set_write_timeout(Some(remaining(deadline)?))
         .map_err(io_err)?;

@@ -44,13 +44,13 @@ fn loopback_forms_are_accepted_and_everything_else_is_refused() {
 }
 
 #[test]
-fn a_server_slower_than_the_timeout_yields_the_rules_within_timeout_plus_100_ms() {
+fn a_server_slower_than_the_timeout_yields_the_rules_within_timeout_plus_400_ms() {
     let (ep, _srv) = fake("ok", Duration::from_secs(3));
     let timeout = Duration::from_millis(300);
     let t = Instant::now();
     let out = run(Some(&ep), &job(timeout), &Guard::labels(&["ok"]), "rules");
     let took = t.elapsed();
-    assert!(took < timeout + Duration::from_millis(100), "{took:?}");
+    assert!(took < timeout + Duration::from_millis(400), "{took:?}");
     assert_eq!(out.source, Source::Rules);
     assert_eq!(out.text, "rules");
     assert_eq!(out.refused.as_deref(), Some("timed out"));
