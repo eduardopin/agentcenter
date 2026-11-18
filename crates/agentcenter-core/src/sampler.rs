@@ -394,6 +394,7 @@ impl Sampler {
 
         // 2. Intervalo, medido em ticks de CPU da maquina (deterministico em fixture).
         let cores = cpu.cores;
+        let boot_ms = cpu.btime * 1000;
         let (d_total, d_idle) = match self.prev_cpu {
             Some(p) if cpu.total > p.total => {
                 (cpu.total - p.total, cpu.idle.saturating_sub(p.idle))
@@ -504,6 +505,10 @@ impl Sampler {
             let (id, role) = agent_of[&agent_pid].clone();
             let mut s = Session::aggregate(id, role, agent_pid, cores, procs);
             s.starttime = stats.get(&agent_pid).map(|st| st.starttime);
+            s.started_at_ms = s
+                .starttime
+                .filter(|_| boot_ms > 0)
+                .map(|t| boot_ms + (t as f64 * 1000.0 / USER_HZ) as u64);
             let starttime = s.starttime.unwrap_or(0);
             let info = match self.agents.remove(&agent_pid) {
                 Some(i)

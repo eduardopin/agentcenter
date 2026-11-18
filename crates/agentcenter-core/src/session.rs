@@ -79,6 +79,10 @@ pub struct Session {
     /// Kernel process identity sampled from stat; absent in older snapshots.
     #[serde(default)]
     pub starttime: Option<u64>,
+    /// Wall-clock start of the agent process, ms since the Unix epoch: boot time
+    /// plus `starttime` ticks. `None` when the boot time is unknown.
+    #[serde(default)]
+    pub started_at_ms: Option<u64>,
     pub cmdline: Option<String>,
     pub cwd: Option<String>,
     /// Numero de processos na sessao, agente incluso.
@@ -160,6 +164,7 @@ impl Session {
             role,
             pid,
             starttime: None,
+            started_at_ms: None,
             cmdline: None,
             cwd: None,
             procs: processes.len(),

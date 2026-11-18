@@ -11,6 +11,9 @@ use crate::snapshot::Snapshot;
 use serde::Serialize;
 
 const GB: f64 = 1e9;
+const HOUR_MS: u64 = 3_600_000;
+/// Age at which a session is called long-running.
+const AGE_LIMIT_MS: u64 = 8 * HOUR_MS;
 /// Maximo de achados devolvidos.
 const MAX_FINDINGS: usize = 4;
 
@@ -116,6 +119,25 @@ fn cache_hit(s: &Session) -> f64 {
     }
 }
 
+/// Age of the session at the snapshot instant; `None` when its start is unknown.
+fn age_ms(s: &Session, now_ms: u64) -> Option<u64> {
+    s.started_at_ms.map(|t| now_ms.saturating_sub(t))
+}
+
+/// The session is past 75 % of context and the project's last handoff, if any,
+/// is not newer than the session start. Needs a known start and a cockpit (the
+/// handoff lookup of `HandoffIndex`); without either there is nothing to claim.
+fn handoff_due(s: &Session, now_ms: u64) -> bool {
+    let (Some(age), Some(c)) = (age_ms(s, now_ms), cockpit(s)) else {
+        return false;
+    };
+    // The handoff is newer when it is younger than the session.
+    let newer = c
+        .handoff_age_min
+        .is_some_and(|m| m * 60_000.0 < age as f64);
+    ctx_pct(s) >= 75.0 && !newer
+}
+
 /// Primeiro maximo por `key`, como o `max()` do Python (empate fica com o primeiro).
 fn first_max<'a>(v: &[&'a Session], key: impl Fn(&Session) -> f64) -> &'a Session {
     let mut best = v[0];
@@ -183,6 +205,25 @@ pub fn findings(snap: &Snapshot) -> Vec<Finding> {
         })
         .collect();
     let idle_mem: f64 = idle.iter().map(|s| pss(s)).sum();
+    // 95 % used is 5 % available; integers keep the boundary exact.
+    if let (Some(t), Some(a)) = (m.mem_total_bytes, m.mem_available_bytes)
+        && t > 0
+        && u128::from(a) * 20 <= u128::from(t)
+    {
+        let used = round(100.0 * (1.0 - avail / total));
+        out.push(finding(
+            "memory_95",
+            "high",
+            95,
+            format!(
+                "Memory is {used}% used: {} of {} available. \
+                 Action: agentcenter-cli reclaim.",
+                gb(avail),
+                gb(total)
+            ),
+            vec![format!("{used}%"), "reclaim".into()],
+        ));
+    }
     // Sem total de memoria nao ha fracao a avaliar.
     if total > 0.0 && avail / total < 0.15 {
         let pct = round(100.0 * avail / total);
@@ -225,6 +266,29 @@ pub fn findings(snap: &Snapshot) -> Vec<Finding> {
         ));
     }
 
+    let due: Vec<&Session> = agents
+        .iter()
+        .copied()
+        .filter(|s| handoff_due(s, snap.taken_at_ms))
+        .collect();
+    if !due.is_empty() {
+        let w = first_max(&due, ctx_pct);
+        let p = round(ctx_pct(w));
+        out.push(finding(
+            "handoff_due",
+            "high",
+            85,
+            format!(
+                "{} session{} past 75% of the context window with no handoff written since it \
+                 started; the fullest is {} at {p}%. Action: write a handoff now.",
+                due.len(),
+                plural(due.len(), "s are", " is"),
+                label(w)
+            ),
+            vec![format!("{p}%"), w.pid.to_string()],
+        ));
+    }
+
     if !idle.is_empty() && (idle_mem >= 2.0 * GB || idle_mem / sess_mem.max(1.0) >= 0.25) {
         let w = first_max(&idle, pss);
         out.push(finding(
@@ -257,6 +321,29 @@ pub fn findings(snap: &Snapshot) -> Vec<Finding> {
                 la.one, m.cores
             ),
             vec![format!("{:.1}", la.one), m.cores.to_string()],
+        ));
+    }
+
+    let old: Vec<&Session> = agents
+        .iter()
+        .copied()
+        .filter(|s| age_ms(s, snap.taken_at_ms).is_some_and(|a| a >= AGE_LIMIT_MS))
+        .collect();
+    if !old.is_empty() {
+        let w = first_max(&old, |s| age_ms(s, snap.taken_at_ms).unwrap_or(0) as f64);
+        let hours = age_ms(w, snap.taken_at_ms).unwrap_or(0) / HOUR_MS;
+        out.push(finding(
+            "age_8h",
+            "medium",
+            50,
+            format!(
+                "{} session{} running for 8 hours or more; the oldest is {} at {hours} h. \
+                 Action: write a handoff and start a fresh session.",
+                old.len(),
+                plural(old.len(), "s are", " is"),
+                label(w)
+            ),
+            vec![format!("{hours} h"), w.pid.to_string()],
         ));
     }
 

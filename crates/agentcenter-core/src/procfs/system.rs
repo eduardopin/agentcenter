@@ -10,6 +10,8 @@ pub struct CpuTotals {
     /// idle + iowait.
     pub idle: u64,
     pub cores: u32,
+    /// `btime`: boot time in seconds since the Unix epoch; 0 when absent.
+    pub btime: u64,
 }
 
 pub fn parse_proc_stat(text: &str) -> Result<CpuTotals, ReadError> {
@@ -28,8 +30,8 @@ pub fn parse_proc_stat(text: &str) -> Result<CpuTotals, ReadError> {
             seen = true;
         } else if line.starts_with("cpu") {
             out.cores += 1;
-        } else if seen {
-            break;
+        } else if let Some(b) = line.strip_prefix("btime ") {
+            out.btime = b.trim().parse().unwrap_or(0);
         }
     }
     if !seen {

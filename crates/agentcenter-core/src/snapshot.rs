@@ -34,6 +34,9 @@ use serde::{Deserialize, Serialize};
 ///   (sinal de loop, ver [`crate::cockpit::Loops`]) e a recomendacao LOOP
 ///   calculada; campo novo sem mudar sentido de outro, entao a versao fica.
 ///   JSON sem eles le com 0 (sem sinal).
+///   `sessions[].started_at_ms` (inicio da sessao, de `btime` + `starttime`;
+///   `null` sem `btime`): campo novo e aditivo, entao a versao fica. JSON sem
+///   ele le `null`.
 pub const SCHEMA_VERSION: u32 = 5;
 
 /// De onde vem o stall de E/S.
