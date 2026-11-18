@@ -520,6 +520,7 @@ const CODES: &[&str] = &[
     "disabled",
     "capacity",
     "duplicate_mismatch",
+    "editor_draft",
     "expired",
     "unknown_operation",
     "invalid",
@@ -662,6 +663,7 @@ const ARM_REFUSALS: &[&str] = &[
     "disabled",
     "capacity",
     "duplicate_mismatch",
+    "editor_draft",
 ];
 /// Registered by the extension; the argument is the armed operation UUID.
 pub const PICKUP_COMMAND: &str = "/agentcenter-pickup";

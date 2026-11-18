@@ -528,6 +528,7 @@ fn control_pickup_arm_refusals_from_the_extension_are_refused_not_unknown() {
         "unsupported_guarded_compaction",
         "capacity",
         "duplicate_mismatch",
+        "editor_draft",
         "expired",
     ] {
         let value = fixture[code].clone();
