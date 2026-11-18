@@ -101,6 +101,8 @@ fn the_generator_is_hidden_from_the_usage() {
 fn gen_docs_rejects_an_unknown_format() {
     let out = run(&["gen-docs", "html"]);
     assert_eq!(out.status.code(), Some(2));
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(err.contains("markdown") && err.contains("man"), "{err}");
 }
 
 #[test]
