@@ -34,6 +34,9 @@ export async function listenPrivate(runtimeDirectory, identity, dispatcher, pick
   const nonce = identity.instance_nonce ?? randomBytes(32).toString('hex');
   const clients = new Set();
   let closed = false;
+  // refresh() promises still writing into `directory`; close() waits for them so
+  // a temp file can never land after the directory is emptied.
+  const refreshing = new Set();
   const metadata = { protocol_version: 2, ...identity, instance_nonce: nonce, socket,
     capabilities: identity.capabilities ?? {
       handoff: { enabled: false, disabled_reason: 'generation_not_implemented' },
@@ -95,6 +98,7 @@ export async function listenPrivate(runtimeDirectory, identity, dispatcher, pick
     if (closed) return;
     closed = true;
     for (const client of clients) client.destroy();
+    await Promise.allSettled([...refreshing]);
     if (server.listening) await new Promise(resolveClose => server.close(resolveClose));
     await unlink(manifest).catch(error => { if (error.code !== 'ENOENT') throw error; });
     await unlink(socket).catch(error => { if (error.code !== 'ENOENT') throw error; });
@@ -109,6 +113,13 @@ export async function listenPrivate(runtimeDirectory, identity, dispatcher, pick
     await chmod(socket, 0o600);
     await writeFile(manifest, JSON.stringify(metadata), { mode: 0o600, flag: 'wx' });
     return { manifest, socket, metadata, close, async refresh(current) {
+      // Registered before the body runs, so a close() started from inside it still waits.
+      let release;
+      const pending = new Promise(resolveRefresh => { release = resolveRefresh; });
+      refreshing.add(pending);
+      try { await publish(current); } finally { refreshing.delete(pending); release(); }
+    } };
+    async function publish(current) {
       if (closed) return;
       if (['session_id', 'session_file', 'pid', 'process_starttime', 'instance_nonce'].some(key => current[key] !== metadata[key])) throw new Error('stale_instance');
       metadata.expected = current.expected;
@@ -120,7 +131,7 @@ export async function listenPrivate(runtimeDirectory, identity, dispatcher, pick
         await writeFile(next, JSON.stringify(metadata), { mode: 0o600, flag: 'wx' });
         await rename(next, manifest);
       } finally { await unlink(next).catch(() => {}); }
-    } };
+    }
   } catch (error) {
     await close();
     throw error;

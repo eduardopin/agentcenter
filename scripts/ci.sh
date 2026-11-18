@@ -109,6 +109,11 @@ bash scripts/test-install.sh
 step "hygiene: CHANGELOG, SECURITY, issue forms, dependabot"
 bash scripts/test-hygiene.sh
 
+step "node --test: pi-control suites that need no Pi SDK"
+# The SDK suites need PI_SDK_DIR and stay out of CI; these three run offline.
+command -v node >/dev/null 2>&1 || { echo "ci: node not found (install nodejs)" >&2; exit 2; }
+PI_OFFLINE=1 node --test extensions/pi-control/transport.test.mjs extensions/pi-control/security.test.mjs extensions/pi-control/shutdown-race.test.mjs
+
 step "cargo fmt --all --check"
 cargo fmt --all --check
 
