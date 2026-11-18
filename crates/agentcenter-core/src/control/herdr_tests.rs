@@ -231,6 +231,8 @@ fn herdr_target_from_session_needs_identity_and_all_pane_coordinates() {
     let mut s = session_with(full.clone());
     s.starttime = None;
     assert_eq!(Target::from_session(&s), None, "no starttime");
+    // Identity back, so only the missing overlay can answer None.
+    s.starttime = Some(4242);
     s.overlay.as_mut().unwrap().herdr = None;
     assert_eq!(Target::from_session(&s), None, "no herdr overlay");
 }
