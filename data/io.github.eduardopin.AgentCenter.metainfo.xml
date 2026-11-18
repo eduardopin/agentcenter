@@ -56,5 +56,21 @@
     <color type="primary" scheme_preference="dark">#26303b</color>
   </branding>
 
+  <screenshots>
+    <screenshot type="default">
+      <image type="source">https://raw.githubusercontent.com/eduardopin/agentcenter/main/site/img/app-sessions-light.webp</image>
+      <caption>One row per session, with CPU, memory, swap, disk and stall</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source">https://raw.githubusercontent.com/eduardopin/agentcenter/main/site/img/app-detail-dark.webp</image>
+      <caption>The detail view of a session, in the dark style</caption>
+    </screenshot>
+  </screenshots>
+
+  <!-- The date is a placeholder; the release card sets the real one. -->
+  <releases>
+    <release version="1.0.0" date="2026-12-01" />
+  </releases>
+
   <content_rating type="oars-1.1" />
 </component>

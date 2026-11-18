@@ -54,7 +54,7 @@ print(*struct.unpack(">II", d[16:24]))' "$png")" || fail "$png is not a PNG"
     [[ $dims == "$size $size" ]] || fail "$png is $dims, want $size $size"
 done
 svg="$icons/scalable/apps/$APP_ID.svg"
-[[ -f $svg ]] && grep -q '<svg' "$svg" || fail "missing or bad $svg"
+{ [[ -f $svg ]] && grep -q "<svg" "$svg"; } || fail "missing or bad $svg"
 ok "icons at 16, 32, 48, 128, 256 and scalable"
 
 python3 -I - "$meta" <<'PY' || fail "metainfo content"
