@@ -581,16 +581,22 @@ fn paned_position_gives_the_maps_all_but_the_top_five_list_rows() {
         paned_position(1200, PanedMode::Maps, false, None),
         1200 - list
     );
-    // Too short for 220 px of maps and five rows: the rows win.
+    // Too short for 220 px of maps and five rows: the rows win, and at the
+    // tallest density (LIST_TIGHT_PX) so the fifth is whole, not a sliver.
     assert_eq!(
         paned_position(400, PanedMode::Maps, false, None),
-        400 - list
+        400 - LIST_TIGHT_PX
+    );
+    // The last height with room for the maps' 220 px keeps the list as it was.
+    assert_eq!(
+        paned_position(LIST_TOP_PX + 220, PanedMode::Maps, false, None),
+        220
     );
     // Detail: 65 %, still leaving the rows.
     assert_eq!(paned_position(1000, PanedMode::Detail, false, None), 650);
     assert_eq!(
         paned_position(500, PanedMode::Detail, false, None),
-        500 - list
+        500 - LIST_TIGHT_PX
     );
     // Strips replace the maps: a fixed short top.
     assert_eq!(paned_position(700, PanedMode::Maps, true, None), 64);
@@ -2088,22 +2094,54 @@ fn at_360_the_detail_page_does_not_overflow_sideways() {
     });
 }
 
+/// The memory strip is reachable at 360 x 640: whole inside what the paned
+/// top shows, or in the overview's vertical scroller, which then has range and
+/// brings it into view at the end. The list keeps 3 whole rows at this size
+/// (owner, 2026-11-16), so tipico-40's strips, taller than what is left, scroll
+/// as they already do under 40 waiting chips (#28).
+fn assert_memory_strip_reachable(window: &Window) {
+    let root = window.window.clone();
+    let shown = shown_by_paned_top(window);
+    assert!(
+        settle_until(|| mapped_with_class(window, "memory-bar").len() == 1),
+        "the memory strip is mapped"
+    );
+    let bars = mapped_with_class(window, "memory-bar");
+    let b = bounds_in(&bars[0], &root);
+    assert!(b.height() > 0.0, "the memory strip has a height");
+    if inside(&b, &shown) {
+        return;
+    }
+    let scroller = std::iter::successors(bars[0].parent(), |w| w.parent())
+        .take_while(|w| w != content_stack(window).upcast_ref::<gtk::Widget>())
+        .find_map(|w| w.downcast::<gtk::ScrolledWindow>().ok())
+        .unwrap_or_else(|| {
+            panic!("memory strip {b:?} clipped by the {shown:?} the paned top shows, no scroller")
+        });
+    let adj = scroller.vadjustment();
+    settle_until(|| adj.upper() > adj.page_size() + 1.0);
+    assert!(
+        adj.upper() > adj.page_size() + 1.0,
+        "the scroller has no range: upper {} for a page of {}",
+        adj.upper(),
+        adj.page_size()
+    );
+    adj.set_value(adj.upper() - adj.page_size());
+    settle_until(|| inside(&bounds_in(&bars[0], &root), &shown));
+    let b = bounds_in(&bars[0], &root);
+    assert!(
+        inside(&b, &shown),
+        "scrolled to the end the memory strip {b:?} is outside the {shown:?} the paned top shows"
+    );
+}
+
 #[test]
 fn at_360_the_memory_strip_is_visible() {
     gtk::test_synced(|| {
         let _font = DesktopLook::set();
         let window = open("io.agentcenter.Narrow360MemoryQA", 360, 640, &tipico());
         settle_paned(&window);
-        let root = window.window.clone();
-        let region = bounds_in(&content_stack(&window), &root);
-        let bars = mapped_with_class(&window, "memory-bar");
-        assert_eq!(bars.len(), 1, "the memory strip is mapped");
-        let b = bounds_in(&bars[0], &root);
-        assert!(b.height() > 0.0, "the memory strip has a height");
-        assert!(
-            inside(&b, &region),
-            "memory strip {b:?} clipped by the maps region {region:?}"
-        );
+        assert_memory_strip_reachable(&window);
         window.window.close();
         settle();
     });
@@ -2125,16 +2163,7 @@ fn at_360_the_memory_strip_stays_visible_when_a_busier_snapshot_arrives() {
             history: None,
         }));
         settle_paned(&window);
-        let root = window.window.clone();
-        let region = bounds_in(&content_stack(&window), &root);
-        let bars = mapped_with_class(&window, "memory-bar");
-        assert_eq!(bars.len(), 1, "the memory strip is mapped");
-        let b = bounds_in(&bars[0], &root);
-        assert!(b.height() > 0.0, "the memory strip has a height");
-        assert!(
-            inside(&b, &region),
-            "memory strip {b:?} clipped by the maps region {region:?}"
-        );
+        assert_memory_strip_reachable(&window);
         window.window.close();
         settle();
     });
@@ -2223,11 +2252,31 @@ fn at_360_the_paned_top_is_at_least_what_the_maps_need() {
             need > STRIPS_TOP_PX,
             "the strips need {need} px, no more than the {STRIPS_TOP_PX} px default"
         );
+        // The top takes what the strips need up to what leaves the list its
+        // chrome and 3 whole rows; the page scrolls for the rest.
+        let want = need.min(paned.height() - LIST_STRIPS_PX);
         assert!(
-            paned.position() >= need,
-            "the paned top is {} px, the maps need {need}",
+            paned.position() >= want,
+            "the paned top is {} px, the maps need {need} ({want} with the list's rows kept)",
             paned.position()
         );
+        if paned.position() < need {
+            // Cut short of what the strips need: the page scrolls for the rest.
+            let scroller = window
+                .map
+                .widget()
+                .ancestor(gtk::ScrolledWindow::static_type())
+                .and_downcast::<gtk::ScrolledWindow>()
+                .expect("the maps page sits in a scroller");
+            let adj = scroller.vadjustment();
+            settle_until(|| adj.upper() > adj.page_size() + 1.0);
+            assert!(
+                adj.upper() > adj.page_size() + 1.0,
+                "the top is cut short of the strips and the page has no range: upper {} for a page of {}",
+                adj.upper(),
+                adj.page_size()
+            );
+        }
         assert!(
             paned.position() <= paned.height() - LIST_CHROME_PX,
             "the paned top {} px leaves the list less than its {LIST_CHROME_PX} px chrome of {}",

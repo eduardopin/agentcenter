@@ -121,13 +121,33 @@ pub const LIST_TOP_PX: i32 = LIST_CHROME_PX + LIST_MIN_ROWS * ROW_PX;
 const MAPS_MIN_PX: i32 = 220;
 const STRIPS_TOP_PX: i32 = 64;
 
+/// A row's pitch at the largest density a desktop font gives (44 px row, 1 px
+/// gap, 1 px spare): [`ROW_PX`] holds for the default font only, and a list
+/// that cannot spare the room shows a sliver where a whole row is owed.
+pub const ROW_TALL_PX: i32 = 46;
+/// Whole rows the list keeps when the window is too short for the maps' own
+/// minimum (owner, 2026-11-16: 5 at 640 x 640, 3 once the strips are on, at
+/// 360 x 640), and the height that takes.
+pub const LIST_TIGHT_ROWS: i32 = 5;
+pub const LIST_STRIPS_ROWS: i32 = 3;
+pub const LIST_TIGHT_PX: i32 = LIST_CHROME_PX + LIST_TIGHT_ROWS * ROW_TALL_PX;
+pub const LIST_STRIPS_PX: i32 = LIST_CHROME_PX + LIST_STRIPS_ROWS * ROW_TALL_PX;
+
 /// Top child height (px) of the paned for a content height `total`: the maps
 /// everything above the list's top rows (owner, 25/10: squeezed maps were
 /// unreadable), the detail 65 %, strips a fixed short line; a saved
 /// (dragged) position replaces the default. The list always keeps
 /// [`LIST_TOP_PX`], which wins over the top's minimum.
 pub fn paned_position(total: i32, mode: PanedMode, strips: bool, saved: Option<i32>) -> i32 {
-    let upper = (total - LIST_TOP_PX).max(0);
+    // Room enough for the maps' minimum: the list keeps LIST_TOP_PX, as
+    // ever. Short of it the maps are squeezed anyway, and the list keeps whole
+    // rows at the tallest density instead of a sliver of the fifth.
+    let list = if total - LIST_TOP_PX < MAPS_MIN_PX {
+        LIST_TIGHT_PX
+    } else {
+        LIST_TOP_PX
+    };
+    let upper = (total - list).max(0);
     let want = match (mode, strips) {
         (PanedMode::Maps, true) => return STRIPS_TOP_PX.min(upper),
         (PanedMode::Maps, false) => upper,
@@ -649,12 +669,14 @@ impl Window {
                 }
                 let mut at = paned_position(total, mode, map.is_compact(), *slot);
                 if mode == PanedMode::Maps && map.is_compact() {
-                    // The strips are as tall as they are: a shorter top clips
-                    // the chips and the memory strip. The list keeps its chrome
-                    // (order bar, dropdowns) and scrolls its rows.
+                    // The strips are as tall as they are, and the page scrolls
+                    // (the overview's scroller) for what the top cannot show.
+                    // The list keeps its chrome (order bar, dropdowns) and
+                    // LIST_STRIPS_ROWS whole rows; the rest of the window is
+                    // the strips', never the other way round.
                     let need = map.needed_height(content.width());
                     map.fit_bin_to_child(content.width());
-                    at = at.max(need).min((total - LIST_CHROME_PX).max(0));
+                    at = at.max(need).min((total - LIST_STRIPS_PX).max(0));
                 }
                 saved.set(kept);
                 if at != paned.position() {
