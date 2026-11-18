@@ -62,14 +62,16 @@
       <caption>Machine CPU, RAM, swap and memory stall on top, one row per session below</caption>
     </screenshot>
     <screenshot>
-      <image type="source">https://raw.githubusercontent.com/eduardopin/agentcenter/main/site/img/app-detail-dark.webp</image>
-      <caption>The detail view of a session, in the dark style</caption>
+      <image type="source">https://raw.githubusercontent.com/eduardopin/agentcenter/main/site/img/app-sessions-narrow-light.webp</image>
+      <caption>The same view in a 360 by 640 window, as on a phone</caption>
     </screenshot>
   </screenshots>
 
-  <!-- The date is a placeholder; the release card sets the real one. -->
+  <!-- The version follows [workspace.package] in Cargo.toml, which
+       scripts/test-appstream.sh checks. The date is a placeholder; the
+       release card sets the real one. -->
   <releases>
-    <release version="1.0.0" date="2026-12-01" />
+    <release version="0.1.0" date="2026-12-01" />
   </releases>
 
   <content_rating type="oars-1.1" />
