@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Checks the repository hygiene files exist and parse: CHANGELOG, SECURITY,
-# issue forms and dependabot. Needs python3 with PyYAML; no network.
+# issue forms, dependabot and the README screenshots. Needs python3 with PyYAML; no network.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -69,6 +69,16 @@ if dep is not None:
         u = ups.get(eco)
         if not u: fail(f"dependabot.yml: no {eco} ecosystem")
         elif u.get("schedule", {}).get("interval") != "weekly": fail(f"dependabot.yml: {eco} is not weekly")
+
+# The README is the first page a visitor sees on GitHub; it shows the app at
+# desktop width and at the 360 px phone width the layout is tested at.
+readme = text("README.md")
+if readme:
+    shots = set(re.findall(r'(?:src|srcset)="(site/img/[\w.-]+\.webp)"', readme))
+    for s in sorted(shots):
+        if not pathlib.Path(s).is_file(): fail(f"README.md: {s} does not exist")
+    if not any("narrow" not in s for s in shots): fail("README.md: no wide screenshot from site/img")
+    if not any("narrow" in s for s in shots): fail("README.md: no narrow (360 px) screenshot from site/img")
 
 if fails:
     print("FAIL")
