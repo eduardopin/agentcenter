@@ -599,9 +599,10 @@ fn paned_position_gives_the_maps_all_but_the_top_five_list_rows() {
     );
     // Detail: 65 %, still leaving the rows.
     assert_eq!(paned_position(1000, PanedMode::Detail, false, None), 650);
+    // The detail page has no maps, so a short window keeps LIST_TOP_PX.
     assert_eq!(
         paned_position(500, PanedMode::Detail, false, None),
-        500 - LIST_TIGHT_PX
+        500 - LIST_TOP_PX
     );
     // Strips replace the maps: a fixed short top.
     assert_eq!(paned_position(700, PanedMode::Maps, true, None), 64);
@@ -2259,7 +2260,8 @@ fn at_360_the_paned_top_is_at_least_what_the_maps_need() {
         );
         // The top takes what the strips need up to what leaves the list its
         // chrome and 3 whole rows; the page scrolls for the rest.
-        let want = need.min(paned.height() - LIST_STRIPS_PX);
+        let want =
+            need.min((paned.height() - LIST_STRIPS_PX).max(STRIPS_TOP_PX.min(paned.height())));
         assert!(
             paned.position() >= want,
             "the paned top is {} px, the maps need {need} ({want} with the list's rows kept)",
@@ -2408,24 +2410,6 @@ fn whole_list_rows(window: &Window) -> usize {
         .count()
 }
 
-/// The strips' 4 px padding is the row: with the 16 px of the wide page the
-/// list under the strips shows one whole session instead of two.
-#[test]
-fn at_360x640_the_list_keeps_2_whole_rows() {
-    gtk::test_synced(|| {
-        let _font = DesktopLook::set();
-        let window = open("io.agentcenter.Narrow360RowsQA", 360, 640, &tipico());
-        settle_paned(&window);
-        let whole = whole_list_rows(&window);
-        assert!(
-            whole >= 2,
-            "the list shows {whole} whole session rows at 360 x 640, 2 fit"
-        );
-        window.window.close();
-        settle();
-    });
-}
-
 /// The list's scrolled viewport (the widget that holds the session rows) and
 /// the height of one row, both read from the real widgets.
 fn list_viewport_and_row(window: &Window) -> (gtk::graphene::Rect, f32) {
@@ -2448,11 +2432,12 @@ fn assert_list_min_rows(id: &'static str, w: i32, h: i32, rows: usize) {
         settle_until(|| whole_list_rows(&window) >= rows);
         let whole = whole_list_rows(&window);
         let (viewport, row) = list_viewport_and_row(&window);
+        // Rows sit on a pitch of the row plus the 1 px gap.
+        let need = rows as f32 * row + (rows - 1) as f32;
         assert!(
-            viewport.height() >= rows as f32 * row,
-            "{w} x {h}: the list viewport is {} px, {rows} rows of {row} px need {}",
-            viewport.height(),
-            rows as f32 * row
+            viewport.height() >= need,
+            "{w} x {h}: the list viewport is {} px, {rows} rows of {row} px need {need}",
+            viewport.height()
         );
         assert!(
             whole >= rows,
@@ -2466,6 +2451,35 @@ fn assert_list_min_rows(id: &'static str, w: i32, h: i32, rows: usize) {
 #[test]
 fn at_360x640_the_list_shows_3_whole_rows() {
     assert_list_min_rows("io.agentcenter.ListMinRows360", 360, 640, 3);
+}
+
+/// The strips' cap must not take the maps page to 0 px on a short window:
+/// the window's own minimum is 360 x 400, and base kept the page there.
+#[test]
+fn at_360x400_the_strips_page_keeps_its_top() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360ShortQA", 360, 400, &tipico());
+        settle_paned(&window);
+        let top = paned_of(&window).position();
+        assert!(top > 0, "the paned top is {top} px at 360 x 400");
+        window.window.close();
+        settle();
+    });
+}
+
+/// The pure side of the same rule: on a short paned the top keeps a floor of
+/// the chrome's height, never 0.
+#[test]
+fn strips_top_cap_leaves_the_list_its_rows_then_the_top_keeps_a_floor() {
+    // Room for the rows: the list keeps them.
+    assert_eq!(strips_top_cap(379), 379 - LIST_STRIPS_PX);
+    // Too short for the rows: the top keeps 115 px (never 0), the list the rest.
+    assert_eq!(strips_top_cap(LIST_STRIPS_PX - 1), LIST_CHROME_PX);
+    assert_eq!(strips_top_cap(240), LIST_CHROME_PX);
+    // Shorter than that: the top takes the whole paned, never negative.
+    assert_eq!(strips_top_cap(LIST_CHROME_PX - 1), LIST_CHROME_PX - 1);
+    assert_eq!(strips_top_cap(0), 0);
 }
 
 #[test]

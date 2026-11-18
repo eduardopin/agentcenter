@@ -59,7 +59,7 @@ use crate::procfs::io::IoCounters;
 use crate::procfs::smaps::{SmapsRollup, parse_smaps_rollup};
 use crate::procfs::stat::Stat;
 use crate::procfs::status::{Status, parse_status};
-use crate::procfs::system::{CpuTotals, delayacct_enabled, read_cpu_totals};
+use crate::procfs::system::{CpuTotals, delayacct_enabled, read_cpu_totals, start_epoch_ms};
 use crate::procfs::task::{count_d_threads, scan_d_threads};
 use crate::procfs::{ProcRoot, ReadError};
 use crate::session::{ProcessMetrics, Session};
@@ -504,6 +504,10 @@ impl Sampler {
             let (id, role) = agent_of[&agent_pid].clone();
             let mut s = Session::aggregate(id, role, agent_pid, cores, procs);
             s.starttime = stats.get(&agent_pid).map(|st| st.starttime);
+            s.started_at_ms = s
+                .starttime
+                .filter(|_| cpu.btime > 0)
+                .map(|t| start_epoch_ms(cpu.btime, t));
             let starttime = s.starttime.unwrap_or(0);
             let info = match self.agents.remove(&agent_pid) {
                 Some(i)

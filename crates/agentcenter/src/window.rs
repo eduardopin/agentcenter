@@ -136,13 +136,16 @@ pub const LIST_STRIPS_PX: i32 = LIST_CHROME_PX + LIST_STRIPS_ROWS * ROW_TALL_PX;
 /// Top child height (px) of the paned for a content height `total`: the maps
 /// everything above the list's top rows (owner, 25/10: squeezed maps were
 /// unreadable), the detail 65 %, strips a fixed short line; a saved
-/// (dragged) position replaces the default. The list always keeps
-/// [`LIST_TOP_PX`], which wins over the top's minimum.
+/// (dragged) position replaces the default. The list keeps [`LIST_TOP_PX`]
+/// while the maps get [`MAPS_MIN_PX`], and [`LIST_TIGHT_PX`] when they do not
+/// (maps mode only; the detail page keeps [`LIST_TOP_PX`]). Once the strips
+/// are on, the caller keeps [`LIST_STRIPS_PX`] for the list and the top's
+/// minimum wins.
 pub fn paned_position(total: i32, mode: PanedMode, strips: bool, saved: Option<i32>) -> i32 {
     // Room enough for the maps' minimum: the list keeps LIST_TOP_PX, as
     // ever. Short of it the maps are squeezed anyway, and the list keeps whole
     // rows at the tallest density instead of a sliver of the fifth.
-    let list = if total - LIST_TOP_PX < MAPS_MIN_PX {
+    let list = if mode == PanedMode::Maps && total - LIST_TOP_PX < MAPS_MIN_PX {
         LIST_TIGHT_PX
     } else {
         LIST_TOP_PX
@@ -154,6 +157,14 @@ pub fn paned_position(total: i32, mode: PanedMode, strips: bool, saved: Option<i
         (PanedMode::Detail, _) => total * 65 / 100,
     };
     saved.unwrap_or(want).max(MAPS_MIN_PX).min(upper)
+}
+
+/// The tallest top the strips may take: what leaves the list its
+/// [`LIST_STRIPS_PX`], but never below its chrome, so a paned too short for
+/// the rows keeps the top the rest, as before the rows were owed.
+pub fn strips_top_cap(total: i32) -> i32 {
+    let list = LIST_STRIPS_PX.min((total - LIST_CHROME_PX).max(0));
+    (total - list).max(0)
 }
 
 /// Text scale factor (1.0 at the default 96 dpi): sp = px / scale.
@@ -676,7 +687,7 @@ impl Window {
                     // the strips', never the other way round.
                     let need = map.needed_height(content.width());
                     map.fit_bin_to_child(content.width());
-                    at = at.max(need).min((total - LIST_STRIPS_PX).max(0));
+                    at = at.max(need).min(strips_top_cap(total));
                 }
                 saved.set(kept);
                 if at != paned.position() {

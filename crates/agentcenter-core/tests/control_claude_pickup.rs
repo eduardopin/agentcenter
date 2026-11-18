@@ -807,29 +807,25 @@ fn escape_without_confirmation_is_escape_failed() {
 }
 
 #[test]
-fn copy_path_unfit_for_one_argument_is_refused_before_clear() {
+fn copy_path_unfit_for_one_argument_is_refused_before_the_handoff_turn() {
+    // Card 6048d95a: the unsafe copy path is refused before the Handoff turn is
+    // typed, not after it was persisted (the earlier contract of this test).
     for bad in ["a b", "a<b", "a>b"] {
         let w = world();
         w.claude(true, true, None);
         let mut c = w.controller_in(w.home.join(format!(".local/state/{bad}/handoffs")));
-        // Copied, then refused at once: the guard runs before waiting for idle.
         let p = c.pickup_start(OP, &w.subject);
-        assert!(
-            p.handoff
-                .is_some_and(|h| h.path.to_str().unwrap().contains(bad))
-        );
-        w.set(|p| p.status = "idle");
-        let p = c.pickup_status(OP).unwrap();
         assert_eq!(
             at(&p),
             (
-                State::Failed,
-                Stage::HandoffPersisted,
+                State::Rejected,
+                Stage::HandoffRunning,
                 code::UNSAFE_COPY_PATH
             ),
             "{bad}"
         );
-        assert_eq!(w.prompts().len(), 1, "{bad}: no /clear");
+        assert!(p.handoff.is_none(), "{bad}: nothing copied");
+        assert_eq!(w.prompts().len(), 0, "{bad}: no Handoff turn, no /clear");
         assert_eq!(w.pane.lock().unwrap().session, SID);
     }
 }

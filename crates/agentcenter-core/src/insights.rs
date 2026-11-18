@@ -1,6 +1,10 @@
 //! Motor de achados: regras deterministicas sobre o [`Snapshot`], porte fiel de
 //! `findings()`, `facts()` e `fallback()` do prototipo `insights.py`.
 //!
+//! `age_8h`, `memory_95` and `handoff_due` exist only here: the prototype has no
+//! fixture for them, so `parity_with_python_reference` does not cover them; their
+//! own tests do. Extend its id list when a fixture exists.
+//!
 //! Puro: sem relogio, sem I/O, sem sorteio. Campo ausente no snapshot vale o
 //! mesmo que o `or 0` do prototipo (0, ou "sem dado").
 
@@ -11,6 +15,9 @@ use crate::snapshot::Snapshot;
 use serde::Serialize;
 
 const GB: f64 = 1e9;
+const HOUR_MS: u64 = 3_600_000;
+/// Age at which a session is called long-running.
+const AGE_LIMIT_MS: u64 = 8 * HOUR_MS;
 /// Maximo de achados devolvidos.
 const MAX_FINDINGS: usize = 4;
 
@@ -116,6 +123,23 @@ fn cache_hit(s: &Session) -> f64 {
     }
 }
 
+/// Age of the session at the snapshot instant; `None` when its start is unknown.
+fn age_ms(s: &Session, now_ms: u64) -> Option<u64> {
+    s.started_at_ms.map(|t| now_ms.saturating_sub(t))
+}
+
+/// The session is past 75 % of context and the project's last handoff, if any,
+/// is not newer than the session start. Needs a known start and a cockpit (the
+/// handoff lookup of `HandoffIndex`); without either there is nothing to claim.
+fn handoff_due(s: &Session, now_ms: u64) -> bool {
+    let (Some(age), Some(c)) = (age_ms(s, now_ms), cockpit(s)) else {
+        return false;
+    };
+    // The handoff is newer when it is younger than the session.
+    let newer = c.handoff_age_min.is_some_and(|m| m * 60_000.0 < age as f64);
+    ctx_pct(s) >= 75.0 && !newer
+}
+
 /// Primeiro maximo por `key`, como o `max()` do Python (empate fica com o primeiro).
 fn first_max<'a>(v: &[&'a Session], key: impl Fn(&Session) -> f64) -> &'a Session {
     let mut best = v[0];
@@ -183,8 +207,27 @@ pub fn findings(snap: &Snapshot) -> Vec<Finding> {
         })
         .collect();
     let idle_mem: f64 = idle.iter().map(|s| pss(s)).sum();
+    // 95 % used is 5 % available; integers keep the boundary exact.
+    let mem95 = matches!((m.mem_total_bytes, m.mem_available_bytes),
+        (Some(t), Some(a)) if t > 0 && u128::from(a) * 20 <= u128::from(t));
+    if mem95 {
+        let used = round(100.0 * (1.0 - avail / total));
+        out.push(finding(
+            "memory_95",
+            "high",
+            95,
+            format!(
+                "Memory is {used}% used: {} of {} available. \
+                 Action: agentcenter-cli reclaim.",
+                gb(avail),
+                gb(total)
+            ),
+            vec![format!("{used}%"), "reclaim".into()],
+        ));
+    }
+    // At 95 % used memory_95 already says it with the same action: one slot, not two.
     // Sem total de memoria nao ha fracao a avaliar.
-    if total > 0.0 && avail / total < 0.15 {
+    if total > 0.0 && avail / total < 0.15 && !mem95 {
         let pct = round(100.0 * avail / total);
         out.push(finding(
             "memory_pressure",
@@ -202,10 +245,12 @@ pub fn findings(snap: &Snapshot) -> Vec<Finding> {
         ));
     }
 
+    // A session handoff_due counts is already named there with the same action:
+    // context_full takes the others, so one session yields one finding.
     let full: Vec<&Session> = agents
         .iter()
         .copied()
-        .filter(|s| ctx_pct(s) >= 75.0)
+        .filter(|s| ctx_pct(s) >= 75.0 && !handoff_due(s, snap.taken_at_ms))
         .collect();
     if !full.is_empty() {
         let w = first_max(&full, ctx_pct);
@@ -222,6 +267,29 @@ pub fn findings(snap: &Snapshot) -> Vec<Finding> {
                 label(w)
             ),
             vec![format!("{p}%"), "handoff".into()],
+        ));
+    }
+
+    let due: Vec<&Session> = agents
+        .iter()
+        .copied()
+        .filter(|s| handoff_due(s, snap.taken_at_ms))
+        .collect();
+    if !due.is_empty() {
+        let w = first_max(&due, ctx_pct);
+        let p = round(ctx_pct(w));
+        out.push(finding(
+            "handoff_due",
+            "high",
+            85,
+            format!(
+                "{} session{} past 75% of the context window with no handoff written since it \
+                 started; the fullest is {} at {p}%. Action: write a handoff now.",
+                due.len(),
+                plural(due.len(), "s are", " is"),
+                label(w)
+            ),
+            vec![format!("{p}%"), w.pid.to_string()],
         ));
     }
 
@@ -257,6 +325,29 @@ pub fn findings(snap: &Snapshot) -> Vec<Finding> {
                 la.one, m.cores
             ),
             vec![format!("{:.1}", la.one), m.cores.to_string()],
+        ));
+    }
+
+    let old: Vec<&Session> = agents
+        .iter()
+        .copied()
+        .filter(|s| age_ms(s, snap.taken_at_ms).is_some_and(|a| a >= AGE_LIMIT_MS))
+        .collect();
+    if !old.is_empty() {
+        let w = first_max(&old, |s| age_ms(s, snap.taken_at_ms).unwrap_or(0) as f64);
+        let hours = age_ms(w, snap.taken_at_ms).unwrap_or(0) / HOUR_MS;
+        out.push(finding(
+            "age_8h",
+            "medium",
+            50,
+            format!(
+                "{} session{} running for 8 hours or more; the oldest is {} at {hours} h. \
+                 Action: write a handoff and start a fresh session.",
+                old.len(),
+                plural(old.len(), "s are", " is"),
+                label(w)
+            ),
+            vec![format!("{hours} h"), w.pid.to_string()],
         ));
     }
 

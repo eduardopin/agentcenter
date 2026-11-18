@@ -1,14 +1,14 @@
-//! Briefing opcional do modelo: as mensagens do chat, o guard da saida e um cliente HTTP
-//! so de loopback. Os achados nunca saem da maquina: `Endpoint` nao aceita outro destino.
-//! Sem dependencia nova (std + serde); sem regex, a varredura e escrita a mao.
+//! Briefing opcional do modelo: as mensagens do chat e o guard da saida, sobre o cliente de
+//! loopback de `slm`. Os achados nunca saem da maquina: `Endpoint` nao aceita outro destino.
+//! Os nomes do cliente continuam exportados daqui (`Endpoint`, `Message`, `Source`...).
+//! Sem regex, a varredura e escrita a mao.
 
 use crate::insights::{Finding, facts, fallback};
+pub use crate::slm::{ClientError, Endpoint, EndpointError, Message, Source};
+use crate::slm::{Job, complete};
 use serde::Serialize;
-use serde_json::{Value, json};
 use std::fmt;
-use std::io::{ErrorKind, Read, Write};
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 const SYSTEM: &str = "You brief a developer who runs many AI coding agents on one machine. \
 You get numbered findings, most urgent first. Write 2 sentences in plain English. \
@@ -55,17 +55,6 @@ const WORDS: [(&str, &str); 12] = [
 
 const MIN_CHARS: usize = 20;
 const MAX_CHARS: usize = 420;
-/// Teto do corpo da resposta do modelo.
-const MAX_BODY: usize = 64 * 1024;
-/// Teto do cabecalho HTTP da resposta.
-const MAX_HEAD: usize = 16 * 1024;
-
-/// Uma mensagem do chat (`role` + `content`).
-#[derive(Debug, Clone, PartialEq, Serialize)]
-pub struct Message {
-    pub role: String,
-    pub content: String,
-}
 
 fn msg(role: &str, content: &str) -> Message {
     Message {
@@ -347,225 +336,7 @@ pub fn guard(text: &str, fs: &[Finding]) -> Result<String, Rejection> {
     Ok(t)
 }
 
-// ---------------------------------------------------------------- endpoint
-
-/// Endereco do servidor do modelo: so loopback, resolvido sem DNS.
-#[derive(Debug, Clone, PartialEq)]
-pub struct Endpoint {
-    addr: SocketAddr,
-}
-
-/// Endpoint recusado.
-#[derive(Debug, Clone, PartialEq)]
-pub struct EndpointError(pub String);
-
-impl fmt::Display for EndpointError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "endpoint refused: {}", self.0)
-    }
-}
-
-impl std::error::Error for EndpointError {}
-
-fn refuse<T>(why: &str) -> Result<T, EndpointError> {
-    Err(EndpointError(why.into()))
-}
-
-impl Endpoint {
-    /// Aceita so `http://127.0.0.1:<porta>`, `http://localhost:<porta>` e `http://[::1]:<porta>`,
-    /// com `/` ou `/v1` (com ou sem barra final) opcionais. O resto e erro: outro host, https,
-    /// usuario, query, fragmento, outro caminho. `localhost` vira 127.0.0.1 sem consultar DNS.
-    pub fn parse(s: &str) -> Result<Endpoint, EndpointError> {
-        let Some(rest) = s.strip_prefix("http://") else {
-            return refuse("only http:// is allowed");
-        };
-        let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
-        let (authority, tail) = rest.split_at(end);
-        if !matches!(tail, "" | "/" | "/v1" | "/v1/") {
-            return refuse("path must be empty or /v1");
-        }
-        let (ip, port) = if let Some(p) = authority.strip_prefix("[::1]:") {
-            (IpAddr::V6(Ipv6Addr::LOCALHOST), p)
-        } else if let Some((host, p)) = authority.split_once(':') {
-            match host {
-                "127.0.0.1" | "localhost" => (IpAddr::V4(Ipv4Addr::LOCALHOST), p),
-                _ => return refuse("host must be 127.0.0.1, localhost or [::1]"),
-            }
-        } else {
-            return refuse("host must be 127.0.0.1, localhost or [::1], with a port");
-        };
-        if port.is_empty() || !port.bytes().all(|b| b.is_ascii_digit()) {
-            return refuse("port must be digits");
-        }
-        match port.parse::<u16>() {
-            Ok(p) if p != 0 => Ok(Endpoint {
-                addr: SocketAddr::new(ip, p),
-            }),
-            _ => refuse("port out of range"),
-        }
-    }
-
-    /// O endereco de loopback ja resolvido.
-    pub fn addr(&self) -> SocketAddr {
-        self.addr
-    }
-}
-
 // ------------------------------------------------------------------ client
-
-/// Falha ao falar com o modelo.
-#[derive(Debug, Clone, PartialEq)]
-pub enum ClientError {
-    Timeout,
-    Io(String),
-    Status(u16),
-    TooLarge,
-    Malformed(String),
-}
-
-impl fmt::Display for ClientError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            ClientError::Timeout => f.write_str("timed out"),
-            ClientError::Io(e) => write!(f, "io error: {e}"),
-            ClientError::Status(s) => write!(f, "http status {s}"),
-            ClientError::TooLarge => f.write_str("response too large"),
-            ClientError::Malformed(e) => write!(f, "malformed response: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for ClientError {}
-
-fn io_err(e: std::io::Error) -> ClientError {
-    match e.kind() {
-        ErrorKind::WouldBlock | ErrorKind::TimedOut => ClientError::Timeout,
-        _ => ClientError::Io(e.to_string()),
-    }
-}
-
-fn malformed(why: &str) -> ClientError {
-    ClientError::Malformed(why.into())
-}
-
-/// O que falta do prazo total; zero ou menos e `Timeout`.
-fn remaining(deadline: Instant) -> Result<Duration, ClientError> {
-    deadline
-        .checked_duration_since(Instant::now())
-        .filter(|d| !d.is_zero())
-        .ok_or(ClientError::Timeout)
-}
-
-/// Decodifica um corpo chunked. `None` = ainda incompleto.
-fn decode_chunked(raw: &[u8]) -> Result<Option<Vec<u8>>, ClientError> {
-    let mut out = Vec::new();
-    let mut i = 0;
-    loop {
-        let Some(nl) = raw[i..].windows(2).position(|w| w == b"\r\n") else {
-            return Ok(None);
-        };
-        let line = std::str::from_utf8(&raw[i..i + nl]).map_err(|_| malformed("chunk size"))?;
-        let hex = line.split(';').next().unwrap_or("").trim();
-        let size = usize::from_str_radix(hex, 16).map_err(|_| malformed("chunk size"))?;
-        i += nl + 2;
-        if size == 0 {
-            return Ok(Some(out));
-        }
-        if out.len().saturating_add(size) > MAX_BODY {
-            return Err(ClientError::TooLarge);
-        }
-        if raw.len() < i + size + 2 {
-            return Ok(None);
-        }
-        out.extend_from_slice(&raw[i..i + size]);
-        if &raw[i + size..i + size + 2] != b"\r\n" {
-            return Err(malformed("chunk framing"));
-        }
-        i += size + 2;
-    }
-}
-
-/// Tenta tirar o corpo do que ja chegou. `None` = falta ler; `eof` = o servidor fechou.
-fn parse_response(buf: &[u8], eof: bool) -> Result<Option<Vec<u8>>, ClientError> {
-    let Some(h) = buf.windows(4).position(|w| w == b"\r\n\r\n") else {
-        if eof {
-            return Err(malformed("no http header"));
-        }
-        return if buf.len() > MAX_HEAD {
-            Err(malformed("header too long"))
-        } else {
-            Ok(None)
-        };
-    };
-    let head = std::str::from_utf8(&buf[..h]).map_err(|_| malformed("header is not text"))?;
-    let body = &buf[h + 4..];
-    let mut lines = head.split("\r\n");
-    let status = lines
-        .next()
-        .filter(|l| l.starts_with("HTTP/1."))
-        .and_then(|l| l.split_whitespace().nth(1))
-        .and_then(|c| c.parse::<u16>().ok())
-        .ok_or_else(|| malformed("status line"))?;
-    if status != 200 {
-        return Err(ClientError::Status(status));
-    }
-    let mut length: Option<usize> = None;
-    let mut chunked = false;
-    for l in lines {
-        let Some((k, v)) = l.split_once(':') else {
-            continue;
-        };
-        let (k, v) = (k.trim().to_ascii_lowercase(), v.trim());
-        if k == "content-length" {
-            let n = v
-                .parse::<usize>()
-                .map_err(|_| malformed("content-length"))?;
-            if length.is_some_and(|old| old != n) {
-                return Err(malformed("conflicting content-length"));
-            }
-            length = Some(n);
-        } else if k == "transfer-encoding" && v.to_ascii_lowercase().contains("chunked") {
-            chunked = true;
-        }
-    }
-    if chunked {
-        return match decode_chunked(body)? {
-            None if eof => Err(malformed("truncated chunked body")),
-            done => Ok(done),
-        };
-    }
-    match length {
-        Some(n) if n > MAX_BODY => Err(ClientError::TooLarge),
-        Some(n) if body.len() >= n => Ok(Some(body[..n].to_vec())),
-        Some(_) if eof => Err(malformed("truncated body")),
-        Some(_) => Ok(None),
-        None if eof => Ok(Some(body.to_vec())),
-        None => Ok(None),
-    }
-}
-
-/// Le a resposta ate o corpo estar completo, dentro do prazo total.
-fn read_body(s: &mut TcpStream, deadline: Instant) -> Result<Vec<u8>, ClientError> {
-    let mut buf = Vec::new();
-    let mut tmp = [0u8; 4096];
-    let mut eof = false;
-    loop {
-        if let Some(body) = parse_response(&buf, eof)? {
-            return Ok(body);
-        }
-        if buf.len() > MAX_HEAD + MAX_BODY {
-            return Err(ClientError::TooLarge);
-        }
-        s.set_read_timeout(Some(remaining(deadline)?))
-            .map_err(io_err)?;
-        match s.read(&mut tmp) {
-            Ok(0) => eof = true,
-            Ok(n) => buf.extend_from_slice(&tmp[..n]),
-            Err(e) if e.kind() == ErrorKind::Interrupted => {}
-            Err(e) => return Err(io_err(e)),
-        }
-    }
-}
 
 /// POST `/v1/chat/completions` no servidor local e devolve `choices[0].message.content`.
 /// `timeout` e o prazo total (conexao, escrita e leitura juntas).
@@ -574,42 +345,10 @@ pub fn ask(
     messages: &[Message],
     timeout: Duration,
 ) -> Result<String, ClientError> {
-    let deadline = Instant::now() + timeout;
-    let body = json!({
-        "model": "local",
-        "messages": messages,
-        "max_tokens": 120,
-        "temperature": 0,
-    })
-    .to_string();
-    let request = format!(
-        "POST /v1/chat/completions HTTP/1.1\r\nHost: {}\r\nContent-Type: application/json\r\n\
-         Accept: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        endpoint.addr,
-        body.len()
-    );
-    let mut s = TcpStream::connect_timeout(&endpoint.addr, remaining(deadline)?).map_err(io_err)?;
-    s.set_write_timeout(Some(remaining(deadline)?))
-        .map_err(io_err)?;
-    s.write_all(request.as_bytes()).map_err(io_err)?;
-    let raw = read_body(&mut s, deadline)?;
-    let v: Value =
-        serde_json::from_slice(&raw).map_err(|e| ClientError::Malformed(e.to_string()))?;
-    v["choices"][0]["message"]["content"]
-        .as_str()
-        .map(str::to_owned)
-        .ok_or_else(|| malformed("no choices[0].message.content"))
+    complete(endpoint, &Job::new(messages.to_vec(), timeout))
 }
 
 // ------------------------------------------------------------------- brief
-
-/// De onde veio o texto mostrado.
-#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Source {
-    Rules,
-    Model,
-}
 
 /// O briefing mostrado; `rejected` diz por que o modelo nao foi usado (se foi tentado).
 #[derive(Debug, Clone, PartialEq, Serialize)]

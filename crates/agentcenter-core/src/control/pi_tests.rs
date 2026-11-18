@@ -439,6 +439,10 @@ fn absent_herdr(f: &Fixture) -> herdr::Endpoint {
 struct FakeHerdr {
     endpoint: herdr::Endpoint,
     prompts: Arc<AtomicUsize>,
+    /// Text of every `agent.prompt`, byte for byte as Herdr received it.
+    texts: Arc<std::sync::Mutex<Vec<String>>>,
+    /// Types the prompt but closes the connection without answering it.
+    drop_prompt_reply: Arc<AtomicBool>,
     stop: Arc<AtomicBool>,
     server: Option<thread::JoinHandle<()>>,
 }
@@ -452,6 +456,9 @@ impl FakeHerdr {
         let prompts = Arc::new(AtomicUsize::new(0));
         let stop = Arc::new(AtomicBool::new(false));
         let (count, done) = (prompts.clone(), stop.clone());
+        let texts = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let drop_prompt_reply = Arc::new(AtomicBool::new(false));
+        let (seen, lose) = (texts.clone(), drop_prompt_reply.clone());
         let server = thread::spawn(move || {
             while !done.load(Ordering::Relaxed) {
                 let Ok((mut s, _)) = listener.accept() else {
@@ -473,6 +480,11 @@ impl FakeHerdr {
                     "agent.get" => json!({"type":"agent_info","agent":agent}),
                     "agent.prompt" => {
                         count.fetch_add(1, Ordering::Relaxed);
+                        let text = q["params"]["text"].as_str().unwrap().to_owned();
+                        seen.lock().unwrap().push(text);
+                        if lose.load(Ordering::Relaxed) {
+                            continue;
+                        }
                         json!({"type":"agent_prompted","agent":agent})
                     }
                     m => panic!("unexpected method {m}"),
@@ -487,6 +499,8 @@ impl FakeHerdr {
                 server_starttime: f.endpoint.process_starttime.parse().unwrap(),
             },
             prompts,
+            texts,
+            drop_prompt_reply,
             stop,
             server: Some(server),
         }
@@ -674,4 +688,65 @@ fn control_pickup_against_a_protocol_2_extension_is_unsupported_not_unknown() {
         assert!(matches!(r, Err(Error::Unknown)), "{r:?}");
     }
     assert_eq!(herdr.prompts.load(Ordering::Relaxed), 0);
+}
+
+/// What the extension answers a valid arm: accepted/armed with the record at
+/// the first stage, the old session being the endpoint's own.
+fn armed(f: &Fixture) -> Value {
+    let (mut v, _) = loaded(f);
+    v["state"] = json!("accepted");
+    v["code"] = json!("armed");
+    v["pickup"] = json!({"stage":"handoff_running",
+        "old_session":{"session_id":"test","session_file":"/private/session.jsonl"}});
+    v
+}
+
+/// Born green: `handoff_pickup` already returns `Unknown` when Herdr's answer
+/// to the typed prompt is lost. Pinned at the unit level (the integration
+/// suite covers it with a full fake world) so the arm is neither cancelled
+/// nor the prompt repeated: the fake serves one arm reply, so a cancel would
+/// fail the join below.
+#[test]
+fn control_pickup_lost_prompt_reply_is_unknown_not_cancelled_nor_retried() {
+    let f = Fixture::new();
+    let herdr = FakeHerdr::new(&f);
+    herdr.drop_prompt_reply.store(true, Ordering::Relaxed);
+    let server = f.reply(armed(&f), Duration::ZERO);
+    let r = handoff_pickup(
+        &f.endpoint,
+        &herdr.endpoint,
+        Some(&same_process(&f)),
+        OP.into(),
+        Duration::from_secs(1),
+    );
+    let wire = server.join().unwrap();
+    assert_eq!(wire["action"], "handoff_pickup");
+    let Err(PickupError::Unknown(request)) = r else {
+        panic!("{r:?}");
+    };
+    assert_eq!(request.operation_id, OP);
+    // The command was typed once: it may have run, so it is never repeated.
+    assert_eq!(herdr.prompts.load(Ordering::Relaxed), 1);
+}
+
+/// Born green: the typed text is the closed command plus the operation ID and
+/// nothing else, so Pi cannot be steered by anything the client chose.
+#[test]
+fn control_pickup_types_exactly_the_command_and_the_operation_id() {
+    let f = Fixture::new();
+    let herdr = FakeHerdr::new(&f);
+    let server = f.reply(armed(&f), Duration::ZERO);
+    handoff_pickup(
+        &f.endpoint,
+        &herdr.endpoint,
+        Some(&same_process(&f)),
+        OP.into(),
+        Duration::from_secs(1),
+    )
+    .unwrap();
+    server.join().unwrap();
+    assert_eq!(
+        *herdr.texts.lock().unwrap(),
+        [format!("/agentcenter-pickup {OP}")]
+    );
 }
