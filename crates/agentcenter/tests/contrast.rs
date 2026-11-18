@@ -65,7 +65,10 @@ fn decls(body: &str) -> Vec<(String, String)> {
     body.split(';')
         .filter_map(|d| {
             let (k, v) = d.split_once(':')?;
-            let k = k.trim().rsplit(|c: char| c.is_whitespace() || c == '{').next()?;
+            let k = k
+                .trim()
+                .rsplit(|c: char| c.is_whitespace() || c == '{')
+                .next()?;
             k.starts_with("--")
                 .then(|| (k.to_string(), v.trim().to_string()))
         })
@@ -105,7 +108,11 @@ const MORE: &str = "(prefers-contrast:more)";
 fn blocks<'a>(media: &'a [(String, String)], want: &[&str]) -> Vec<&'a str> {
     let mut want: Vec<String> = want.iter().map(|s| (*s).to_string()).collect();
     want.sort();
-    media.iter().filter(|(c, _)| feats(c) == want).map(|(_, b)| b.as_str()).collect()
+    media
+        .iter()
+        .filter(|(c, _)| feats(c) == want)
+        .map(|(_, b)| b.as_str())
+        .collect()
 }
 
 /// The themes the gate measures. High contrast in this app is the base
@@ -119,7 +126,10 @@ fn themes(tokens_css: &str) -> Vec<(&'static str, Env)> {
     let (top, media) = segments(tokens_css);
     let light: Env = root_vars(&top).into_iter().collect();
     let over = |want: &[&str]| -> Vec<(String, String)> {
-        blocks(&media, want).into_iter().flat_map(root_vars).collect()
+        blocks(&media, want)
+            .into_iter()
+            .flat_map(root_vars)
+            .collect()
     };
     let mut dark = light.clone();
     dark.extend(over(&[DARK]));
@@ -162,7 +172,13 @@ fn hex(v: &str) -> Option<Rgba> {
 }
 
 fn lum(c: Rgba) -> f64 {
-    let ch = |x: f64| if x <= 0.04045 { x / 12.92 } else { ((x + 0.055) / 1.055).powf(2.4) };
+    let ch = |x: f64| {
+        if x <= 0.04045 {
+            x / 12.92
+        } else {
+            ((x + 0.055) / 1.055).powf(2.4)
+        }
+    };
     0.2126 * ch(c.0) + 0.7152 * ch(c.1) + 0.0722 * ch(c.2)
 }
 
@@ -180,9 +196,16 @@ fn ratio(fg: Rgba, bg: Rgba) -> f64 {
 
 /// Tokens the naming scheme treats as colours: the ones token_failures pairs.
 fn is_colour_token(n: &str) -> bool {
-    ["--ac-surface-", "--ac-text-", "--ac-mark-", "--ac-on-", "--ac-selection", "--ac-track"]
-        .iter()
-        .any(|p| n.starts_with(p))
+    [
+        "--ac-surface-",
+        "--ac-text-",
+        "--ac-mark-",
+        "--ac-on-",
+        "--ac-selection",
+        "--ac-track",
+    ]
+    .iter()
+    .any(|p| n.starts_with(p))
 }
 
 /// Every token pair the naming scheme promises, as failures of the minimum.
@@ -196,18 +219,33 @@ fn token_failures(env: &Env) -> (usize, Vec<String>) {
     let mut unmeasured: Vec<String> = env
         .keys()
         .filter(|n| is_colour_token(n) && !colors.contains_key(n.as_str()))
-        .map(|n| format!("{n}: {:?} is a colour the gate cannot measure (use a #hex or a var() to one)", resolve(n, env, 0)))
+        .map(|n| {
+            format!(
+                "{n}: {:?} is a colour the gate cannot measure (use a #hex or a var() to one)",
+                resolve(n, env, 0)
+            )
+        })
         .collect();
-    let surfaces: Vec<&str> = colors.keys().copied().filter(|n| n.starts_with("--ac-surface-")).collect();
+    let surfaces: Vec<&str> = colors
+        .keys()
+        .copied()
+        .filter(|n| n.starts_with("--ac-surface-"))
+        .collect();
     let mut pairs: Vec<(String, String, f64, Rgba)> = Vec::new();
     for (&n, &c) in &colors {
-        let on_sel = ["--ac-text-rec-", "--ac-mark-rec-", "--ac-mark-focus"].iter().any(|p| n.starts_with(p));
+        let on_sel = ["--ac-text-rec-", "--ac-mark-rec-", "--ac-mark-focus"]
+            .iter()
+            .any(|p| n.starts_with(p));
         let mut bgs: Vec<&str> = surfaces.clone();
         if on_sel {
             bgs.push("--ac-selection");
         }
         if n.starts_with("--ac-text-large-") {
-            pairs.extend(surfaces.iter().map(|s| (n.into(), (*s).into(), MARK_MIN, c)));
+            pairs.extend(
+                surfaces
+                    .iter()
+                    .map(|s| (n.into(), (*s).into(), MARK_MIN, c)),
+            );
         } else if n.starts_with("--ac-text-") {
             pairs.extend(bgs.iter().map(|s| (n.into(), (*s).into(), TEXT_MIN, c)));
         } else if n.starts_with("--ac-mark-") {
@@ -219,9 +257,15 @@ fn token_failures(env: &Env) -> (usize, Vec<String>) {
             }
         }
     }
-    if let (Some(dim), Some(&(r, g, b, _))) = (env.get("--dim-opacity"), colors.get("--ac-text-primary")) {
+    if let (Some(dim), Some(&(r, g, b, _))) =
+        (env.get("--dim-opacity"), colors.get("--ac-text-primary"))
+    {
         let a: f64 = dim.trim_end_matches('%').parse::<f64>().unwrap() / 100.0;
-        pairs.extend(surfaces.iter().map(|s| ("--dim-opacity".into(), (*s).into(), TEXT_MIN, (r, g, b, a))));
+        pairs.extend(
+            surfaces
+                .iter()
+                .map(|s| ("--dim-opacity".into(), (*s).into(), TEXT_MIN, (r, g, b, a))),
+        );
     }
     let mut bad = Vec::new();
     bad.append(&mut unmeasured);
@@ -251,7 +295,11 @@ fn rule_prop(src: &str, selector: &str, prop: &str) -> Option<String> {
 }
 
 fn surfaces_of(env: &Env) -> Vec<(String, Rgba)> {
-    let mut v: Vec<String> = env.keys().filter(|n| n.starts_with("--ac-surface-")).cloned().collect();
+    let mut v: Vec<String> = env
+        .keys()
+        .filter(|n| n.starts_with("--ac-surface-"))
+        .cloned()
+        .collect();
     v.push("--ac-selection".into());
     v.into_iter()
         .map(|n| {
@@ -275,27 +323,47 @@ fn the_checker_fails_below_the_minimums() {
     let css = ":root { --ac-surface-window: #ffffff; --ac-track: #ffffff; --ac-text-x: #777777; --ac-mark-x: #aaaaaa; --ac-text-ok: #595959; }";
     let (_, bad) = token_failures(&themes(css)[0].1);
     assert_eq!(bad.len(), 3, "{bad:?}");
-    assert!(bad.iter().any(|b| b.starts_with("--ac-text-x on --ac-surface-window")));
-    assert!(bad.iter().any(|b| b.starts_with("--ac-mark-x on --ac-surface-window")));
+    assert!(
+        bad.iter()
+            .any(|b| b.starts_with("--ac-text-x on --ac-surface-window"))
+    );
+    assert!(
+        bad.iter()
+            .any(|b| b.starts_with("--ac-mark-x on --ac-surface-window"))
+    );
 }
 
 #[test]
 fn themes_cover_light_dark_and_high_contrast() {
     let t = themes(&res("resources/tokens.css"));
     let names: Vec<_> = t.iter().map(|(n, _)| *n).collect();
-    assert_eq!(names, ["light", "dark", "high-contrast-light", "high-contrast-dark"]);
-    assert_ne!(t[0].1["--ac-surface-view"], t[1].1["--ac-surface-view"], "dark block not read");
+    assert_eq!(
+        names,
+        ["light", "dark", "high-contrast-light", "high-contrast-dark"]
+    );
+    assert_ne!(
+        t[0].1["--ac-surface-view"], t[1].1["--ac-surface-view"],
+        "dark block not read"
+    );
 }
 
 /// The media match is exact: a near-miss condition must not be read as dark
 /// or as high contrast.
 #[test]
 fn media_conditions_match_exactly() {
-    let css = |c: &str| format!(":root {{ --ac-surface-view: #ffffff; }} @media {c} {{ :root {{ --ac-surface-view: #000000; }} }}");
+    let css = |c: &str| {
+        format!(
+            ":root {{ --ac-surface-view: #ffffff; }} @media {c} {{ :root {{ --ac-surface-view: #000000; }} }}"
+        )
+    };
     let view = |c: &str, i: usize| themes(&css(c))[i].1["--ac-surface-view"].clone();
     assert_eq!(view("(prefers-color-scheme: dark)", 1), "#000000");
     assert_eq!(view("(prefers-color-scheme:dark)", 1), "#000000");
-    for near in ["(prefers-color-scheme: darkx)", "(prefers-color-scheme: dark) and (min-width: 1px)", "(prefers-color-scheme: light)"] {
+    for near in [
+        "(prefers-color-scheme: darkx)",
+        "(prefers-color-scheme: dark) and (min-width: 1px)",
+        "(prefers-color-scheme: light)",
+    ] {
         assert_eq!(view(near, 1), "#ffffff", "{near} read as dark");
     }
     assert_eq!(view("(prefers-contrast: more)", 2), "#000000");
@@ -305,10 +373,22 @@ fn media_conditions_match_exactly() {
 /// Unmeasurable colour tokens fail instead of being skipped.
 #[test]
 fn the_checker_fails_on_colours_it_cannot_measure() {
-    for v in ["rgb(1, 2, 3)", "rgba(0,0,0,.5)", "hsl(10 20% 30%)", "tomato", "var(--missing)"] {
-        let css = format!(":root {{ --ac-surface-window: #ffffff; --ac-track: #ffffff; --ac-text-x: {v}; }}");
+    for v in [
+        "rgb(1, 2, 3)",
+        "rgba(0,0,0,.5)",
+        "hsl(10 20% 30%)",
+        "tomato",
+        "var(--missing)",
+    ] {
+        let css = format!(
+            ":root {{ --ac-surface-window: #ffffff; --ac-track: #ffffff; --ac-text-x: {v}; }}"
+        );
         let (_, bad) = token_failures(&themes(&css)[0].1);
-        assert!(bad.iter().any(|b| b.starts_with("--ac-text-x") && b.contains("cannot measure")), "{v}: {bad:?}");
+        assert!(
+            bad.iter()
+                .any(|b| b.starts_with("--ac-text-x") && b.contains("cannot measure")),
+            "{v}: {bad:?}"
+        );
     }
 }
 
@@ -320,12 +400,20 @@ fn the_checker_fails_on_colours_it_cannot_measure() {
 fn high_contrast_is_the_base_until_a_block_exists() {
     let css = res("resources/tokens.css");
     let (_, media) = segments(&css);
-    let has_block = media.iter().any(|(c, _)| feats(c).iter().any(|f| f.contains("prefers-contrast")));
+    let has_block = media
+        .iter()
+        .any(|(c, _)| feats(c).iter().any(|f| f.contains("prefers-contrast")));
     let t = themes(&css);
     if has_block {
-        assert!(t[2].1 != t[0].1 || t[3].1 != t[1].1, "a prefers-contrast block changes no token");
+        assert!(
+            t[2].1 != t[0].1 || t[3].1 != t[1].1,
+            "a prefers-contrast block changes no token"
+        );
     } else {
-        assert_eq!(t[2].1, t[0].1, "HC light differs from light without a block");
+        assert_eq!(
+            t[2].1, t[0].1,
+            "HC light differs from light without a block"
+        );
         assert_eq!(t[3].1, t[1].1, "HC dark differs from dark without a block");
     }
 }
@@ -337,14 +425,22 @@ fn high_contrast_is_the_base_until_a_block_exists() {
 #[test]
 fn no_unmeasured_literal_colour_in_any_stylesheet() {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("resources");
-    let mut files: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).filter(|p| p.extension().is_some_and(|e| e == "css")).collect();
+    let mut files: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "css"))
+        .collect();
     files.sort();
     assert!(files.len() >= 8, "resources/*.css not found: {files:?}");
     let sessions = res("resources/sessions.css");
     let (top, media) = segments(&sessions);
     let spark = "listview.session-rack .row-spark";
     let measured_spark: Vec<String> = std::iter::once(rule_prop(&top, spark, "color").unwrap())
-        .chain(media.iter().filter_map(|(_, b)| rule_prop(b, spark, "color")))
+        .chain(
+            media
+                .iter()
+                .filter_map(|(_, b)| rule_prop(b, spark, "color")),
+        )
         .collect();
     let mut stray = Vec::new();
     for f in files {
@@ -352,15 +448,21 @@ fn no_unmeasured_literal_colour_in_any_stylesheet() {
         if name == "tokens.css" {
             continue;
         }
-        for (line, value) in literal_colours(&strip_comments(&std::fs::read_to_string(&f).unwrap())) {
-            let ok = (name == "token_map.css" && line.trim_start().starts_with("@define-color") && hex(&value).is_some())
+        for (line, value) in literal_colours(&strip_comments(&std::fs::read_to_string(&f).unwrap()))
+        {
+            let ok = (name == "token_map.css"
+                && line.trim_start().starts_with("@define-color")
+                && hex(&value).is_some())
                 || (name == "sessions.css" && measured_spark.contains(&value));
             if !ok {
                 stray.push(format!("{name}: {value} in `{}`", line.trim()));
             }
         }
     }
-    assert!(stray.is_empty(), "literal colours the gate does not measure: {stray:#?}");
+    assert!(
+        stray.is_empty(),
+        "literal colours the gate does not measure: {stray:#?}"
+    );
 }
 
 /// The detector itself: it finds hex, functions and colour names.
@@ -368,15 +470,43 @@ fn no_unmeasured_literal_colour_in_any_stylesheet() {
 fn the_literal_scan_finds_every_colour_form() {
     let css = "a { color: #abc; background: rgba(0,0,0,.5); border-color: tomato; fill: alpha(red, .5); outline-color: var(--x); color: currentColor; }\n@define-color n #123456;";
     let got: Vec<String> = literal_colours(css).into_iter().map(|(_, v)| v).collect();
-    assert_eq!(got, ["#abc", "rgba(0,0,0,.5)", "tomato", "alpha(red, .5)", "#123456"]);
+    assert_eq!(
+        got,
+        [
+            "#abc",
+            "rgba(0,0,0,.5)",
+            "tomato",
+            "alpha(red, .5)",
+            "#123456"
+        ]
+    );
 }
 
 /// Colour values written literally in `css`, as (line, value). Looks at the
 /// colour properties and `@define-color`; a `var()`, `inherit`, `none`,
 /// `transparent` or `currentColor` is not a literal.
 fn literal_colours(css: &str) -> Vec<(String, String)> {
-    const PROPS: [&str; 11] = ["color", "background", "background-color", "border-color", "outline-color", "fill", "stroke", "caret-color", "text-shadow", "box-shadow", "border"];
-    const NOT: [&str; 6] = ["inherit", "none", "transparent", "currentcolor", "initial", "unset"];
+    const PROPS: [&str; 11] = [
+        "color",
+        "background",
+        "background-color",
+        "border-color",
+        "outline-color",
+        "fill",
+        "stroke",
+        "caret-color",
+        "text-shadow",
+        "box-shadow",
+        "border",
+    ];
+    const NOT: [&str; 6] = [
+        "inherit",
+        "none",
+        "transparent",
+        "currentcolor",
+        "initial",
+        "unset",
+    ];
     let mut out = Vec::new();
     for line in css.lines() {
         if let Some(rest) = line.trim().strip_prefix("@define-color") {
@@ -386,7 +516,13 @@ fn literal_colours(css: &str) -> Vec<(String, String)> {
             continue;
         }
         for decl in line.split(';') {
-            let Some((k, v)) = decl.rsplit_once('{').map_or(decl, |(_, d)| d).split_once(':') else { continue };
+            let Some((k, v)) = decl
+                .rsplit_once('{')
+                .map_or(decl, |(_, d)| d)
+                .split_once(':')
+            else {
+                continue;
+            };
             let (k, v) = (k.trim(), v.trim().trim_end_matches('}').trim());
             if !PROPS.contains(&k) || v.is_empty() || v.starts_with("var(") {
                 continue;
@@ -410,8 +546,22 @@ fn literal_colours(css: &str) -> Vec<(String, String)> {
                 let l = p.to_ascii_lowercase();
                 // A colour function over a token or currentColor inherits a measured colour.
                 let derived = l.contains("var(") || l.contains("currentcolor") || l.contains('@');
-                let func = ["rgb(", "rgba(", "hsl(", "hsla(", "alpha(", "shade(", "mix(", "lighter(", "darker("].iter().any(|f| l.starts_with(f)) && !derived;
-                let is_literal = p.starts_with('#') || func || (k != "border" && k != "box-shadow" && k != "text-shadow" && !NOT.contains(&l.as_str()) && !p.starts_with('@') && !p.starts_with("var(") && p.chars().all(|c| c.is_ascii_alphabetic()));
+                let func = [
+                    "rgb(", "rgba(", "hsl(", "hsla(", "alpha(", "shade(", "mix(", "lighter(",
+                    "darker(",
+                ]
+                .iter()
+                .any(|f| l.starts_with(f))
+                    && !derived;
+                let is_literal = p.starts_with('#')
+                    || func
+                    || (k != "border"
+                        && k != "box-shadow"
+                        && k != "text-shadow"
+                        && !NOT.contains(&l.as_str())
+                        && !p.starts_with('@')
+                        && !p.starts_with("var(")
+                        && p.chars().all(|c| c.is_ascii_alphabetic()));
                 if is_literal {
                     out.push((line.to_string(), p));
                 }
@@ -444,7 +594,10 @@ fn row_rank_text_meets_4_5_on_every_row_background() {
         let (r, g, b, _) = hex(&resolve("--ac-text-primary", &env, 0).unwrap()).unwrap();
         for (name, bg) in surfaces_of(&env) {
             let got = ratio((r, g, b, a), bg);
-            assert!(got >= TEXT_MIN, "{theme}: rank at {a} on {name}: {got:.2}:1");
+            assert!(
+                got >= TEXT_MIN,
+                "{theme}: rank at {a} on {name}: {got:.2}:1"
+            );
         }
     }
 }
@@ -454,12 +607,20 @@ fn row_rank_text_meets_4_5_on_every_row_background() {
 fn sparkline_mark_meets_3_to_1_on_every_row_background() {
     let css = res("resources/sessions.css");
     let (top, media) = segments(&css);
-    let dark_body = blocks(&media, &[DARK]).first().map(|b| (*b).to_string()).expect("dark spark override");
+    let dark_body = blocks(&media, &[DARK])
+        .first()
+        .map(|b| (*b).to_string())
+        .expect("dark spark override");
     let sel = "listview.session-rack .row-spark";
     let light_c = rule_prop(&top, sel, "color").unwrap();
     let dark_c = rule_prop(&dark_body, sel, "color").unwrap();
     for (theme, env) in themes(&res("resources/tokens.css")) {
-        let spark = hex(if theme.contains("dark") { &dark_c } else { &light_c }).unwrap();
+        let spark = hex(if theme.contains("dark") {
+            &dark_c
+        } else {
+            &light_c
+        })
+        .unwrap();
         for (name, bg) in surfaces_of(&env) {
             let got = ratio(spark, bg);
             assert!(got >= MARK_MIN, "{theme}: spark on {name}: {got:.2}:1");
@@ -485,31 +646,62 @@ fn heat_palette_meets_wcag_in_every_theme() {
     // High contrast is the scheme's palette plus any `prefers-contrast: more`
     // block; token_map.css has none today, so it measures the same colours
     // against the HC surfaces.
-    let has_hc = media.iter().any(|(c, _)| feats(c).iter().any(|f| f.contains("prefers-contrast")));
-    assert!(!has_hc || !blocks(&media, &[MORE]).is_empty() || !blocks(&media, &[DARK, MORE]).is_empty(), "unrecognised prefers-contrast block in token_map.css");
+    let has_hc = media
+        .iter()
+        .any(|(c, _)| feats(c).iter().any(|f| f.contains("prefers-contrast")));
+    assert!(
+        !has_hc || !blocks(&media, &[MORE]).is_empty() || !blocks(&media, &[DARK, MORE]).is_empty(),
+        "unrecognised prefers-contrast block in token_map.css"
+    );
     let mut n = 0;
     for (theme, env) in themes(&res("resources/tokens.css")) {
         let dark = theme.ends_with("dark");
-        let mut defs = defs_of(blocks(&media, &[if dark { DARK } else { "(prefers-color-scheme:light)" }]).first().copied().unwrap_or_else(|| {
-            if dark { panic!("no dark heat block") } else { "" }
-        }));
+        let mut defs = defs_of(
+            blocks(
+                &media,
+                &[if dark {
+                    DARK
+                } else {
+                    "(prefers-color-scheme:light)"
+                }],
+            )
+            .first()
+            .copied()
+            .unwrap_or_else(|| {
+                if dark {
+                    panic!("no dark heat block")
+                } else {
+                    ""
+                }
+            }),
+        );
         if defs.is_empty() {
             // Light is the unconditional palette outside any media block.
             let (top, _) = segments(&css);
             defs = defs_of(&top);
         }
         if theme.starts_with("high-contrast") {
-            for b in blocks(&media, &[MORE]).into_iter().chain(if dark { blocks(&media, &[DARK, MORE]) } else { vec![] }) {
+            for b in blocks(&media, &[MORE]).into_iter().chain(if dark {
+                blocks(&media, &[DARK, MORE])
+            } else {
+                vec![]
+            }) {
                 defs.extend(defs_of(b));
             }
         }
         for i in 0..5 {
-            let (fill, text) = (defs[&format!("ac_heat_{i}")], defs[&format!("ac_heat_{i}_text")]);
+            let (fill, text) = (
+                defs[&format!("ac_heat_{i}")],
+                defs[&format!("ac_heat_{i}_text")],
+            );
             let got = ratio(text, fill);
             assert!(got >= TEXT_MIN, "{theme}: heat {i} text {got:.2}:1");
             n += 1;
         }
-        for (name, bg) in surfaces_of(&env).iter().filter(|(nm, _)| nm.ends_with("panel") || nm.ends_with("view")) {
+        for (name, bg) in surfaces_of(&env)
+            .iter()
+            .filter(|(nm, _)| nm.ends_with("panel") || nm.ends_with("view"))
+        {
             let got = ratio(defs["ac_heat_edge"], *bg);
             assert!(got >= MARK_MIN, "{theme}: heat edge on {name}: {got:.2}:1");
             n += 1;
@@ -527,14 +719,27 @@ fn glyph_table() -> Vec<(String, String, String)> {
             let (g, rest) = l.strip_prefix("Group::")?.split_once("=>")?;
             let rest = rest.trim().strip_prefix("(Shape::")?;
             let (shape, tone) = rest.split_once(',')?;
-            Some((g.trim().into(), shape.into(), tone.trim().trim_end_matches([')', ',']).trim_matches('"').into()))
+            Some((
+                g.trim().into(),
+                shape.into(),
+                tone.trim()
+                    .trim_end_matches([')', ','])
+                    .trim_matches('"')
+                    .into(),
+            ))
         })
         .collect()
 }
 
 fn group_variants() -> Vec<String> {
     let src = res("src/format.rs");
-    let body = src.split("pub enum Group {").nth(1).expect("enum Group").split('}').next().unwrap();
+    let body = src
+        .split("pub enum Group {")
+        .nth(1)
+        .expect("enum Group")
+        .split('}')
+        .next()
+        .unwrap();
     body.lines()
         .map(str::trim)
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
@@ -551,15 +756,25 @@ fn every_state_has_a_glyph_shape_besides_colour() {
     let variants = group_variants();
     assert_eq!(variants.len(), 5, "Group changed: {variants:?}");
     for v in &variants {
-        assert!(table.iter().any(|(g, ..)| g == v), "state {v} has no glyph arm");
+        assert!(
+            table.iter().any(|(g, ..)| g == v),
+            "state {v} has no glyph arm"
+        );
     }
     let shapes: Vec<&str> = table.iter().map(|(_, s, _)| s.as_str()).collect();
     let mut uniq = shapes.clone();
     uniq.sort_unstable();
     uniq.dedup();
-    assert_eq!(uniq.len(), shapes.len(), "two states share a shape: {table:?}");
+    assert_eq!(
+        uniq.len(),
+        shapes.len(),
+        "two states share a shape: {table:?}"
+    );
     let css = res("resources/sessions.css");
     for (g, _, tone) in &table {
-        assert!(css.contains(&format!("glyph.{tone} {{")), "state {g}: no rule for glyph.{tone}");
+        assert!(
+            css.contains(&format!("glyph.{tone} {{")),
+            "state {g}: no rule for glyph.{tone}"
+        );
     }
 }
