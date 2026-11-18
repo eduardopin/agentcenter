@@ -35,6 +35,7 @@ fn loopback_forms_are_accepted_and_everything_else_is_refused() {
         "http://127.0.0.1:8080@10.0.0.5:80",
         "http://user@127.0.0.1:8080",
         "http://[::2]:8080",
+        "http://127.0.0.1:0",
         "http://127.0.0.1",
         "",
     ] {
