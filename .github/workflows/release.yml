@@ -1,0 +1,76 @@
+# Builds the release tarball from a clean checkout and uploads it as a
+# workflow artifact. The logic lives in scripts/release-build.sh; publishing
+# to GitHub Releases is a separate workflow and is not done here.
+name: Release build
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+# Two runs on one ref would each compile cold and upload the same artifact name.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
+# The build only reads the repository; nothing here writes to GitHub.
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 45
+    env:
+      # Same as rust-version in Cargo.toml and RUST_TOOLCHAIN in ci.yml.
+      RUST_TOOLCHAIN: "1.99.0"
+      CARGO_ABOUT_VERSION: "0.9.3"
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Rust toolchain
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup default "$RUST_TOOLCHAIN"
+
+      - name: GTK4 + libadwaita
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkgconf libgtk-4-dev libadwaita-1-dev binutils
+
+      - name: cargo-about
+        run: cargo install --locked cargo-about --features cli --version "$CARGO_ABOUT_VERSION"
+
+      - name: Build the tarball
+        run: bash scripts/release-build.sh
+
+      - name: Check paths and licences
+        run: RELEASE_SKIP_BUILD=1 bash scripts/test-release-paths.sh
+
+      # Acceptance 3: the same commit built from a second checkout, in a
+      # different directory, must give byte-identical binaries. The remap
+      # flags are what make the checkout path vanish from them.
+      - name: Second checkout (different path)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: second
+          persist-credentials: false
+
+      - name: Rebuild from the second checkout and compare binaries
+        run: |
+          (cd second && RELEASE_DIST="$PWD/../dist-second" bash scripts/release-build.sh)
+          bash scripts/test-release-paths.sh --compare dist/agentcenter-*.tar.gz dist-second/agentcenter-*.tar.gz
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: agentcenter-release
+          path: dist/agentcenter-*.tar.gz
+          if-no-files-found: error
