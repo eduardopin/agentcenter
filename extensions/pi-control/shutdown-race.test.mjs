@@ -22,7 +22,7 @@ test('close() that starts between refresh() closed-check and its temp write leav
   try {
     const refreshing = endpoint.refresh({ ...identity, instance_nonce: endpoint.metadata.instance_nonce, handoff_directory });
     assert.ok(closing, 'close() was injected inside refresh()');
-    await refreshing.catch(() => {});
+    await assert.doesNotReject(refreshing, 'the racing refresh completes');
     await assert.doesNotReject(closing, 'close() must tolerate a temp file written by the racing refresh');
     await assert.rejects(lstat(directory), { code: 'ENOENT' }, 'listener directory is removed');
   } finally {
@@ -84,7 +84,7 @@ test('session_shutdown closes operations (clears the 60 s deadline timer) even w
     await started;
     assert.equal(deadlines.length, 1, 'in-flight operation armed its 60 s deadline');
     await writeFile(join(directory, 'stray'), 'x');
-    await handlers.get('session_shutdown')({}).catch(() => {});
+    await assert.rejects(handlers.get('session_shutdown')({}), { code: 'ENOTEMPTY' }, 'the listener error is still reported');
     assert.equal(deadlines[0].cleared, true, 'operations.close() ran and the deadline timer was cleared');
   } finally {
     for (const entry of deadlines) realClear(entry.handle);

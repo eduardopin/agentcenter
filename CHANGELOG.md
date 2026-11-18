@@ -56,6 +56,8 @@ pre-alpha.
 
 ### Fixed
 
+- Closing a Pi control session now waits for the manifest refresh instead
+  of failing with ENOTEMPTY and holding the process open for 60 s.
 - Handoff and Compact buttons now show on finished panes, since a Herdr
   "done" counts as idle.
 - A list Action waits for its own session's control instead of failing at
