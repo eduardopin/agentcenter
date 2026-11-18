@@ -106,6 +106,9 @@ else
 fi
 bash scripts/test-install.sh
 
+step "appstream: metainfo, .desktop, icons (scripts/test-appstream.sh)"
+bash scripts/test-appstream.sh
+
 step "hygiene: CHANGELOG, SECURITY, issue forms, dependabot"
 bash scripts/test-hygiene.sh
 
