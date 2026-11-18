@@ -38,8 +38,8 @@ fn read_request(s: &mut std::net::TcpStream) -> String {
 pub fn fake(content: &str, delay: Duration) -> (Endpoint, JoinHandle<String>) {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = l.local_addr().unwrap().port();
-    let body = json!({"choices": [{"message": {"role": "assistant", "content": content}}]})
-        .to_string();
+    let body =
+        json!({"choices": [{"message": {"role": "assistant", "content": content}}]}).to_string();
     let h = thread::spawn(move || {
         let (mut s, _) = l.accept().unwrap();
         let req = read_request(&mut s);

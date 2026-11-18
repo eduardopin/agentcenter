@@ -26,8 +26,8 @@ fn golden_path() -> PathBuf {
 fn stub(content: &str) -> (Endpoint, thread::JoinHandle<String>) {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let port = l.local_addr().unwrap().port();
-    let body = json!({"choices": [{"message": {"role": "assistant", "content": content}}]})
-        .to_string();
+    let body =
+        json!({"choices": [{"message": {"role": "assistant", "content": content}}]}).to_string();
     let h = thread::spawn(move || {
         let (mut s, _) = l.accept().unwrap();
         s.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
@@ -76,7 +76,8 @@ fn scenario(stem: &str) -> serde_json::Value {
     let (ep, h) = stub(&fallback(&fs));
     let echoed = brief(&fs, Some(&ep), t);
     let request = h.join().unwrap();
-    let (ep, _h) = stub("Nine hundred and 77 sessions are on fire; restart the machine now please.");
+    let (ep, _h) =
+        stub("Nine hundred and 77 sessions are on fire; restart the machine now please.");
     let invented = brief(&fs, Some(&ep), t);
     json!({
         "messages": messages(&fs),
@@ -107,6 +108,10 @@ fn briefing_output_is_byte_identical_on_every_scenario() {
         std::fs::write(golden_path(), &got).unwrap();
         return;
     }
-    let want = std::fs::read_to_string(golden_path()).expect("golden missing: run with BLESS_GOLDEN=1");
-    assert!(got == want, "briefing output changed against tests/fixtures/briefing_golden.json");
+    let want =
+        std::fs::read_to_string(golden_path()).expect("golden missing: run with BLESS_GOLDEN=1");
+    assert!(
+        got == want,
+        "briefing output changed against tests/fixtures/briefing_golden.json"
+    );
 }

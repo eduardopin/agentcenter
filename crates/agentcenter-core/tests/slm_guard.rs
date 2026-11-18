@@ -102,7 +102,10 @@ fn json_label_guard_cases() {
     assert_eq!(refused(g.check("warn")), "not_json");
     assert_eq!(refused(g.check(r#"{"other": "warn"}"#)), "missing_field");
     assert_eq!(refused(g.check(r#"{"state": 3}"#)), "missing_field");
-    assert_eq!(refused(g.check(r#"{"state": "boom"}"#)), "label_not_allowed");
+    assert_eq!(
+        refused(g.check(r#"{"state": "boom"}"#)),
+        "label_not_allowed"
+    );
     assert_eq!(refused(g.check("")), "empty");
 }
 
