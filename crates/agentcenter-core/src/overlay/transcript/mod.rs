@@ -93,8 +93,9 @@ pub mod tools;
 use super::{HerdrOverlay, Overlay, OverlayStatus, SessionOverlay};
 use crate::cockpit::{self, Cockpit, HandoffIndex, Loops, SpendWindow, Thresholds, Tokens};
 use crate::procfs::stat::parse_stat;
+use crate::procfs::system::start_epoch_ms;
 use crate::procfs::{ProcRoot, read_file_into};
-use crate::sampler::{READ_ALL, SamplerConfig, USER_HZ};
+use crate::sampler::{READ_ALL, SamplerConfig};
 use crate::session::Session;
 use serde::de::{DeserializeOwned, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Deserializer};
@@ -924,7 +925,7 @@ struct Inner {
     files: HashMap<Arc<Path>, FileState>,
     links: HashMap<u32, Link>,
     headers: HashMap<PathBuf, (u64, Header)>,
-    btime_ms: Option<u64>,
+    btime_secs: Option<u64>,
     buf: Vec<u8>,
     text: String,
     /// Bytes que ainda podem ser lidos neste tick.
@@ -1302,19 +1303,18 @@ impl Transcripts {
 
     /// Inicio do processo em ms desde a epoca: `btime` + campo 22 do `stat`.
     fn proc_start_ms(&self, inner: &mut Inner, pid: u32) -> Option<u64> {
-        if inner.btime_ms.is_none() {
+        if inner.btime_secs.is_none() {
             read_file_into(&self.proc.path().join("stat"), &mut inner.text).ok()?;
-            inner.btime_ms = inner
+            inner.btime_secs = inner
                 .text
                 .lines()
                 .find_map(|l| l.strip_prefix("btime "))
-                .and_then(|v| v.trim().parse::<u64>().ok())
-                .map(|s| s * 1000);
+                .and_then(|v| v.trim().parse::<u64>().ok());
         }
-        let btime = inner.btime_ms?;
+        let btime = inner.btime_secs?;
         read_file_into(&self.proc.pid_path(pid, "stat"), &mut inner.text).ok()?;
         let st = parse_stat(&inner.text).ok()?;
-        Some(btime + (st.starttime as f64 * 1000.0 / USER_HZ) as u64)
+        Some(start_epoch_ms(btime, st.starttime))
     }
 
     /// Cabecalho do arquivo, lido uma vez por inode.

@@ -16,8 +16,9 @@ usage: agentcenter-cli insights [--json] [--llm URL] [--llm-timeout-ms N]
                                 [--timeout-ms N] [--proc-root PATH]
 
 What needs attention on this machine, most urgent first: up to four findings
-from fixed rules (loops, memory pressure, full contexts, idle memory, CPU
-load, burn, cold caches) and a two-sentence briefing above them. Sessions are
+from fixed rules (loops, memory pressure, memory 95 % used, full contexts,
+handoff due, idle memory, CPU load, sessions running 8 h or more, burn, cold
+caches) and a two-sentence briefing above them. Sessions are
 sampled like `cockpit --all`: transcripts are read in full, and sampling
 stops after the timeout.
 

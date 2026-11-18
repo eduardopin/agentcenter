@@ -10,6 +10,14 @@ pub struct CpuTotals {
     /// idle + iowait.
     pub idle: u64,
     pub cores: u32,
+    /// `btime`: boot time in seconds since the Unix epoch; 0 when absent.
+    pub btime: u64,
+}
+
+/// Process start as ms since the Unix epoch: boot seconds (`btime`) plus the
+/// `starttime` field of `stat` in USER_HZ ticks. One formula for every caller.
+pub fn start_epoch_ms(btime_secs: u64, starttime_ticks: u64) -> u64 {
+    btime_secs * 1000 + (starttime_ticks as f64 * 1000.0 / crate::sampler::USER_HZ) as u64
 }
 
 pub fn parse_proc_stat(text: &str) -> Result<CpuTotals, ReadError> {
@@ -28,8 +36,8 @@ pub fn parse_proc_stat(text: &str) -> Result<CpuTotals, ReadError> {
             seen = true;
         } else if line.starts_with("cpu") {
             out.cores += 1;
-        } else if seen {
-            break;
+        } else if let Some(b) = line.strip_prefix("btime ") {
+            out.btime = b.trim().parse().unwrap_or(0);
         }
     }
     if !seen {
@@ -49,4 +57,16 @@ pub fn delayacct_enabled(root: &ProcRoot, buf: &mut String) -> bool {
     root.read_into(Path::new("sys/kernel/task_delayacct"), buf)
         .is_ok()
         && buf.trim() == "1"
+}
+
+#[cfg(test)]
+mod tests {
+    use super::start_epoch_ms;
+
+    #[test]
+    fn start_is_boot_seconds_plus_ticks_in_ms() {
+        // 250 ticks at USER_HZ 100 are 2.5 s
+        assert_eq!(start_epoch_ms(1_000, 250), 1_002_500);
+        assert_eq!(start_epoch_ms(1_000, 0), 1_000_000);
+    }
 }
