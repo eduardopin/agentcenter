@@ -592,6 +592,11 @@ fn paned_position_gives_the_maps_all_but_the_top_five_list_rows() {
         paned_position(LIST_TOP_PX + 220, PanedMode::Maps, false, None),
         220
     );
+    // One pixel shorter and the tight list takes over.
+    assert_eq!(
+        paned_position(LIST_TOP_PX + 219, PanedMode::Maps, false, None),
+        LIST_TOP_PX + 219 - LIST_TIGHT_PX
+    );
     // Detail: 65 %, still leaving the rows.
     assert_eq!(paned_position(1000, PanedMode::Detail, false, None), 650);
     assert_eq!(
