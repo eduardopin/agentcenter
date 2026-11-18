@@ -193,3 +193,46 @@ fn herdr_pane_reported_keeps_the_kind_and_pane_session_only_ids() {
         assert_eq!(h.join().unwrap(), 0);
     }
 }
+
+fn session_with(herdr: serde_json::Value) -> crate::session::Session {
+    serde_json::from_value(serde_json::json!({
+        "agent":"pi","role":"agent","pid":42,"starttime":4242,"cmdline":null,"cwd":"/x",
+        "procs":1,"cpu_pct":null,"cpu_share_pct":null,"pss_bytes":null,"swap_pss_bytes":null,
+        "read_bps":null,"write_bps":null,"stall_pct":null,"threads_d":null,"io_bound":false,
+        "partial":[],"processes":[],"overlay":{"herdr":herdr}
+    }))
+    .unwrap()
+}
+/// Born green: `Target::from_session` already carries the kernel identity and
+/// the pane coordinates, and refuses a session missing any of them.
+#[test]
+fn herdr_target_from_session_needs_identity_and_all_pane_coordinates() {
+    let full = serde_json::json!({"workspace_id":"w1","tab_id":"w1:t1","pane_id":"w1:p1"});
+    assert_eq!(
+        Target::from_session(&session_with(full.clone())),
+        Some(Target {
+            pid: 42,
+            starttime: 4242,
+            adapter: "pi".into(),
+            workspace_id: "w1".into(),
+            tab_id: "w1:t1".into(),
+            pane_id: "w1:p1".into(),
+        })
+    );
+    for missing in ["workspace_id", "tab_id", "pane_id"] {
+        let mut partial = full.clone();
+        partial.as_object_mut().unwrap().remove(missing);
+        assert_eq!(
+            Target::from_session(&session_with(partial)),
+            None,
+            "{missing}"
+        );
+    }
+    let mut s = session_with(full.clone());
+    s.starttime = None;
+    assert_eq!(Target::from_session(&s), None, "no starttime");
+    // Identity back, so only the missing overlay can answer None.
+    s.starttime = Some(4242);
+    s.overlay.as_mut().unwrap().herdr = None;
+    assert_eq!(Target::from_session(&s), None, "no herdr overlay");
+}

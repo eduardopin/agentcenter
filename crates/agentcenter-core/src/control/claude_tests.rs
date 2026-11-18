@@ -671,3 +671,87 @@ fn bash_call_before_the_operation_mark_is_not_a_pending_dialog() {
     let (_, pending) = scan(Action::Handoff, &t, 0, s, SID, OP, &roots, h.uid).unwrap();
     assert!(!pending);
 }
+
+/// `Env::new` reads `XDG_STATE_HOME` from the process. The variable is set
+/// only on a child run of this test binary (setting it here would race the
+/// other tests' reads), which re-enters [`env_new_probe`].
+#[test]
+fn env_new_reads_xdg_state_home_from_the_process() {
+    let exe = std::env::current_exe().unwrap();
+    for (state, expected) in [
+        (Some("/probe/state"), "/probe/state/agentcenter/handoffs"),
+        (
+            Some("rel/state"),
+            "/probe/home/.local/state/agentcenter/handoffs",
+        ),
+        (None, "/probe/home/.local/state/agentcenter/handoffs"),
+    ] {
+        let mut cmd = std::process::Command::new(&exe);
+        cmd.args([
+            "--exact",
+            "control::claude::tests::env_new_probe",
+            "--nocapture",
+        ])
+        .env("AC_ENV_NEW_PROBE", expected)
+        .env_remove("XDG_STATE_HOME");
+        if let Some(s) = state {
+            cmd.env("XDG_STATE_HOME", s);
+        }
+        let out = cmd.output().unwrap();
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(out.status.success(), "{state:?}: {text}");
+        assert!(text.contains("1 passed"), "the probe did not run: {text}");
+    }
+}
+#[test]
+fn env_new_probe() {
+    let Some(expected) = std::env::var_os("AC_ENV_NEW_PROBE") else {
+        return;
+    };
+    let env = Env::new(PathBuf::from("/probe/home"));
+    assert_eq!(env.handoffs, Path::new(&expected));
+}
+
+/// A handoffs directory the pickup argument cannot carry (here a space) is
+/// refused when the pickup is requested, before the Handoff turn is typed, not
+/// after the copy was made. The Herdr socket does not exist: any attempt to
+/// send would end as a transport failure, never as this rejection.
+#[test]
+fn pickup_with_an_unsafe_copy_path_is_rejected_before_the_handoff_turn() {
+    let env = Env {
+        home: PathBuf::from("/h"),
+        uid: 0,
+        handoffs: PathBuf::from("/state with space/agentcenter/handoffs"),
+        skill: HANDOFF_SKILLS[0],
+    };
+    let mut c = Controller::new(
+        herdr::Endpoint {
+            socket: PathBuf::from("/nonexistent/herdr.sock"),
+            server_pid: 1,
+            server_starttime: 1,
+        },
+        env,
+    );
+    let subject = Subject {
+        target: herdr::Target {
+            pid: 1,
+            starttime: 1,
+            adapter: "claude".into(),
+            workspace_id: "w1".into(),
+            tab_id: "w1:t1".into(),
+            pane_id: "w1:p1".into(),
+        },
+        session_id: SID.into(),
+        cwd: None,
+    };
+    let p = c.pickup_start(OP, &subject);
+    assert_eq!(
+        (p.state, p.stage, p.code),
+        (
+            State::Rejected,
+            Stage::HandoffRunning,
+            code::UNSAFE_COPY_PATH
+        ),
+        "{p:?}"
+    );
+}

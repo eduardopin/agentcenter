@@ -660,6 +660,13 @@ impl Controller {
                 return reject(code::CAPACITY);
             }
         }
+        // The copy's path is known now; one the pickup argument cannot carry
+        // would only fail after the Handoff turn had been typed.
+        if session_id_valid(&s.session_id)
+            && !pickup_arg_safe(&copy_path(&self.env, &s.session_id, operation_id))
+        {
+            return reject(code::UNSAFE_COPY_PATH);
+        }
         let o = self.start(operation_id, Action::Handoff, s);
         let old_file = self
             .ops
@@ -1199,6 +1206,17 @@ pub(crate) fn copy_intact(copy: &Artifact, uid: u32) -> bool {
         Ok((d, n)) if n == m.len() && n == copy.size && hex(&d) == copy.sha256)
 }
 
+/// File name of a pickup's copy; the one place that spells it.
+fn copy_name(session_id: &str, operation_id: &str) -> String {
+    format!("s{}-{operation_id}.md", hex(session_id.as_bytes()))
+}
+
+/// Full path of a pickup's copy, shared by the early argument check and
+/// `seal_copy`, so both always look at the same file.
+fn copy_path(env: &Env, session_id: &str, operation_id: &str) -> PathBuf {
+    env.handoffs.join(copy_name(session_id, operation_id))
+}
+
 /// Private read-only copy of the acknowledged handoff: the original is read
 /// once, those very bytes are checked against the ack's size and sha256 and
 /// written 0400 under `env.handoffs` (0700, no symlink on its path) as
@@ -1242,8 +1260,8 @@ pub(crate) fn seal_copy(
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
             .map_err(|_| code::COPY_FAILED)?;
     }
-    let name = format!("s{}-{operation_id}.md", hex(session_id.as_bytes()));
-    let path = dir.join(&name);
+    let name = copy_name(session_id, operation_id);
+    let path = copy_path(env, session_id, operation_id);
     let tmp = dir.join(format!(".{name}.tmp"));
     let mut out = OpenOptions::new()
         .write(true)

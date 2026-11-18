@@ -127,9 +127,21 @@ need no Pi SDK and no GTK display (the glob above also runs them):
 PI_OFFLINE=1 node --test crates/agentcenter/tests/pi-controls-negatives.test.mjs
 ```
 
-An end-to-end run with the real `claude` binary in an isolated Herdr (temporary
-socket and `HOME`, `ANTHROPIC_BASE_URL` pointing at a local stub) is not part
-of the suite yet.
+The control paths also have end-to-end drivers against a real agent inside an
+isolated Herdr (temporary socket and `HOME`, a local stub as the only model
+API, a fake key, never your own `HOME` or Herdr). They are `#[ignore]` tests,
+so `cargo test` skips them; each runs only through its script, which builds the
+environment and exports the `AC_E2E_*` variables:
+
+```sh
+bash scripts/e2e-claude-herdr.sh   # Claude Code: CC4 Handoff and Compact, CC6 pickup
+bash scripts/e2e-pi-herdr.sh       # Pi: CC5 handoff-pickup
+```
+
+The Claude script needs `claude` and `herdr` on `PATH`, python3 and cargo; the
+Pi script needs `herdr`, node, jq, python3, cargo and the prepared private Pi
+runtime. Set `E2E_FILTER=<test name>` to run one test and `E2E_KEEP=1` to keep
+the temporary root. Neither script is part of `scripts/ci.sh`.
 
 To install your build for daily use, see [Install details](README.md#install-details):
 `bash install.sh` from the checkout.
