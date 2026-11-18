@@ -2780,6 +2780,7 @@ mod tests {
                 (Group::Blocked, Shape::Triangle),
                 (Group::Idle, Shape::Ring),
                 (Group::Multiplexer, Shape::Grid),
+                (Group::Unknown, Shape::RingDot),
             ] {
                 let mut t = text.clone();
                 t.group = group.rank();

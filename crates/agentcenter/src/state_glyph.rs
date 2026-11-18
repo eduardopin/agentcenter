@@ -1,5 +1,6 @@
 //! State glyph shared by the list row and the detail header: busy disc,
-//! waiting triangle, idle ring, multiplexer 2x2 grid. Drawn in the node's CSS
+//! waiting triangle, idle ring, multiplexer 2x2 grid, unknown ring with a
+//! centre dot. Drawn in the node's CSS
 //! `color`, so the tone class (`glyph.busy|waiting|idle|mux|unknown`) picks the
 //! token and the theme swaps it.
 
@@ -16,18 +17,20 @@ pub enum Shape {
     Triangle,
     #[default]
     Ring,
+    /// Ring with a centre dot: unknown differs from idle by shape, not colour.
+    RingDot,
     Grid,
 }
 
 /// Glyph shape and tone class (the CSS class that picks the fill token) of a
-/// group rank; an unknown state is a ring too.
+/// group rank; an unknown state is a ring with a dot.
 pub fn glyph(group: u32) -> (Shape, &'static str) {
     match Group::from_rank(group) {
         Group::Busy => (Shape::Disc, "busy"),
         Group::Blocked => (Shape::Triangle, "waiting"),
         Group::Idle => (Shape::Ring, "idle"),
         Group::Multiplexer => (Shape::Grid, "mux"),
-        Group::Unknown => (Shape::Ring, "unknown"),
+        Group::Unknown => (Shape::RingDot, "unknown"),
     }
 }
 
@@ -85,11 +88,17 @@ mod imp {
                     path.add_circle(&center, s / 2.0 - 1.0);
                     snapshot.append_fill(&path.to_path(), gsk::FillRule::Winding, &color);
                 }
-                Shape::Ring => {
+                Shape::Ring | Shape::RingDot => {
                     // 1.5 px reads as a ring at 12 px; the 16 px header needs 2.
                     let stroke = if s >= 16.0 { 2.0 } else { 1.5 };
                     path.add_circle(&center, s / 2.0 - 1.75);
                     snapshot.append_stroke(&path.to_path(), &gsk::Stroke::new(stroke), &color);
+                    if self.shape.get() == Shape::RingDot {
+                        // At 12 px the ring leaves 3.5 px free inside and the dot is 1.75 px: a 1.75 px gap.
+                        let dot = gsk::PathBuilder::new();
+                        dot.add_circle(&center, s / 8.0 + 0.25);
+                        snapshot.append_fill(&dot.to_path(), gsk::FillRule::Winding, &color);
+                    }
                 }
                 Shape::Triangle => {
                     path.move_to(x0 + s / 2.0, y0 + 0.5);
