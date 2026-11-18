@@ -93,6 +93,12 @@ arming would destroy the draft. The refusal arms nothing and leaves the editor
 and the registry untouched; the client may retry once the editor is empty. It
 is skipped when Pi runs without a UI.
 
+Two gaps stay open. Pi has no probe for an open autocomplete, so a menu opened
+with Tab on an empty editor is not seen and the arm goes through. The check
+runs when the pickup is armed, and the command is typed later: a draft started
+in between joins the command. A draft on a busy Pi is reported as
+`editor_draft`, not `busy`; both arm nothing.
+
 ## Trust and timing
 
 The socket is 0600 beneath 0700 directories. Node relies on kernel DAC plus
