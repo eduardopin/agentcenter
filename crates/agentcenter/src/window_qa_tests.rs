@@ -2372,6 +2372,53 @@ fn at_360x640_the_list_keeps_2_whole_rows() {
     });
 }
 
+/// The list's scrolled viewport (the widget that holds the session rows) and
+/// the height of one row, both read from the real widgets.
+fn list_viewport_and_row(window: &Window) -> (gtk::graphene::Rect, f32) {
+    let rows: Vec<gtk::Widget> = mapped_with_class(window, "session-row");
+    let row = rows.first().expect("the list has a mapped session row");
+    let scrolled = row
+        .ancestor(gtk::ScrolledWindow::static_type())
+        .expect("the rows sit in a scroller");
+    (bounds_in(&scrolled, &window.window), row.height() as f32)
+}
+
+/// The list keeps `rows` whole session rows at `w` x `h` with tipico-40, and
+/// its viewport is at least that many row heights tall. Owner, 2026-11-16:
+/// 3 at 360 x 640, 5 at 640 x 640.
+fn assert_list_min_rows(id: &'static str, w: i32, h: i32, rows: usize) {
+    gtk::test_synced(move || {
+        let _font = DesktopLook::set();
+        let window = open(id, w, h, &tipico());
+        settle_paned(&window);
+        settle_until(|| whole_list_rows(&window) >= rows);
+        let whole = whole_list_rows(&window);
+        let (viewport, row) = list_viewport_and_row(&window);
+        assert!(
+            viewport.height() >= rows as f32 * row,
+            "{w} x {h}: the list viewport is {} px, {rows} rows of {row} px need {}",
+            viewport.height(),
+            rows as f32 * row
+        );
+        assert!(
+            whole >= rows,
+            "{w} x {h}: the list shows {whole} whole session rows, {rows} are required"
+        );
+        window.window.close();
+        settle();
+    });
+}
+
+#[test]
+fn at_360x640_the_list_shows_3_whole_rows() {
+    assert_list_min_rows("io.agentcenter.ListMinRows360", 360, 640, 3);
+}
+
+#[test]
+fn at_640x640_the_list_shows_5_whole_rows() {
+    assert_list_min_rows("io.agentcenter.ListMinRows640", 640, 640, 5);
+}
+
 /// tipico-40 with every session that reports a state waiting for its user:
 /// a chip each, more than a 360 x 640 top has room for.
 fn all_waiting() -> Snapshot {
