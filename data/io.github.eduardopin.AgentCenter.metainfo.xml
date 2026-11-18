@@ -59,7 +59,7 @@
   <screenshots>
     <screenshot type="default">
       <image type="source">https://raw.githubusercontent.com/eduardopin/agentcenter/main/site/img/app-sessions-light.webp</image>
-      <caption>One row per session, with CPU, memory, swap, disk and stall</caption>
+      <caption>Machine CPU, RAM, swap and memory stall on top, one row per session below</caption>
     </screenshot>
     <screenshot>
       <image type="source">https://raw.githubusercontent.com/eduardopin/agentcenter/main/site/img/app-detail-dark.webp</image>

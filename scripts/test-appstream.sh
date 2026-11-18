@@ -7,7 +7,8 @@
 # allowed hints below; desktop-file-validate must exit 0; icons exist at 16, 32,
 # 48, 128 and 256 px (PNG, with the size the directory says) and scalable (SVG);
 # the metainfo has a 1.0.0 release, an OARS rating and https screenshots.
-# A missing validator is skipped with a printed reason (CI installs both).
+# A missing validator is skipped with a printed reason on a workstation; under CI
+# (CI=true) it fails, so the check cannot pass by being skipped.
 # Called by scripts/ci.sh.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -18,6 +19,7 @@ desktop="data/$APP_ID.desktop"
 icons="data/icons/hicolor"
 
 fail() { echo "test-appstream: FAIL: $*" >&2; exit 1; }
+skip() { [[ ${CI:-} == true ]] && fail "$* (CI must install it)"; echo "skip: $*"; }
 ok() { echo "ok: $*"; }
 
 [[ -f $meta ]] || fail "missing $meta"
@@ -33,14 +35,14 @@ if command -v appstreamcli >/dev/null 2>&1; then
     [[ -z $extra ]] || { echo "$extra" >&2; fail "appstreamcli reported findings"; }
     ok "appstreamcli validate --pedantic"
 else
-    echo "skip: appstreamcli not found (apt install appstream)"
+    skip "appstreamcli not found (apt install appstream)"
 fi
 
 if command -v desktop-file-validate >/dev/null 2>&1; then
     desktop-file-validate "$desktop" || fail "desktop-file-validate"
     ok "desktop-file-validate"
 else
-    echo "skip: desktop-file-validate not found (apt install desktop-file-utils)"
+    skip "desktop-file-validate not found (apt install desktop-file-utils)"
 fi
 
 for size in 16 32 48 128 256; do
