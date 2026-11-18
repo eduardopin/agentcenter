@@ -307,9 +307,11 @@ fn click_with_editor_content(op: &str, text: &str) {
         Err(e) => format!("{e:?}"),
     };
     println!("e2e: click with editor content {text:?}: {armed}");
+    // The extension refuses the arm while the editor holds text, so nothing is
+    // armed and nothing is typed into the pane.
     assert!(
-        !matches!(r, Err(PickupError::Unavailable(_))),
-        "the click never reached the arm: {armed}"
+        matches!(&r, Err(PickupError::Refused(reply)) if reply.code == "editor_draft"),
+        "the arm was not refused with editor_draft: {armed}"
     );
     // Give a diverted prompt time to reach the stub.
     std::thread::sleep(Duration::from_secs(4));
@@ -336,10 +338,13 @@ fn click_with_editor_content(op: &str, text: &str) {
         let c = pi::exchange(&now.endpoint, &request.cancel(), TIMEOUT);
         println!("e2e: cancel {:?}", c.map(|c| (c.state, c.code)));
     }
+    // The owner's draft is still in the editor, exactly as typed.
+    let on_screen = screen();
     raw(
         "pane.send_keys",
         json!({"pane_id": var("AC_E2E_PANE"), "keys": ["ctrl+u"]}),
     );
+    assert!(on_screen.contains(text), "the draft is gone: {on_screen}");
     assert!(
         diverted.is_empty(),
         "the pickup command reached the model as a prompt: {diverted:?}"

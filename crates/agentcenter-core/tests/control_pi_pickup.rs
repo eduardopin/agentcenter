@@ -41,6 +41,9 @@ struct Pi {
     code: &'static str,
     state: &'static str,
     requests: Vec<Value>,
+    /// What the owner has typed in the Pi editor; the extension refuses to arm
+    /// while it is not empty (a draft, or `/` with the autocomplete open).
+    editor: String,
 }
 /// What the fake Herdr pane reports, and the prompts it received.
 struct Pane {
@@ -199,6 +202,7 @@ fn world() -> World {
         code: "",
         state: "",
         requests: Vec::new(),
+        editor: String::new(),
     }));
     manifest(&dir, &pi.lock().unwrap());
     let pane = Arc::new(Mutex::new(Pane {
@@ -225,6 +229,10 @@ fn world() -> World {
                 "state":"rejected","code":"unauthorized"}));
         }
         match q["action"].as_str().unwrap() {
+            "handoff_pickup" if !pi.editor.is_empty() => {
+                return Some(json!({"protocol_version":3,"operation_id":op,
+                    "state":"rejected","code":"editor_draft","metadata":metadata(&pi)}));
+            }
             "handoff_pickup" => {
                 pi.record = Some(json!({"op":op,"stage":"handoff_running",
                     "old_session":{"session_id":pi.session_id,"session_file":pi.session_file}}));
@@ -511,4 +519,33 @@ fn pi_pickup_without_herdr_integration_is_unavailable_and_arms_nothing() {
     );
     assert!(w.actions().is_empty());
     assert!(w.prompts().is_empty());
+}
+
+#[test]
+fn pi_pickup_with_a_draft_in_the_editor_is_refused_and_types_nothing() {
+    let w = world();
+    // `/` is what an open slash autocomplete looks like to the extension too.
+    for draft in ["half-written prompt", "/", "/agent"] {
+        w.pi.lock().unwrap().editor = draft.into();
+        let e = w.endpoint();
+        let Err(PickupError::Refused(reply)) = w.click(&e) else {
+            panic!("{draft:?}: not refused");
+        };
+        assert_eq!(
+            (reply.state, reply.code.as_str()),
+            (State::Rejected, "editor_draft"),
+            "{draft:?}"
+        );
+        assert!(reply.pickup.is_none());
+        // Nothing reached the pane: not the command, not a key.
+        assert_eq!(w.prompts(), Vec::<String>::new(), "{draft:?}");
+        assert_eq!(w.pi.lock().unwrap().editor, draft, "the draft is untouched");
+    }
+    // Only the arm was ever sent; no cancel is needed because nothing armed.
+    assert_eq!(w.actions(), ["handoff_pickup"; 3]);
+    // The refusal does not stick: with the editor empty the same click arms and types once.
+    w.pi.lock().unwrap().editor.clear();
+    let e = w.endpoint();
+    w.click(&e).unwrap();
+    assert_eq!(w.prompts(), [format!("/agentcenter-pickup {OP}")]);
 }
