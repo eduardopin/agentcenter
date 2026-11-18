@@ -41,8 +41,8 @@ listview.session-rack .row-name {
   font-weight: 400;
 }
 
-/* Rank in the current order, tabular so #9 and #10 line up. 66% like
- * --dim-opacity: 60% measured 4.32:1 on the selected row (tests/contrast.rs). */
+/* Rank in the current order, tabular so #9 and #10 line up. 0.66 because 0.6
+ * measured 4.32:1 on the selected row; tests/contrast.rs reads this literal. */
 listview.session-rack .row-rank {
   font-variant-numeric: tabular-nums;
   opacity: 0.66;

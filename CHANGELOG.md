@@ -39,6 +39,8 @@ pre-alpha.
 
 ### Changed
 
+- The unknown session state is drawn as a ring with a centre dot, so it no longer
+  looks like idle by shape; only the colour told them apart before.
 - AgentCenter is now licensed AGPL-3.0-or-later, with section 7 terms in
   NOTICE (keep the author credit, mark modified versions, no trademark rights)
   and TRADEMARKS.md for the name, app id and icon. Revisions before 2026-11-11

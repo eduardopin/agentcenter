@@ -251,10 +251,10 @@ fn token_failures(env: &Env) -> (usize, Vec<String>) {
         } else if n.starts_with("--ac-mark-") {
             bgs.push("--ac-track");
             pairs.extend(bgs.iter().map(|s| (n.into(), (*s).into(), MARK_MIN, c)));
-        } else if let Some(rest) = n.strip_prefix("--ac-on-") {
-            if let Some((base, _)) = rest.rsplit_once('-') {
-                pairs.push((n.into(), format!("--ac-{base}"), TEXT_MIN, c));
-            }
+        } else if let Some(rest) = n.strip_prefix("--ac-on-")
+            && let Some((base, _)) = rest.rsplit_once('-')
+        {
+            pairs.push((n.into(), format!("--ac-{base}"), TEXT_MIN, c));
         }
     }
     if let (Some(dim), Some(&(r, g, b, _))) =
@@ -468,7 +468,7 @@ fn no_unmeasured_literal_colour_in_any_stylesheet() {
 /// The detector itself: it finds hex, functions and colour names.
 #[test]
 fn the_literal_scan_finds_every_colour_form() {
-    let css = "a { color: #abc; background: rgba(0,0,0,.5); border-color: tomato; fill: alpha(red, .5); outline-color: var(--x); color: currentColor; }\n@define-color n #123456;";
+    let css = "a { color: #abc; background: rgba(0,0,0,.5); border-color: tomato; fill: alpha(red, .5); outline-color: var(--x); color: currentColor; outline: 2px solid #f00; border-top-color: navy; outline: 1px solid var(--y); }\n@define-color n #123456;";
     let got: Vec<String> = literal_colours(css).into_iter().map(|(_, v)| v).collect();
     assert_eq!(
         got,
@@ -477,6 +477,8 @@ fn the_literal_scan_finds_every_colour_form() {
             "rgba(0,0,0,.5)",
             "tomato",
             "alpha(red, .5)",
+            "#f00",
+            "navy",
             "#123456"
         ]
     );
@@ -486,18 +488,40 @@ fn the_literal_scan_finds_every_colour_form() {
 /// colour properties and `@define-color`; a `var()`, `inherit`, `none`,
 /// `transparent` or `currentColor` is not a literal.
 fn literal_colours(css: &str) -> Vec<(String, String)> {
-    const PROPS: [&str; 11] = [
+    const PROPS: [&str; 21] = [
         "color",
         "background",
         "background-color",
+        "background-image",
         "border-color",
+        "border-top-color",
+        "border-right-color",
+        "border-bottom-color",
+        "border-left-color",
         "outline-color",
+        "text-decoration-color",
         "fill",
         "stroke",
         "caret-color",
         "text-shadow",
         "box-shadow",
+        "-gtk-icon-shadow",
+        "-gtk-icon-palette",
         "border",
+        "outline",
+        "text-decoration",
+    ];
+    // Shorthands mix a colour with keywords (`1px solid`), so only a hex or a
+    // colour function counts there, never a bare word.
+    const SHORTHAND: [&str; 8] = [
+        "border",
+        "outline",
+        "box-shadow",
+        "text-shadow",
+        "-gtk-icon-shadow",
+        "-gtk-icon-palette",
+        "text-decoration",
+        "background-image",
     ];
     const NOT: [&str; 6] = [
         "inherit",
@@ -555,9 +579,7 @@ fn literal_colours(css: &str) -> Vec<(String, String)> {
                     && !derived;
                 let is_literal = p.starts_with('#')
                     || func
-                    || (k != "border"
-                        && k != "box-shadow"
-                        && k != "text-shadow"
+                    || (!SHORTHAND.contains(&k)
                         && !NOT.contains(&l.as_str())
                         && !p.starts_with('@')
                         && !p.starts_with("var(")
