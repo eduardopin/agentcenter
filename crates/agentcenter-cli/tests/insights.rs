@@ -276,7 +276,9 @@ fn json_lists_the_new_watch_rules_after_the_existing_ones_in_score_order() {
     // 95.0 % of memory used, and an agent that started 10 s after the epoch
     w.proc.set_meminfo(1_000_000, 50_000, 0, 0).unwrap();
     w.proc
-        .add(&agentcenter_core::fixture::FakeProcess::new(20, 1, "claude"))
+        .add(&agentcenter_core::fixture::FakeProcess::new(
+            20, 1, "claude",
+        ))
         .unwrap();
     let stat = std::fs::read_to_string(w.proc.root().join("stat")).unwrap();
     std::fs::write(

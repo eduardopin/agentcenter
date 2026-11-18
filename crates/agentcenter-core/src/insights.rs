@@ -132,9 +132,7 @@ fn handoff_due(s: &Session, now_ms: u64) -> bool {
         return false;
     };
     // The handoff is newer when it is younger than the session.
-    let newer = c
-        .handoff_age_min
-        .is_some_and(|m| m * 60_000.0 < age as f64);
+    let newer = c.handoff_age_min.is_some_and(|m| m * 60_000.0 < age as f64);
     ctx_pct(s) >= 75.0 && !newer
 }
 
