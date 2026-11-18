@@ -269,3 +269,30 @@ fn help_states_the_model_boundaries_and_the_usage_lists_the_command() {
         .unwrap();
     assert_eq!(out.status.code(), Some(2));
 }
+
+#[test]
+fn json_lists_the_new_watch_rules_after_the_existing_ones_in_score_order() {
+    let w = world();
+    // 95.0 % of memory used, and an agent that started 10 s after the epoch
+    w.proc.set_meminfo(1_000_000, 50_000, 0, 0).unwrap();
+    w.proc
+        .add(&agentcenter_core::fixture::FakeProcess::new(20, 1, "claude"))
+        .unwrap();
+    let stat = std::fs::read_to_string(w.proc.root().join("stat")).unwrap();
+    std::fs::write(
+        w.proc.root().join("stat"),
+        stat.replace("btime 0", "btime 1"),
+    )
+    .unwrap();
+    let (out, _) = w.cli(&["--json"], &[]);
+    assert!(out.status.success(), "{}", stderr(&out));
+    let v = json_of(&out);
+    assert_eq!(v["schema_version"], 1);
+    let ids: Vec<&str> = v["findings"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["memory_95", "memory_pressure", "age_8h"], "{v}");
+}

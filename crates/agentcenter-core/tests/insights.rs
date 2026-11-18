@@ -441,3 +441,152 @@ fn label_is_capped_and_falls_back_to_the_agent() {
         fs[0].text
     );
 }
+
+const H: u64 = 3_600_000;
+const NOW: u64 = 100 * H;
+
+/// `snap` with a real clock, so session age is `NOW - started_at_ms`.
+fn snap_now(machine: Value, sessions: Vec<Value>) -> Snapshot {
+    serde_json::from_value(json!({
+        "schema_version": 5, "taken_at_ms": NOW, "interval_ms": 0,
+        "machine": machine, "sessions": sessions
+    }))
+    .unwrap()
+}
+
+fn started(mut s: Value, age_ms: u64) -> Value {
+    s["started_at_ms"] = json!(NOW - age_ms);
+    s
+}
+
+fn owned(v: &[Finding]) -> Vec<String> {
+    ids(v).iter().map(|s| s.to_string()).collect()
+}
+
+#[test]
+fn age_8h_fires_at_exactly_eight_hours_and_not_a_minute_before() {
+    let at = |age: u64| {
+        let s = started(session(5, "/p/a", GB, Value::Null), age);
+        owned(&findings(&snap_now(machine(), vec![s])))
+    };
+    assert_eq!(at(8 * H), ["age_8h"]);
+    assert_eq!(at(8 * H - 60_000), ["all_clear"]);
+}
+
+#[test]
+fn age_8h_names_the_oldest_session_pid_and_ignores_unknown_start() {
+    let old = started(session(41, "/p/old", GB, Value::Null), 20 * H);
+    let older = started(session(42, "/p/older", GB, Value::Null), 30 * H);
+    let unknown = session(43, "/p/unknown", GB, Value::Null);
+    let fs = findings(&snap_now(machine(), vec![old, unknown, older]));
+    assert_eq!(ids(&fs), ["age_8h"]);
+    assert!(fs[0].text.contains("older (pid 42)"), "{}", fs[0].text);
+    assert!(fs[0].must.contains(&"42".to_string()), "{:?}", fs[0].must);
+    assert_eq!(fs[0].severity, "medium");
+}
+
+#[test]
+fn memory_95_fires_once_at_95_percent_used_and_not_at_94_9() {
+    let at = |avail: u64, n: usize| {
+        let mut m = machine();
+        m["mem_total_bytes"] = json!(1000 * GB);
+        m["mem_available_bytes"] = json!(avail * GB);
+        let s = (0..n)
+            .map(|i| session(1 + i as u32, "/p/a", GB, Value::Null))
+            .collect();
+        findings(&snap(m, s))
+    };
+    // 95.0 % used: 50 of 1000 available
+    let fs = at(50, 2);
+    assert_eq!(owned(&fs), ["memory_95", "memory_pressure"]);
+    assert_eq!(fs.iter().filter(|f| f.id == "memory_95").count(), 1);
+    assert_eq!(fs[0].severity, "high");
+    // 94.9 % used: only the older 15 % rule
+    assert_eq!(owned(&at(51, 2)), ["memory_pressure"]);
+}
+
+#[test]
+fn memory_95_does_not_fire_without_a_memory_total() {
+    let mut m = machine();
+    m["mem_total_bytes"] = Value::Null;
+    m["mem_available_bytes"] = Value::Null;
+    assert_eq!(owned(&findings(&snap(m, vec![]))), ["all_clear"]);
+}
+
+fn full_session(pid: u32, ctx: f64, age: u64, handoff_age_min: Value) -> Value {
+    started(
+        session(
+            pid,
+            "/p/a",
+            GB,
+            overlay(
+                json!({ "context_pct": ctx }),
+                json!({ "handoff_age_min": handoff_age_min }),
+            ),
+        ),
+        age,
+    )
+}
+
+#[test]
+fn handoff_due_when_no_handoff_is_newer_than_the_session_start() {
+    // session 3 h old (180 min); handoff_age_min is the handoff's age now
+    let at = |ctx: f64, h: Value| {
+        owned(&findings(&snap_now(
+            machine(),
+            vec![full_session(7, ctx, 3 * H, h)],
+        )))
+    };
+    assert_eq!(at(75.0, Value::Null), ["handoff_due", "context_full"]);
+    // handoff older than the session start (181 min ago): still due
+    assert_eq!(at(75.0, json!(181.0)), ["handoff_due", "context_full"]);
+    // handoff written after the session started (179 min ago): none
+    assert_eq!(at(75.0, json!(179.0)), ["context_full"]);
+    // below 75 % nothing is due
+    assert_eq!(at(74.9, Value::Null), ["all_clear"]);
+}
+
+#[test]
+fn handoff_due_needs_a_known_start_and_a_cockpit() {
+    let no_start = session(
+        7,
+        "/p/a",
+        GB,
+        overlay(json!({ "context_pct": 80.0 }), json!({})),
+    );
+    let no_cockpit = started(
+        session(8, "/p/b", GB, json!({ "context_pct": 80.0 })),
+        3 * H,
+    );
+    let fs = findings(&snap_now(machine(), vec![no_start, no_cockpit]));
+    assert_eq!(ids(&fs), ["context_full"]);
+}
+
+#[test]
+fn handoff_due_text_names_the_session_and_keeps_the_pid() {
+    let fs = findings(&snap_now(
+        machine(),
+        vec![full_session(7, 82.0, 3 * H, Value::Null)],
+    ));
+    assert_eq!(fs[0].id, "handoff_due");
+    assert_eq!(fs[0].severity, "high");
+    assert!(fs[0].text.contains("a (pid 7)"), "{}", fs[0].text);
+    assert!(fs[0].must.contains(&"7".to_string()), "{:?}", fs[0].must);
+}
+
+#[test]
+fn new_rules_keep_the_cap_of_four_most_urgent_first() {
+    let mut m = machine();
+    m["mem_available_bytes"] = json!(GB / 2); // 3.1 % available
+    let mut loopy = full_session(10, 80.0, 9 * H, Value::Null);
+    loopy["overlay"]["cockpit"]["max_streak"] = json!(6);
+    let fs = findings(&snap_now(m, vec![loopy]));
+    // loop 100, memory_95 > memory_pressure 90, handoff_due before context_full 80;
+    // context_full and age_8h fall off the cap
+    assert_eq!(
+        owned(&fs),
+        ["loop", "memory_95", "memory_pressure", "handoff_due"]
+    );
+    let scores: Vec<u32> = fs.iter().map(|f| f.score).collect();
+    assert!(scores.windows(2).all(|w| w[0] >= w[1]), "{scores:?}");
+}
