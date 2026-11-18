@@ -540,6 +540,8 @@ fn handoff_due_when_no_handoff_is_newer_than_the_session_start() {
     assert_eq!(at(75.0, Value::Null), ["handoff_due", "context_full"]);
     // handoff older than the session start (181 min ago): still due
     assert_eq!(at(75.0, json!(181.0)), ["handoff_due", "context_full"]);
+    // handoff written at the very start (180 min ago) is not newer: still due
+    assert_eq!(at(75.0, json!(180.0)), ["handoff_due", "context_full"]);
     // handoff written after the session started (179 min ago): none
     assert_eq!(at(75.0, json!(179.0)), ["context_full"]);
     // below 75 % nothing is due
