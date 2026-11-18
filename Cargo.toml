@@ -15,3 +15,6 @@ agentcenter-core = { path = "crates/agentcenter-core" }
 [profile.release]
 lto = "thin"
 codegen-units = 4
+# Symbols and debug info out of the shipped binaries; path remapping is in
+# scripts/release-build.sh because the prefixes depend on the build machine.
+strip = "symbols"

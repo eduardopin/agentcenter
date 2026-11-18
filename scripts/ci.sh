@@ -109,6 +109,9 @@ bash scripts/test-install.sh
 step "hygiene: CHANGELOG, SECURITY, issue forms, dependabot"
 bash scripts/test-hygiene.sh
 
+step "release config: remap flags, cargo-about config, release workflow"
+bash scripts/test-release-paths.sh --static
+
 step "node --test: pi-control suites that need no Pi SDK"
 # The SDK suites need PI_SDK_DIR and stay out of CI; these three run offline.
 command -v node >/dev/null 2>&1 || { echo "ci: node not found (install nodejs)" >&2; exit 2; }
