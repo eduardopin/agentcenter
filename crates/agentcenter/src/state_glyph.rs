@@ -94,7 +94,7 @@ mod imp {
                     path.add_circle(&center, s / 2.0 - 1.75);
                     snapshot.append_stroke(&path.to_path(), &gsk::Stroke::new(stroke), &color);
                     if self.shape.get() == Shape::RingDot {
-                        // Inner free radius is about 3 px at 12 px; a 1.25 px dot leaves a gap.
+                        // At 12 px the ring leaves 3.5 px free inside and the dot is 1.75 px: a 1.75 px gap.
                         let dot = gsk::PathBuilder::new();
                         dot.add_circle(&center, s / 8.0 + 0.25);
                         snapshot.append_fill(&dot.to_path(), gsk::FillRule::Winding, &color);
