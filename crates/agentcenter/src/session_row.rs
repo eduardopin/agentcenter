@@ -1260,7 +1260,7 @@ mod tests {
         assert_eq!(of(Group::Blocked), (Shape::Triangle, "waiting"));
         assert_eq!(of(Group::Idle), (Shape::Ring, "idle"));
         assert_eq!(of(Group::Multiplexer), (Shape::Grid, "mux"));
-        assert_eq!(of(Group::Unknown), (Shape::Ring, "unknown"));
+        assert_eq!(of(Group::Unknown), (Shape::RingDot, "unknown"));
     }
 
     #[test]
