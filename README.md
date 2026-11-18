@@ -34,7 +34,7 @@
   </picture>
 </p>
 
-<p align="center"><sub>The same page at 360 × 640, the narrowest width the layout tests hold.</sub></p>
+<p align="center"><sub>The same page at 360 × 640, the phone size the layout tests open the window at.</sub></p>
 
 AgentCenter is a Linux resource monitor that groups each AI coding session with
 every process it starts, then shows CPU, memory, swap, disk and I/O stall per
