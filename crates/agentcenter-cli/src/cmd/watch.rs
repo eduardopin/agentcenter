@@ -5,7 +5,7 @@ use agentcenter_core::{Frame, ProcRoot, Registry, Sampler, SamplerConfig, Snapsh
 use std::io::{ErrorKind, IsTerminal, Write};
 use std::time::Duration;
 
-const HELP: &str = "\
+pub const HELP: &str = "\
 usage: agentcenter-cli watch [--json] [--interval-ms N] [--proc-root PATH]
 
 Samples every N ms until interrupted and prints one snapshot per tick: the

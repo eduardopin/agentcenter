@@ -13,7 +13,7 @@ use std::fmt::Write as _;
 use std::io::Write;
 use std::time::{Duration, Instant};
 
-const HELP: &str = "\
+pub const HELP: &str = "\
 usage: agentcenter-cli cockpit [--json] [--all] [--timeout-ms N] [--proc-root PATH]
 
 One row per live agent session with the cockpit of contexto.py: what to do

@@ -50,6 +50,7 @@ expected=(
     "share/applications/$APP_ID.desktop"
     "share/icons/hicolor/scalable/apps/$APP_ID.svg"
     "share/glib-2.0/schemas/$APP_ID.gschema.xml"
+    "share/man/man1/agentcenter-cli.1"
     "share/agentcenter/installed.txt"
 )
 for f in "${expected[@]}"; do
