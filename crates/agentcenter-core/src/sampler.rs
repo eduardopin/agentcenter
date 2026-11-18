@@ -59,7 +59,7 @@ use crate::procfs::io::IoCounters;
 use crate::procfs::smaps::{SmapsRollup, parse_smaps_rollup};
 use crate::procfs::stat::Stat;
 use crate::procfs::status::{Status, parse_status};
-use crate::procfs::system::{CpuTotals, delayacct_enabled, read_cpu_totals};
+use crate::procfs::system::{CpuTotals, delayacct_enabled, read_cpu_totals, start_epoch_ms};
 use crate::procfs::task::{count_d_threads, scan_d_threads};
 use crate::procfs::{ProcRoot, ReadError};
 use crate::session::{ProcessMetrics, Session};
@@ -394,7 +394,6 @@ impl Sampler {
 
         // 2. Intervalo, medido em ticks de CPU da maquina (deterministico em fixture).
         let cores = cpu.cores;
-        let boot_ms = cpu.btime * 1000;
         let (d_total, d_idle) = match self.prev_cpu {
             Some(p) if cpu.total > p.total => {
                 (cpu.total - p.total, cpu.idle.saturating_sub(p.idle))
@@ -507,8 +506,8 @@ impl Sampler {
             s.starttime = stats.get(&agent_pid).map(|st| st.starttime);
             s.started_at_ms = s
                 .starttime
-                .filter(|_| boot_ms > 0)
-                .map(|t| boot_ms + (t as f64 * 1000.0 / USER_HZ) as u64);
+                .filter(|_| cpu.btime > 0)
+                .map(|t| start_epoch_ms(cpu.btime, t));
             let starttime = s.starttime.unwrap_or(0);
             let info = match self.agents.remove(&agent_pid) {
                 Some(i)

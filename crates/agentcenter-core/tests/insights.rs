@@ -498,8 +498,8 @@ fn memory_95_fires_once_at_95_percent_used_and_not_at_94_9() {
     };
     // 95.0 % used: 50 of 1000 available
     let fs = at(50, 2);
-    assert_eq!(owned(&fs), ["memory_95", "memory_pressure"]);
-    assert_eq!(fs.iter().filter(|f| f.id == "memory_95").count(), 1);
+    // memory_95 replaces memory_pressure: one condition takes one slot
+    assert_eq!(owned(&fs), ["memory_95"]);
     assert_eq!(fs[0].severity, "high");
     // 94.9 % used: only the older 15 % rule
     assert_eq!(owned(&at(51, 2)), ["memory_pressure"]);
@@ -537,15 +537,26 @@ fn handoff_due_when_no_handoff_is_newer_than_the_session_start() {
             vec![full_session(7, ctx, 3 * H, h)],
         )))
     };
-    assert_eq!(at(75.0, Value::Null), ["handoff_due", "context_full"]);
+    assert_eq!(at(75.0, Value::Null), ["handoff_due"]);
     // handoff older than the session start (181 min ago): still due
-    assert_eq!(at(75.0, json!(181.0)), ["handoff_due", "context_full"]);
+    assert_eq!(at(75.0, json!(181.0)), ["handoff_due"]);
     // handoff written at the very start (180 min ago) is not newer: still due
-    assert_eq!(at(75.0, json!(180.0)), ["handoff_due", "context_full"]);
+    assert_eq!(at(75.0, json!(180.0)), ["handoff_due"]);
     // handoff written after the session started (179 min ago): none
     assert_eq!(at(75.0, json!(179.0)), ["context_full"]);
     // below 75 % nothing is due
     assert_eq!(at(74.9, Value::Null), ["all_clear"]);
+}
+
+#[test]
+fn context_full_skips_sessions_that_handoff_due_already_counts() {
+    let due = full_session(7, 90.0, 3 * H, Value::Null);
+    let handed = full_session(8, 80.0, 3 * H, json!(10.0));
+    let fs = findings(&snap_now(machine(), vec![due, handed]));
+    assert_eq!(ids(&fs), ["handoff_due", "context_full"]);
+    assert!(fs[0].text.starts_with("1 session is"), "{}", fs[0].text);
+    assert!(fs[1].text.starts_with("1 session is"), "{}", fs[1].text);
+    assert!(fs[1].text.contains("a (pid 8)"), "{}", fs[1].text);
 }
 
 #[test]
@@ -583,12 +594,9 @@ fn new_rules_keep_the_cap_of_four_most_urgent_first() {
     let mut loopy = full_session(10, 80.0, 9 * H, Value::Null);
     loopy["overlay"]["cockpit"]["max_streak"] = json!(6);
     let fs = findings(&snap_now(m, vec![loopy]));
-    // loop 100, memory_95 > memory_pressure 90, handoff_due before context_full 80;
-    // context_full and age_8h fall off the cap
-    assert_eq!(
-        owned(&fs),
-        ["loop", "memory_95", "memory_pressure", "handoff_due"]
-    );
+    // loop 100, memory_95 (it replaces memory_pressure), handoff_due (it replaces
+    // context_full for that session), then age_8h
+    assert_eq!(owned(&fs), ["loop", "memory_95", "handoff_due", "age_8h"]);
     let scores: Vec<u32> = fs.iter().map(|f| f.score).collect();
     assert!(scores.windows(2).all(|w| w[0] >= w[1]), "{scores:?}");
 }

@@ -296,5 +296,6 @@ fn json_lists_the_new_watch_rules_after_the_existing_ones_in_score_order() {
         .iter()
         .map(|f| f["id"].as_str().unwrap())
         .collect();
-    assert_eq!(ids, ["memory_95", "memory_pressure", "age_8h"], "{v}");
+    // memory_95 replaces memory_pressure at 95 % used (review round 1)
+    assert_eq!(ids, ["memory_95", "age_8h"], "{v}");
 }

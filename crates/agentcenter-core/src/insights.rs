@@ -1,6 +1,10 @@
 //! Motor de achados: regras deterministicas sobre o [`Snapshot`], porte fiel de
 //! `findings()`, `facts()` e `fallback()` do prototipo `insights.py`.
 //!
+//! `age_8h`, `memory_95` and `handoff_due` exist only here: the prototype has no
+//! fixture for them, so `parity_with_python_reference` does not cover them; their
+//! own tests do. Extend its id list when a fixture exists.
+//!
 //! Puro: sem relogio, sem I/O, sem sorteio. Campo ausente no snapshot vale o
 //! mesmo que o `or 0` do prototipo (0, ou "sem dado").
 
@@ -204,10 +208,9 @@ pub fn findings(snap: &Snapshot) -> Vec<Finding> {
         .collect();
     let idle_mem: f64 = idle.iter().map(|s| pss(s)).sum();
     // 95 % used is 5 % available; integers keep the boundary exact.
-    if let (Some(t), Some(a)) = (m.mem_total_bytes, m.mem_available_bytes)
-        && t > 0
-        && u128::from(a) * 20 <= u128::from(t)
-    {
+    let mem95 = matches!((m.mem_total_bytes, m.mem_available_bytes),
+        (Some(t), Some(a)) if t > 0 && u128::from(a) * 20 <= u128::from(t));
+    if mem95 {
         let used = round(100.0 * (1.0 - avail / total));
         out.push(finding(
             "memory_95",
@@ -222,8 +225,9 @@ pub fn findings(snap: &Snapshot) -> Vec<Finding> {
             vec![format!("{used}%"), "reclaim".into()],
         ));
     }
+    // At 95 % used memory_95 already says it with the same action: one slot, not two.
     // Sem total de memoria nao ha fracao a avaliar.
-    if total > 0.0 && avail / total < 0.15 {
+    if total > 0.0 && avail / total < 0.15 && !mem95 {
         let pct = round(100.0 * avail / total);
         out.push(finding(
             "memory_pressure",
@@ -241,10 +245,12 @@ pub fn findings(snap: &Snapshot) -> Vec<Finding> {
         ));
     }
 
+    // A session handoff_due counts is already named there with the same action:
+    // context_full takes the others, so one session yields one finding.
     let full: Vec<&Session> = agents
         .iter()
         .copied()
-        .filter(|s| ctx_pct(s) >= 75.0)
+        .filter(|s| ctx_pct(s) >= 75.0 && !handoff_due(s, snap.taken_at_ms))
         .collect();
     if !full.is_empty() {
         let w = first_max(&full, ctx_pct);
