@@ -6,7 +6,9 @@
 #      the same twice.
 # `--static` stops after step 1 (fast, no build; what scripts/ci.sh runs).
 # Without it the script builds with scripts/release-build.sh, or reuses the
-# tarball in RELEASE_DIST when RELEASE_SKIP_BUILD=1. No network.
+# tarball in RELEASE_DIST when RELEASE_SKIP_BUILD=1 (the pack-twice step is
+# then skipped unless the built binaries are still in the target dir).
+# No network.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -71,11 +73,16 @@ for name in agentcenter agentcenter-cli; do
     [ -z "$hits" ] || fail "$name embeds a local path: $(echo "$hits" | tr '\n' ' ')"
 done
 
-echo "release: packing twice gives the same bytes"
-sum1="$(sha256sum < "$tarball")"
-RELEASE_DIST="$dist" bash scripts/release-build.sh --package-only >/dev/null
-sum2="$(sha256sum < "$tarball")"
-[ "$sum1" = "$sum2" ] || fail "tarball differs between two packs"
+target_dir="${CARGO_TARGET_DIR:-target}"
+if [ -f "$target_dir/release/agentcenter" ] && [ -f "$target_dir/THIRD_PARTY_LICENSES.html" ]; then
+    echo "release: packing twice gives the same bytes"
+    sum1="$(sha256sum < "$tarball")"
+    RELEASE_DIST="$dist" bash scripts/release-build.sh --package-only >/dev/null
+    sum2="$(sha256sum < "$tarball")"
+    [ "$sum1" = "$sum2" ] || fail "tarball differs between two packs"
+else
+    echo "release: pack-twice skipped (no built binaries in $target_dir)"
+fi
 
 if [ "$fails" -ne 0 ]; then
     echo "FAIL ($fails)"

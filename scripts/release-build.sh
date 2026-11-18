@@ -31,15 +31,16 @@ export SOURCE_DATE_EPOCH
 
 if [ "${1:-}" != "--package-only" ]; then
     # Every absolute prefix rustc can print into a binary (panic locations,
-    # debug info, dependency sources) is mapped to a fixed name. Later
-    # mappings win, so the broad HOME prefixes go first.
+    # debug info, dependency sources) is mapped to a fixed name. rustc applies
+    # the LAST matching mapping, so the broad prefixes go first and the
+    # narrower ones, which may sit inside them, go after.
     cargo_home="${CARGO_HOME:-$HOME/.cargo}"
     rustup_home="${RUSTUP_HOME:-$HOME/.rustup}"
     flags="--remap-path-prefix=$HOME=/home-removed"
+    flags="$flags --remap-path-prefix=$root=/src"
     flags="$flags --remap-path-prefix=$rustup_home=/rustup"
     flags="$flags --remap-path-prefix=$cargo_home=/cargo"
     flags="$flags --remap-path-prefix=$target_dir=/target"
-    flags="$flags --remap-path-prefix=$root=/src"
     export RUSTFLAGS="$flags"
     cargo build --release --locked -p agentcenter -p agentcenter-cli
     cargo about generate --locked --fail about.hbs -o "$target_dir/THIRD_PARTY_LICENSES.html"

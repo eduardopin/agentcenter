@@ -50,6 +50,32 @@ jobs:
       - name: Check paths and licences
         run: RELEASE_SKIP_BUILD=1 bash scripts/test-release-paths.sh
 
+      # Acceptance 3: the same commit built from a second checkout, in a
+      # different directory, must give byte-identical binaries. The remap
+      # flags are what make the checkout path vanish from them.
+      - name: Second checkout (different path)
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: second
+          persist-credentials: false
+
+      - name: Rebuild from the second checkout and compare binaries
+        run: |
+          cd second
+          RELEASE_DIST="$PWD/../dist-second" bash scripts/release-build.sh
+          cd ..
+          mkdir first-x second-x
+          tar -xzf dist/agentcenter-*.tar.gz -C first-x
+          tar -xzf dist-second/agentcenter-*.tar.gz -C second-x
+          status=0
+          for bin in agentcenter agentcenter-cli; do
+            a="$(sha256sum first-x/*/"$bin" | cut -d' ' -f1)"
+            b="$(sha256sum second-x/*/"$bin" | cut -d' ' -f1)"
+            echo "$bin first=$a second=$b"
+            [ "$a" = "$b" ] || { echo "::error::$bin differs between checkouts"; status=1; }
+          done
+          exit "$status"
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: agentcenter-release
