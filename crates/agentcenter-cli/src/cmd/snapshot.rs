@@ -4,7 +4,7 @@ use agentcenter_core::{ProcRoot, READ_ALL, Registry, Sampler, SamplerConfig};
 use std::io::Write;
 use std::time::Duration;
 
-const HELP: &str = "\
+pub const HELP: &str = "\
 usage: agentcenter-cli snapshot [--json] [--interval-ms N] [--proc-root PATH]
 
 Takes two samples N ms apart and prints one row per AI session. Transcripts

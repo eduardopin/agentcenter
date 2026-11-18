@@ -11,7 +11,7 @@ use serde_json::json;
 use std::io::Write;
 use std::time::Duration;
 
-const HELP: &str = "\
+pub const HELP: &str = "\
 usage: agentcenter-cli insights [--json] [--llm URL] [--llm-timeout-ms N]
                                 [--timeout-ms N] [--proc-root PATH]
 

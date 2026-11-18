@@ -61,7 +61,10 @@ fn committed_markdown_matches_the_generator() {
     let generated = stdout(&["gen-docs", "markdown"]);
     let committed = std::fs::read_to_string(repo_file("docs/CLI.md"))
         .expect("docs/CLI.md missing: run scripts/gen-docs.sh");
-    assert_eq!(generated, committed, "stale docs/CLI.md: run scripts/gen-docs.sh");
+    assert_eq!(
+        generated, committed,
+        "stale docs/CLI.md: run scripts/gen-docs.sh"
+    );
 }
 
 #[test]
@@ -80,9 +83,15 @@ fn every_subcommand_appears_in_both_docs_with_its_flags() {
     let md = stdout(&["gen-docs", "markdown"]);
     let man = stdout(&["gen-docs", "man"]);
     for cmd in commands() {
-        assert!(md.contains(&format!("## {cmd}")), "{cmd} missing from markdown");
-        assert!(man.contains(&format!(".SH {}", cmd.to_uppercase())) || man.contains(&format!(".SS {cmd}")),
-            "{cmd} missing from man page");
+        assert!(
+            md.contains(&format!("## {cmd}")),
+            "{cmd} missing from markdown"
+        );
+        assert!(
+            man.contains(&format!(".SH {}", cmd.to_uppercase()))
+                || man.contains(&format!(".SS {cmd}")),
+            "{cmd} missing from man page"
+        );
         for flag in flags_of(&cmd) {
             // roff escapes `-` as `\-`.
             let roff = flag.replace('-', "\\-");
@@ -108,7 +117,8 @@ fn gen_docs_rejects_an_unknown_format() {
 #[test]
 fn man_page_renders() {
     let man = stdout(&["gen-docs", "man"]);
-    assert!(man.starts_with(".TH "), "{man}");
+    // A leading `.\"` comment is fine; the title macro must come right after.
+    assert!(man.lines().take(3).any(|l| l.starts_with(".TH ")), "{man}");
     // `man` is not on every CI image; the structural check above still runs.
     let Ok(out) = Command::new("man")
         .args(["-l", "-"])
@@ -128,8 +138,15 @@ fn man_page_renders() {
         return;
     };
     let text = String::from_utf8_lossy(&out.stdout);
-    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
-    assert!(text.contains("insights") && text.contains("--llm-timeout-ms"), "{text}");
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        text.contains("insights") && text.contains("--llm-timeout-ms"),
+        "{text}"
+    );
     assert!(
         out.stderr.is_empty(),
         "man warnings: {}",
