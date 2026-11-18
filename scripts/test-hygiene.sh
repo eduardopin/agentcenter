@@ -77,8 +77,10 @@ if readme:
     shots = set(re.findall(r'(?:src|srcset)="(site/img/[\w.-]+\.webp)"', readme))
     for s in sorted(shots):
         if not pathlib.Path(s).is_file(): fail(f"README.md: {s} does not exist")
-    if not any("narrow" not in s for s in shots): fail("README.md: no wide screenshot from site/img")
-    if not any("narrow" in s for s in shots): fail("README.md: no narrow (360 px) screenshot from site/img")
+    # Pinned by name: any other capture (the detail page) must not stand in for these four.
+    for name, light in (("wide", "app-sessions-light.webp"), ("narrow", "app-sessions-narrow-light.webp")):
+        for theme, f in (("", light), ("dark ", light.replace("-light", "-dark"))):
+            if f'site/img/{f}"' not in readme: fail(f"README.md: no {theme}{name} screenshot site/img/{f}")
 
 if fails:
     print("FAIL")
