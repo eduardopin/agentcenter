@@ -15,12 +15,12 @@ li { margin: 0.2em 0; }
 <h2>Summary</h2>
 <ul>
 {{#each overview}}
-<li><a href="#{{id}}">{{name}}</a> ({{count}})</li>
+<li>{{name}} ({{count}})</li>
 {{/each}}
 </ul>
 <h2>Licences</h2>
 {{#each licenses}}
-<section id="{{id}}">
+<section id="{{id}}-{{@index}}">
 <h3>{{name}}</h3>
 <p>Used by:</p>
 <ul>

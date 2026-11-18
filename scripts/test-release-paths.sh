@@ -4,6 +4,8 @@
 #   2. the release binaries carry no /home or /root path (`strings`);
 #   3. the tarball ships THIRD_PARTY_LICENSES.html and packs byte-for-byte
 #      the same twice.
+# `--compare A.tar.gz B.tar.gz` checks two builds of one commit (made in
+# different checkout paths) hold byte-identical binaries; release.yml uses it.
 # `--static` stops after step 1 (fast, no build; what scripts/ci.sh runs).
 # Without it the script builds with scripts/release-build.sh, or reuses the
 # tarball in RELEASE_DIST when RELEASE_SKIP_BUILD=1 (the pack-twice step is
@@ -11,6 +13,28 @@
 # No network.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+if [ "${1:-}" = "--compare" ]; then
+    [ $# -eq 3 ] && [ -f "$2" ] && [ -f "$3" ] \
+        || { echo "usage: $0 --compare <first.tar.gz> <second.tar.gz>" >&2; exit 2; }
+    cmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$cmp_dir"' EXIT
+    mkdir "$cmp_dir/a" "$cmp_dir/b"
+    tar -xzf "$2" -C "$cmp_dir/a"
+    tar -xzf "$3" -C "$cmp_dir/b"
+    status=0
+    for bin in agentcenter agentcenter-cli; do
+        fa="$(find "$cmp_dir/a" -type f -name "$bin" | head -n1)"
+        fb="$(find "$cmp_dir/b" -type f -name "$bin" | head -n1)"
+        [ -n "$fa" ] && [ -n "$fb" ] || { echo "FAIL: $bin missing from a tarball"; status=1; continue; }
+        sa="$(sha256sum < "$fa" | cut -d' ' -f1)"
+        sb="$(sha256sum < "$fb" | cut -d' ' -f1)"
+        echo "$bin first=$sa second=$sb"
+        [ "$sa" = "$sb" ] || { echo "FAIL: $bin differs between the two builds"; status=1; }
+    done
+    [ "$status" -eq 0 ] && echo "ok: both builds hold identical binaries"
+    exit "$status"
+fi
 
 fails=0
 fail() { echo " - $*"; fails=$((fails + 1)); }
@@ -34,6 +58,8 @@ if [ -f .github/workflows/release.yml ]; then
         || fail "release.yml: does not call scripts/release-build.sh"
     grep -q 'scripts/test-release-paths.sh' .github/workflows/release.yml \
         || fail "release.yml: does not run scripts/test-release-paths.sh"
+    grep -q 'test-release-paths.sh --compare' .github/workflows/release.yml \
+        || fail "release.yml: does not compare the two builds with --compare"
     # Publishing is the next card; this workflow only uploads an artifact.
     if grep -Eq 'secrets\.|environment:|softprops/action-gh-release|gh release|contents: write' .github/workflows/release.yml; then
         fail "release.yml: publishes or uses secrets (out of scope for this workflow)"
@@ -52,8 +78,11 @@ if [ "${RELEASE_SKIP_BUILD:-0}" != "1" ]; then
     RELEASE_DIST="$dist" bash scripts/release-build.sh
 fi
 
-tarball="$(ls "$dist"/agentcenter-*.tar.gz 2>/dev/null | head -n1 || true)"
-[ -n "$tarball" ] || { echo "FAIL: no tarball in $dist"; exit 1; }
+# The exact file this checkout builds, not whatever older release dist/ holds.
+version="$(cargo metadata --format-version 1 --no-deps \
+    | python3 -I -c 'import json, sys; print(next(p["version"] for p in json.load(sys.stdin)["packages"] if p["name"] == "agentcenter"))')"
+tarball="$dist/agentcenter-$version-$(uname -m)-linux.tar.gz"
+[ -f "$tarball" ] || { echo "FAIL: $tarball not found"; exit 1; }
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
