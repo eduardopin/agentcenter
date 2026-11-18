@@ -15,6 +15,7 @@ pub mod procfs;
 pub mod reclaim;
 pub mod sampler;
 pub mod session;
+pub mod slm;
 pub mod snapshot;
 pub mod summary;
 pub mod tree;

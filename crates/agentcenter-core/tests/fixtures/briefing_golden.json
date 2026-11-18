@@ -1,0 +1,434 @@
+{
+  "01-loop": {
+    "echoed": {
+      "rejected": null,
+      "source": "model",
+      "text": "1 session is repeating the same tool call; proj-47 (pid 40680) repeated it 34 times in a row. Action: interrupt that session and redirect it. 2 more findings below."
+    },
+    "invented": {
+      "rejected": "number not in findings: hundred",
+      "source": "rules",
+      "text": "1 session is repeating the same tool call; proj-47 (pid 40680) repeated it 34 times in a row. Action: interrupt that session and redirect it. 2 more findings below."
+    },
+    "messages": [
+      {
+        "content": "You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.",
+        "role": "system"
+      },
+      {
+        "content": "1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      },
+      {
+        "content": "Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.",
+        "role": "assistant"
+      },
+      {
+        "content": "1. [high] 1 session is repeating the same tool call; proj-47 (pid 40680) repeated it 34 times in a row. Action: interrupt that session and redirect it.\n2. [medium] 12 sessions idle for 30 minutes or more hold 6.0 GB of the 13.5 GB used by agents; the largest is proj-38 (pid 17536) with 1.1 GB. Action: agentcenter-cli reclaim.\n3. [low] 1 large session has a prompt-cache hit rate under 80%; the lowest is proj-32 (pid 27666) at 74%. Action: avoid long pauses between turns in that session.",
+        "role": "user"
+      }
+    ],
+    "request": "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: 1417\r\nConnection: close\r\n\r\n{\"max_tokens\":120,\"messages\":[{\"content\":\"You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.\",\"role\":\"system\"},{\"content\":\"1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"},{\"content\":\"Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.\",\"role\":\"assistant\"},{\"content\":\"1. [high] 1 session is repeating the same tool call; proj-47 (pid 40680) repeated it 34 times in a row. Action: interrupt that session and redirect it.\\n2. [medium] 12 sessions idle for 30 minutes or more hold 6.0 GB of the 13.5 GB used by agents; the largest is proj-38 (pid 17536) with 1.1 GB. Action: agentcenter-cli reclaim.\\n3. [low] 1 large session has a prompt-cache hit rate under 80%; the lowest is proj-32 (pid 27666) at 74%. Action: avoid long pauses between turns in that session.\",\"role\":\"user\"}],\"model\":\"local\",\"temperature\":0}",
+    "rules": {
+      "rejected": null,
+      "source": "rules",
+      "text": "1 session is repeating the same tool call; proj-47 (pid 40680) repeated it 34 times in a row. Action: interrupt that session and redirect it. 2 more findings below."
+    }
+  },
+  "02-memory-pressure": {
+    "echoed": {
+      "rejected": null,
+      "source": "model",
+      "text": "Only 2.0 GB of 21.0 GB memory is available (10%), with 1.6 GB in swap; agent sessions hold 21.6 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+    },
+    "invented": {
+      "rejected": "number not in findings: hundred",
+      "source": "rules",
+      "text": "Only 2.0 GB of 21.0 GB memory is available (10%), with 1.6 GB in swap; agent sessions hold 21.6 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+    },
+    "messages": [
+      {
+        "content": "You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.",
+        "role": "system"
+      },
+      {
+        "content": "1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      },
+      {
+        "content": "Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.",
+        "role": "assistant"
+      },
+      {
+        "content": "1. [high] Only 2.0 GB of 21.0 GB memory is available (10%), with 1.6 GB in swap; agent sessions hold 21.6 GB. Action: agentcenter-cli reclaim.\n2. [medium] 19 sessions idle for 30 minutes or more hold 11.7 GB of the 21.6 GB used by agents; the largest is proj-18 (pid 21296) with 1.1 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      }
+    ],
+    "request": "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: 1245\r\nConnection: close\r\n\r\n{\"max_tokens\":120,\"messages\":[{\"content\":\"You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.\",\"role\":\"system\"},{\"content\":\"1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"},{\"content\":\"Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.\",\"role\":\"assistant\"},{\"content\":\"1. [high] Only 2.0 GB of 21.0 GB memory is available (10%), with 1.6 GB in swap; agent sessions hold 21.6 GB. Action: agentcenter-cli reclaim.\\n2. [medium] 19 sessions idle for 30 minutes or more hold 11.7 GB of the 21.6 GB used by agents; the largest is proj-18 (pid 21296) with 1.1 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"}],\"model\":\"local\",\"temperature\":0}",
+    "rules": {
+      "rejected": null,
+      "source": "rules",
+      "text": "Only 2.0 GB of 21.0 GB memory is available (10%), with 1.6 GB in swap; agent sessions hold 21.6 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+    }
+  },
+  "03-context-full": {
+    "echoed": {
+      "rejected": null,
+      "source": "model",
+      "text": "1 session is past 75% of the context window; the fullest is proj-16 (pid 16351) at 88%. Action: write a handoff and start a fresh session. 2 more findings below."
+    },
+    "invented": {
+      "rejected": "number not in findings: hundred",
+      "source": "rules",
+      "text": "1 session is past 75% of the context window; the fullest is proj-16 (pid 16351) at 88%. Action: write a handoff and start a fresh session. 2 more findings below."
+    },
+    "messages": [
+      {
+        "content": "You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.",
+        "role": "system"
+      },
+      {
+        "content": "1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      },
+      {
+        "content": "Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.",
+        "role": "assistant"
+      },
+      {
+        "content": "1. [high] 1 session is past 75% of the context window; the fullest is proj-16 (pid 16351) at 88%. Action: write a handoff and start a fresh session.\n2. [medium] 10 sessions idle for 30 minutes or more hold 5.6 GB of the 9.5 GB used by agents; the largest is proj-12 (pid 18778) with 1.0 GB. Action: agentcenter-cli reclaim.\n3. [low] 1 large session has a prompt-cache hit rate under 80%; the lowest is proj-32 (pid 27666) at 74%. Action: avoid long pauses between turns in that session.",
+        "role": "user"
+      }
+    ],
+    "request": "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: 1413\r\nConnection: close\r\n\r\n{\"max_tokens\":120,\"messages\":[{\"content\":\"You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.\",\"role\":\"system\"},{\"content\":\"1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"},{\"content\":\"Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.\",\"role\":\"assistant\"},{\"content\":\"1. [high] 1 session is past 75% of the context window; the fullest is proj-16 (pid 16351) at 88%. Action: write a handoff and start a fresh session.\\n2. [medium] 10 sessions idle for 30 minutes or more hold 5.6 GB of the 9.5 GB used by agents; the largest is proj-12 (pid 18778) with 1.0 GB. Action: agentcenter-cli reclaim.\\n3. [low] 1 large session has a prompt-cache hit rate under 80%; the lowest is proj-32 (pid 27666) at 74%. Action: avoid long pauses between turns in that session.\",\"role\":\"user\"}],\"model\":\"local\",\"temperature\":0}",
+    "rules": {
+      "rejected": null,
+      "source": "rules",
+      "text": "1 session is past 75% of the context window; the fullest is proj-16 (pid 16351) at 88%. Action: write a handoff and start a fresh session. 2 more findings below."
+    }
+  },
+  "04-cpu-saturated": {
+    "echoed": {
+      "rejected": null,
+      "source": "model",
+      "text": "9 sessions idle for 30 minutes or more hold 4.8 GB of the 10.7 GB used by agents; the largest is proj-38 (pid 17536) with 0.7 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+    },
+    "invented": {
+      "rejected": "number not in findings: hundred",
+      "source": "rules",
+      "text": "9 sessions idle for 30 minutes or more hold 4.8 GB of the 10.7 GB used by agents; the largest is proj-38 (pid 17536) with 0.7 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+    },
+    "messages": [
+      {
+        "content": "You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.",
+        "role": "system"
+      },
+      {
+        "content": "1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      },
+      {
+        "content": "Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.",
+        "role": "assistant"
+      },
+      {
+        "content": "1. [medium] 9 sessions idle for 30 minutes or more hold 4.8 GB of the 10.7 GB used by agents; the largest is proj-38 (pid 17536) with 0.7 GB. Action: agentcenter-cli reclaim.\n2. [medium] Load average is 15.7 on 12 cores. Action: pause the busiest session with agentcenter-cli signal.",
+        "role": "user"
+      }
+    ],
+    "request": "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: 1209\r\nConnection: close\r\n\r\n{\"max_tokens\":120,\"messages\":[{\"content\":\"You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.\",\"role\":\"system\"},{\"content\":\"1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"},{\"content\":\"Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.\",\"role\":\"assistant\"},{\"content\":\"1. [medium] 9 sessions idle for 30 minutes or more hold 4.8 GB of the 10.7 GB used by agents; the largest is proj-38 (pid 17536) with 0.7 GB. Action: agentcenter-cli reclaim.\\n2. [medium] Load average is 15.7 on 12 cores. Action: pause the busiest session with agentcenter-cli signal.\",\"role\":\"user\"}],\"model\":\"local\",\"temperature\":0}",
+    "rules": {
+      "rejected": null,
+      "source": "rules",
+      "text": "9 sessions idle for 30 minutes or more hold 4.8 GB of the 10.7 GB used by agents; the largest is proj-38 (pid 17536) with 0.7 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+    }
+  },
+  "05-burn-leader": {
+    "echoed": {
+      "rejected": null,
+      "source": "model",
+      "text": "5 sessions idle for 30 minutes or more hold 2.4 GB of the 3.1 GB used by agents; the largest is proj-31 (pid 39077) with 1.1 GB. Action: agentcenter-cli reclaim. 2 more findings below."
+    },
+    "invented": {
+      "rejected": "number not in findings: hundred",
+      "source": "rules",
+      "text": "5 sessions idle for 30 minutes or more hold 2.4 GB of the 3.1 GB used by agents; the largest is proj-31 (pid 39077) with 1.1 GB. Action: agentcenter-cli reclaim. 2 more findings below."
+    },
+    "messages": [
+      {
+        "content": "You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.",
+        "role": "system"
+      },
+      {
+        "content": "1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      },
+      {
+        "content": "Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.",
+        "role": "assistant"
+      },
+      {
+        "content": "1. [medium] 5 sessions idle for 30 minutes or more hold 2.4 GB of the 3.1 GB used by agents; the largest is proj-31 (pid 39077) with 1.1 GB. Action: agentcenter-cli reclaim.\n2. [medium] proj-33 (pid 45033) accounts for 75% of the token burn of all 7 sessions. Action: check whether it still needs its full context.\n3. [low] 2 large sessions have a prompt-cache hit rate under 80%; the lowest is proj-33 (pid 45033) at 40%. Action: avoid long pauses between turns in that session.",
+        "role": "user"
+      }
+    ],
+    "request": "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: 1406\r\nConnection: close\r\n\r\n{\"max_tokens\":120,\"messages\":[{\"content\":\"You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.\",\"role\":\"system\"},{\"content\":\"1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"},{\"content\":\"Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.\",\"role\":\"assistant\"},{\"content\":\"1. [medium] 5 sessions idle for 30 minutes or more hold 2.4 GB of the 3.1 GB used by agents; the largest is proj-31 (pid 39077) with 1.1 GB. Action: agentcenter-cli reclaim.\\n2. [medium] proj-33 (pid 45033) accounts for 75% of the token burn of all 7 sessions. Action: check whether it still needs its full context.\\n3. [low] 2 large sessions have a prompt-cache hit rate under 80%; the lowest is proj-33 (pid 45033) at 40%. Action: avoid long pauses between turns in that session.\",\"role\":\"user\"}],\"model\":\"local\",\"temperature\":0}",
+    "rules": {
+      "rejected": null,
+      "source": "rules",
+      "text": "5 sessions idle for 30 minutes or more hold 2.4 GB of the 3.1 GB used by agents; the largest is proj-31 (pid 39077) with 1.1 GB. Action: agentcenter-cli reclaim. 2 more findings below."
+    }
+  },
+  "06-cache-cold": {
+    "echoed": {
+      "rejected": null,
+      "source": "model",
+      "text": "13 sessions idle for 30 minutes or more hold 10.2 GB of the 16.5 GB used by agents; the largest is proj-02 (pid 33835) with 1.4 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+    },
+    "invented": {
+      "rejected": "number not in findings: hundred",
+      "source": "rules",
+      "text": "13 sessions idle for 30 minutes or more hold 10.2 GB of the 16.5 GB used by agents; the largest is proj-02 (pid 33835) with 1.4 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+    },
+    "messages": [
+      {
+        "content": "You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.",
+        "role": "system"
+      },
+      {
+        "content": "1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      },
+      {
+        "content": "Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.",
+        "role": "assistant"
+      },
+      {
+        "content": "1. [medium] 13 sessions idle for 30 minutes or more hold 10.2 GB of the 16.5 GB used by agents; the largest is proj-02 (pid 33835) with 1.4 GB. Action: agentcenter-cli reclaim.\n2. [low] 1 large session has a prompt-cache hit rate under 80%; the lowest is proj-32 (pid 27666) at 76%. Action: avoid long pauses between turns in that session.",
+        "role": "user"
+      }
+    ],
+    "request": "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: 1265\r\nConnection: close\r\n\r\n{\"max_tokens\":120,\"messages\":[{\"content\":\"You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.\",\"role\":\"system\"},{\"content\":\"1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"},{\"content\":\"Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.\",\"role\":\"assistant\"},{\"content\":\"1. [medium] 13 sessions idle for 30 minutes or more hold 10.2 GB of the 16.5 GB used by agents; the largest is proj-02 (pid 33835) with 1.4 GB. Action: agentcenter-cli reclaim.\\n2. [low] 1 large session has a prompt-cache hit rate under 80%; the lowest is proj-32 (pid 27666) at 76%. Action: avoid long pauses between turns in that session.\",\"role\":\"user\"}],\"model\":\"local\",\"temperature\":0}",
+    "rules": {
+      "rejected": null,
+      "source": "rules",
+      "text": "13 sessions idle for 30 minutes or more hold 10.2 GB of the 16.5 GB used by agents; the largest is proj-02 (pid 33835) with 1.4 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+    }
+  },
+  "07-all-clear": {
+    "echoed": {
+      "rejected": null,
+      "source": "model",
+      "text": "16 sessions are running with 10.5 GB of memory available and no session needing attention. Action: none."
+    },
+    "invented": {
+      "rejected": "number not in findings: hundred",
+      "source": "rules",
+      "text": "16 sessions are running with 10.5 GB of memory available and no session needing attention. Action: none."
+    },
+    "messages": [
+      {
+        "content": "You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.",
+        "role": "system"
+      },
+      {
+        "content": "1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      },
+      {
+        "content": "Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.",
+        "role": "assistant"
+      },
+      {
+        "content": "1. [info] 16 sessions are running with 10.5 GB of memory available and no session needing attention. Action: none.",
+        "role": "user"
+      }
+    ],
+    "request": "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: 1039\r\nConnection: close\r\n\r\n{\"max_tokens\":120,\"messages\":[{\"content\":\"You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.\",\"role\":\"system\"},{\"content\":\"1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"},{\"content\":\"Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.\",\"role\":\"assistant\"},{\"content\":\"1. [info] 16 sessions are running with 10.5 GB of memory available and no session needing attention. Action: none.\",\"role\":\"user\"}],\"model\":\"local\",\"temperature\":0}",
+    "rules": {
+      "rejected": null,
+      "source": "rules",
+      "text": "16 sessions are running with 10.5 GB of memory available and no session needing attention. Action: none."
+    }
+  },
+  "08-loop-memory-context": {
+    "echoed": {
+      "rejected": null,
+      "source": "model",
+      "text": "1 session is repeating the same tool call; proj-15 (pid 38267) repeated it 13 times in a row. Action: interrupt that session and redirect it. 3 more findings below."
+    },
+    "invented": {
+      "rejected": "number not in findings: hundred",
+      "source": "rules",
+      "text": "1 session is repeating the same tool call; proj-15 (pid 38267) repeated it 13 times in a row. Action: interrupt that session and redirect it. 3 more findings below."
+    },
+    "messages": [
+      {
+        "content": "You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.",
+        "role": "system"
+      },
+      {
+        "content": "1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      },
+      {
+        "content": "Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.",
+        "role": "assistant"
+      },
+      {
+        "content": "1. [high] 1 session is repeating the same tool call; proj-15 (pid 38267) repeated it 13 times in a row. Action: interrupt that session and redirect it.\n2. [high] Only 1.7 GB of 21.0 GB memory is available (8%), with 1.0 GB in swap; agent sessions hold 9.3 GB. Action: agentcenter-cli reclaim.\n3. [high] 3 sessions are past 75% of the context window; the fullest is proj-13 (pid 37034) at 89%. Action: write a handoff and start a fresh session.\n4. [medium] 9 sessions idle for 30 minutes or more hold 6.3 GB of the 9.3 GB used by agents; the largest is proj-45 (pid 20879) with 1.0 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      }
+    ],
+    "request": "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: 1545\r\nConnection: close\r\n\r\n{\"max_tokens\":120,\"messages\":[{\"content\":\"You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.\",\"role\":\"system\"},{\"content\":\"1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"},{\"content\":\"Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.\",\"role\":\"assistant\"},{\"content\":\"1. [high] 1 session is repeating the same tool call; proj-15 (pid 38267) repeated it 13 times in a row. Action: interrupt that session and redirect it.\\n2. [high] Only 1.7 GB of 21.0 GB memory is available (8%), with 1.0 GB in swap; agent sessions hold 9.3 GB. Action: agentcenter-cli reclaim.\\n3. [high] 3 sessions are past 75% of the context window; the fullest is proj-13 (pid 37034) at 89%. Action: write a handoff and start a fresh session.\\n4. [medium] 9 sessions idle for 30 minutes or more hold 6.3 GB of the 9.3 GB used by agents; the largest is proj-45 (pid 20879) with 1.0 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"}],\"model\":\"local\",\"temperature\":0}",
+    "rules": {
+      "rejected": null,
+      "source": "rules",
+      "text": "1 session is repeating the same tool call; proj-15 (pid 38267) repeated it 13 times in a row. Action: interrupt that session and redirect it. 3 more findings below."
+    }
+  },
+  "09-everything-capped": {
+    "echoed": {
+      "rejected": null,
+      "source": "model",
+      "text": "3 sessions are repeating the same tool call; proj-35 (pid 42206) repeated it 35 times in a row. Action: interrupt that session and redirect it. 3 more findings below."
+    },
+    "invented": {
+      "rejected": "number not in findings: hundred",
+      "source": "rules",
+      "text": "3 sessions are repeating the same tool call; proj-35 (pid 42206) repeated it 35 times in a row. Action: interrupt that session and redirect it. 3 more findings below."
+    },
+    "messages": [
+      {
+        "content": "You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.",
+        "role": "system"
+      },
+      {
+        "content": "1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      },
+      {
+        "content": "Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.",
+        "role": "assistant"
+      },
+      {
+        "content": "1. [high] 3 sessions are repeating the same tool call; proj-35 (pid 42206) repeated it 35 times in a row. Action: interrupt that session and redirect it.\n2. [high] Only 2.7 GB of 21.0 GB memory is available (13%), with 6.3 GB in swap; agent sessions hold 30.0 GB. Action: agentcenter-cli reclaim.\n3. [high] 2 sessions are past 75% of the context window; the fullest is proj-04 (pid 33320) at 84%. Action: write a handoff and start a fresh session.\n4. [medium] 30 sessions idle for 30 minutes or more hold 20.5 GB of the 30.0 GB used by agents; the largest is proj-13 (pid 37034) with 1.3 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      }
+    ],
+    "request": "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: 1552\r\nConnection: close\r\n\r\n{\"max_tokens\":120,\"messages\":[{\"content\":\"You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.\",\"role\":\"system\"},{\"content\":\"1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"},{\"content\":\"Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.\",\"role\":\"assistant\"},{\"content\":\"1. [high] 3 sessions are repeating the same tool call; proj-35 (pid 42206) repeated it 35 times in a row. Action: interrupt that session and redirect it.\\n2. [high] Only 2.7 GB of 21.0 GB memory is available (13%), with 6.3 GB in swap; agent sessions hold 30.0 GB. Action: agentcenter-cli reclaim.\\n3. [high] 2 sessions are past 75% of the context window; the fullest is proj-04 (pid 33320) at 84%. Action: write a handoff and start a fresh session.\\n4. [medium] 30 sessions idle for 30 minutes or more hold 20.5 GB of the 30.0 GB used by agents; the largest is proj-13 (pid 37034) with 1.3 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"}],\"model\":\"local\",\"temperature\":0}",
+    "rules": {
+      "rejected": null,
+      "source": "rules",
+      "text": "3 sessions are repeating the same tool call; proj-35 (pid 42206) repeated it 35 times in a row. Action: interrupt that session and redirect it. 3 more findings below."
+    }
+  },
+  "10-cpu-burn": {
+    "echoed": {
+      "rejected": null,
+      "source": "model",
+      "text": "21 sessions idle for 30 minutes or more hold 13.5 GB of the 20.7 GB used by agents; the largest is proj-19 (pid 31195) with 1.1 GB. Action: agentcenter-cli reclaim. 3 more findings below."
+    },
+    "invented": {
+      "rejected": "number not in findings: hundred",
+      "source": "rules",
+      "text": "21 sessions idle for 30 minutes or more hold 13.5 GB of the 20.7 GB used by agents; the largest is proj-19 (pid 31195) with 1.1 GB. Action: agentcenter-cli reclaim. 3 more findings below."
+    },
+    "messages": [
+      {
+        "content": "You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.",
+        "role": "system"
+      },
+      {
+        "content": "1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      },
+      {
+        "content": "Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.",
+        "role": "assistant"
+      },
+      {
+        "content": "1. [medium] 21 sessions idle for 30 minutes or more hold 13.5 GB of the 20.7 GB used by agents; the largest is proj-19 (pid 31195) with 1.1 GB. Action: agentcenter-cli reclaim.\n2. [medium] Load average is 19.1 on 12 cores. Action: pause the busiest session with agentcenter-cli signal.\n3. [medium] proj-19 (pid 31195) accounts for 75% of the token burn of all 33 sessions. Action: check whether it still needs its full context.\n4. [low] 2 large sessions have a prompt-cache hit rate under 80%; the lowest is proj-19 (pid 31195) at 73%. Action: avoid long pauses between turns in that session.",
+        "role": "user"
+      }
+    ],
+    "request": "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: 1520\r\nConnection: close\r\n\r\n{\"max_tokens\":120,\"messages\":[{\"content\":\"You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.\",\"role\":\"system\"},{\"content\":\"1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"},{\"content\":\"Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.\",\"role\":\"assistant\"},{\"content\":\"1. [medium] 21 sessions idle for 30 minutes or more hold 13.5 GB of the 20.7 GB used by agents; the largest is proj-19 (pid 31195) with 1.1 GB. Action: agentcenter-cli reclaim.\\n2. [medium] Load average is 19.1 on 12 cores. Action: pause the busiest session with agentcenter-cli signal.\\n3. [medium] proj-19 (pid 31195) accounts for 75% of the token burn of all 33 sessions. Action: check whether it still needs its full context.\\n4. [low] 2 large sessions have a prompt-cache hit rate under 80%; the lowest is proj-19 (pid 31195) at 73%. Action: avoid long pauses between turns in that session.\",\"role\":\"user\"}],\"model\":\"local\",\"temperature\":0}",
+    "rules": {
+      "rejected": null,
+      "source": "rules",
+      "text": "21 sessions idle for 30 minutes or more hold 13.5 GB of the 20.7 GB used by agents; the largest is proj-19 (pid 31195) with 1.1 GB. Action: agentcenter-cli reclaim. 3 more findings below."
+    }
+  },
+  "11-idle-memory": {
+    "echoed": {
+      "rejected": null,
+      "source": "model",
+      "text": "21 sessions idle for 30 minutes or more hold 10.1 GB of the 17.7 GB used by agents; the largest is proj-27 (pid 32256) with 1.1 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+    },
+    "invented": {
+      "rejected": "number not in findings: hundred",
+      "source": "rules",
+      "text": "21 sessions idle for 30 minutes or more hold 10.1 GB of the 17.7 GB used by agents; the largest is proj-27 (pid 32256) with 1.1 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+    },
+    "messages": [
+      {
+        "content": "You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.",
+        "role": "system"
+      },
+      {
+        "content": "1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      },
+      {
+        "content": "Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.",
+        "role": "assistant"
+      },
+      {
+        "content": "1. [medium] 21 sessions idle for 30 minutes or more hold 10.1 GB of the 17.7 GB used by agents; the largest is proj-27 (pid 32256) with 1.1 GB. Action: agentcenter-cli reclaim.\n2. [low] 1 large session has a prompt-cache hit rate under 80%; the lowest is proj-32 (pid 27666) at 74%. Action: avoid long pauses between turns in that session.",
+        "role": "user"
+      }
+    ],
+    "request": "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: 1265\r\nConnection: close\r\n\r\n{\"max_tokens\":120,\"messages\":[{\"content\":\"You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.\",\"role\":\"system\"},{\"content\":\"1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"},{\"content\":\"Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.\",\"role\":\"assistant\"},{\"content\":\"1. [medium] 21 sessions idle for 30 minutes or more hold 10.1 GB of the 17.7 GB used by agents; the largest is proj-27 (pid 32256) with 1.1 GB. Action: agentcenter-cli reclaim.\\n2. [low] 1 large session has a prompt-cache hit rate under 80%; the lowest is proj-32 (pid 27666) at 74%. Action: avoid long pauses between turns in that session.\",\"role\":\"user\"}],\"model\":\"local\",\"temperature\":0}",
+    "rules": {
+      "rejected": null,
+      "source": "rules",
+      "text": "21 sessions idle for 30 minutes or more hold 10.1 GB of the 17.7 GB used by agents; the largest is proj-27 (pid 32256) with 1.1 GB. Action: agentcenter-cli reclaim. 1 more finding below."
+    }
+  },
+  "12-memory-cpu-cache": {
+    "echoed": {
+      "rejected": null,
+      "source": "model",
+      "text": "Only 2.8 GB of 21.0 GB memory is available (13%), with 2.7 GB in swap; agent sessions hold 25.5 GB. Action: agentcenter-cli reclaim. 3 more findings below."
+    },
+    "invented": {
+      "rejected": "number not in findings: hundred",
+      "source": "rules",
+      "text": "Only 2.8 GB of 21.0 GB memory is available (13%), with 2.7 GB in swap; agent sessions hold 25.5 GB. Action: agentcenter-cli reclaim. 3 more findings below."
+    },
+    "messages": [
+      {
+        "content": "You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.",
+        "role": "system"
+      },
+      {
+        "content": "1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.",
+        "role": "user"
+      },
+      {
+        "content": "Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.",
+        "role": "assistant"
+      },
+      {
+        "content": "1. [high] Only 2.8 GB of 21.0 GB memory is available (13%), with 2.7 GB in swap; agent sessions hold 25.5 GB. Action: agentcenter-cli reclaim.\n2. [medium] 28 sessions idle for 30 minutes or more hold 18.9 GB of the 25.5 GB used by agents; the largest is proj-00 (pid 117339) with 2.2 GB. Action: agentcenter-cli reclaim.\n3. [medium] Load average is 39.5 on 12 cores. Action: pause the busiest session with agentcenter-cli signal.\n4. [low] 2 large sessions have a prompt-cache hit rate under 80%; the lowest is proj-27 (pid 32256) at 74%. Action: avoid long pauses between turns in that session.",
+        "role": "user"
+      }
+    ],
+    "request": "POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:PORT\r\nContent-Type: application/json\r\nAccept: application/json\r\nContent-Length: 1522\r\nConnection: close\r\n\r\n{\"max_tokens\":120,\"messages\":[{\"content\":\"You brief a developer who runs many AI coding agents on one machine. You get numbered findings, most urgent first. Write 2 sentences in plain English. Sentence 1: the most urgent problem, with its numbers. Sentence 2: what to do first, naming the command if one is given. Use only numbers that appear in the findings. No lists, no preamble.\",\"role\":\"system\"},{\"content\":\"1. [high] 3 sessions are past 75% of their context window; the fullest is api (pid 4411) at 91%. Action: write a handoff and start a fresh session.\\n2. [low] 12 idle sessions hold 2.6 GB. Action: agentcenter-cli reclaim.\",\"role\":\"user\"},{\"content\":\"Three sessions are past 75% of their context window, and api (pid 4411) is at 91%. Write a handoff for it and start a fresh session, then free 2.6 GB with agentcenter-cli reclaim.\",\"role\":\"assistant\"},{\"content\":\"1. [high] Only 2.8 GB of 21.0 GB memory is available (13%), with 2.7 GB in swap; agent sessions hold 25.5 GB. Action: agentcenter-cli reclaim.\\n2. [medium] 28 sessions idle for 30 minutes or more hold 18.9 GB of the 25.5 GB used by agents; the largest is proj-00 (pid 117339) with 2.2 GB. Action: agentcenter-cli reclaim.\\n3. [medium] Load average is 39.5 on 12 cores. Action: pause the busiest session with agentcenter-cli signal.\\n4. [low] 2 large sessions have a prompt-cache hit rate under 80%; the lowest is proj-27 (pid 32256) at 74%. Action: avoid long pauses between turns in that session.\",\"role\":\"user\"}],\"model\":\"local\",\"temperature\":0}",
+    "rules": {
+      "rejected": null,
+      "source": "rules",
+      "text": "Only 2.8 GB of 21.0 GB memory is available (13%), with 2.7 GB in swap; agent sessions hold 25.5 GB. Action: agentcenter-cli reclaim. 3 more findings below."
+    }
+  }
+}
