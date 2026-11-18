@@ -81,16 +81,17 @@ bindir="$prefix/bin"
 appsdir="$prefix/share/applications"
 icondir="$prefix/share/icons/hicolor"
 schemadir="$prefix/share/glib-2.0/schemas"
+mandir="$prefix/share/man/man1"
 statedir="$prefix/share/agentcenter"
 manifest="$statedir/installed.txt"
 
 # Lista fechada: o manifesto nao concede autoridade para apagar outros arquivos.
 managed_files=("$bindir/agentcenter" "$bindir/agentcenter-cli"
     "$appsdir/$APP_ID.desktop" "$icondir/scalable/apps/$APP_ID.svg"
-    "$schemadir/$APP_ID.gschema.xml")
+    "$schemadir/$APP_ID.gschema.xml" "$mandir/agentcenter-cli.1")
 managed_dirs=("$bindir" "$prefix/share" "$appsdir" "$prefix/share/icons"
     "$icondir" "$icondir/scalable" "$icondir/scalable/apps"
-    "$prefix/share/glib-2.0" "$schemadir" "$statedir")
+    "$prefix/share/glib-2.0" "$schemadir" "$prefix/share/man" "$mandir" "$statedir")
 cache_files=("$appsdir/mimeinfo.cache" "$icondir/icon-theme.cache"
     "$schemadir/gschemas.compiled")
 
@@ -354,6 +355,7 @@ exec_value="\"$gui\""
 put "$appsdir/$APP_ID.desktop" 644 < <(desktop_entry "$exec_value" "$gui")
 put "$icondir/scalable/apps/$APP_ID.svg" 644 <"data/icons/hicolor/scalable/apps/$APP_ID.svg"
 put "$schemadir/$APP_ID.gschema.xml" 644 <"data/$APP_ID.gschema.xml"
+put "$mandir/agentcenter-cli.1" 644 <man/agentcenter-cli.1
 
 refresh_desktop_db
 refresh_icon_cache

@@ -94,7 +94,9 @@ installs the toolchain and calls it. It runs, in order:
 2. `cargo fmt --all --check`
 3. `cargo clippy --workspace --all-targets -- -D warnings`
 4. `cargo test --workspace`
-5. `cargo bench -p agentcenter-core --bench tick -- tick_fixture_500`,
+5. `scripts/gen-docs.sh`, then a diff check: `docs/CLI.md` and
+   `man/agentcenter-cli.1` must match what the command table generates
+6. `cargo bench -p agentcenter-core --bench tick -- tick_fixture_500`,
    then `scripts/bench-gate.sh`
 
 Claude Code control (CC4) is exercised against a fake Herdr server on a

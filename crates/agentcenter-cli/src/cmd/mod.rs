@@ -62,8 +62,10 @@ pub const COMMANDS: &[Command] = &[
 /// The top-level `--help`, built from `COMMANDS`.
 pub fn usage() -> String {
     let mut s = String::from("usage: agentcenter-cli <command> [options]\n\ncommands:\n");
+    // Longest name plus two spaces: 10 with today's table, so the text is unchanged.
+    let width = COMMANDS.iter().map(|c| c.name.len()).max().unwrap_or(0) + 2;
     for c in COMMANDS {
-        s.push_str(&format!("  {:<10} {}\n", c.name, c.summary));
+        s.push_str(&format!("  {:<width$} {}\n", c.name, c.summary));
     }
     s.push_str("\nrun `agentcenter-cli <command> --help` for the options of a command");
     s

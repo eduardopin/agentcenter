@@ -56,6 +56,16 @@ fn flags_of(cmd: &str) -> Vec<String> {
     flags
 }
 
+/// The text from `start` up to the next `end` marker, so a flag is looked up in its own command.
+fn section<'a>(doc: &'a str, start: &str, end: &str) -> &'a str {
+    let from = doc
+        .find(start)
+        .unwrap_or_else(|| panic!("no section {start:?}"));
+    let rest = &doc[from + start.len()..];
+    let len = rest.find(end).unwrap_or(rest.len());
+    &rest[..len]
+}
+
 #[test]
 fn committed_markdown_matches_the_generator() {
     let generated = stdout(&["gen-docs", "markdown"]);
@@ -92,11 +102,19 @@ fn every_subcommand_appears_in_both_docs_with_its_flags() {
                 || man.contains(&format!(".SS {cmd}")),
             "{cmd} missing from man page"
         );
+        let md_section = section(&md, &format!("## {cmd}\n"), "\n## ");
+        let man_section = section(&man, &format!(".SS {cmd}\n"), "\n.SS ");
         for flag in flags_of(&cmd) {
             // roff escapes `-` as `\-`.
             let roff = flag.replace('-', "\\-");
-            assert!(md.contains(&flag), "{cmd} {flag} missing from markdown");
-            assert!(man.contains(&roff), "{cmd} {flag} missing from man page");
+            assert!(
+                md_section.contains(&flag),
+                "{cmd} {flag} missing from its markdown section"
+            );
+            assert!(
+                man_section.contains(&roff),
+                "{cmd} {flag} missing from its man section"
+            );
         }
     }
 }
