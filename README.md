@@ -27,6 +27,15 @@
 
 <p align="center"><sub>The sessions page of the current build, fed a real snapshot from a 16-core workstation. Session names and folders replaced; every number as sampled.</sub></p>
 
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="site/img/app-sessions-narrow-dark.webp">
+    <img src="site/img/app-sessions-narrow-light.webp" width="240" alt="The same sessions page in a 360 by 640 pixel window: machine CPU, RAM, swap and memory stall on top, token and memory bars below them, the ranked session list, and the Sessions and Reclaim tabs at the bottom.">
+  </picture>
+</p>
+
+<p align="center"><sub>The same page at 360 × 640, the narrowest width the layout tests hold.</sub></p>
+
 AgentCenter is a Linux resource monitor that groups each AI coding session with
 every process it starts, then shows CPU, memory, swap, disk and I/O stall per
 session, in a GTK4 app and a headless CLI.
