@@ -9,6 +9,7 @@ pre-alpha.
 
 ### Added
 
+- Release tarball (`scripts/release-build.sh`) with `THIRD_PARTY_LICENSES.html` and binaries built without local paths.
 - `agentcenter-cli insights`: up to four findings from fixed rules and a two-sentence briefing. With
   `--llm` (or `AGENTCENTER_LLM`) a local model on loopback can word the briefing; its answer is checked and the
   rule text is shown when the check fails. No model is bundled and no other command calls one.
