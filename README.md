@@ -113,7 +113,8 @@ installer puts it in `~/.local/bin`).
 |---|---|
 | `agentcenter`, `agentcenter-cli` | `~/.local/bin` |
 | menu entry | `~/.local/share/applications/io.github.eduardopin.AgentCenter.desktop` |
-| icon | `~/.local/share/icons/hicolor/scalable/apps/` |
+| icons (SVG and PNG at 16, 32, 48, 128, 256 px) | `~/.local/share/icons/hicolor/` |
+| AppStream metainfo | `~/.local/share/metainfo/io.github.eduardopin.AgentCenter.metainfo.xml` |
 | settings schema | `~/.local/share/glib-2.0/schemas/` |
 | man page (`man agentcenter-cli`) | `~/.local/share/man/man1/` |
 | list of installed files | `~/.local/share/agentcenter/installed.txt` |

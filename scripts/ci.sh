@@ -106,8 +106,14 @@ else
 fi
 bash scripts/test-install.sh
 
+step "appstream: metainfo, .desktop, icons (scripts/test-appstream.sh)"
+bash scripts/test-appstream.sh
+
 step "hygiene: CHANGELOG, SECURITY, issue forms, dependabot"
 bash scripts/test-hygiene.sh
+
+step "release config: remap flags, cargo-about config, release workflow"
+bash scripts/test-release-paths.sh --static
 
 step "node --test: pi-control suites that need no Pi SDK"
 # The SDK suites need PI_SDK_DIR and stay out of CI; these three run offline.

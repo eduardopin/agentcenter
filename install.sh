@@ -85,12 +85,21 @@ mandir="$prefix/share/man/man1"
 statedir="$prefix/share/agentcenter"
 manifest="$statedir/installed.txt"
 
+metainfodir="$prefix/share/metainfo"
+png_sizes=(16 32 48 128 256)
+png_icons=() png_dirs=()
+for size in "${png_sizes[@]}"; do
+    png_icons+=("$icondir/${size}x${size}/apps/$APP_ID.png")
+    png_dirs+=("$icondir/${size}x${size}" "$icondir/${size}x${size}/apps")
+done
+
 # Lista fechada: o manifesto nao concede autoridade para apagar outros arquivos.
 managed_files=("$bindir/agentcenter" "$bindir/agentcenter-cli"
     "$appsdir/$APP_ID.desktop" "$icondir/scalable/apps/$APP_ID.svg"
+    "${png_icons[@]}" "$metainfodir/$APP_ID.metainfo.xml"
     "$schemadir/$APP_ID.gschema.xml" "$mandir/agentcenter-cli.1")
 managed_dirs=("$bindir" "$prefix/share" "$appsdir" "$prefix/share/icons"
-    "$icondir" "$icondir/scalable" "$icondir/scalable/apps"
+    "$icondir" "$icondir/scalable" "$icondir/scalable/apps" "${png_dirs[@]}" "$metainfodir"
     "$prefix/share/glib-2.0" "$schemadir" "$prefix/share/man" "$mandir" "$statedir")
 cache_files=("$appsdir/mimeinfo.cache" "$icondir/icon-theme.cache"
     "$schemadir/gschemas.compiled")
@@ -354,6 +363,10 @@ exec_value="\"$gui\""
 # registrar o arquivo no manifesto.
 put "$appsdir/$APP_ID.desktop" 644 < <(desktop_entry "$exec_value" "$gui")
 put "$icondir/scalable/apps/$APP_ID.svg" 644 <"data/icons/hicolor/scalable/apps/$APP_ID.svg"
+for size in "${png_sizes[@]}"; do
+    put "$icondir/${size}x${size}/apps/$APP_ID.png" 644 <"data/icons/hicolor/${size}x${size}/apps/$APP_ID.png"
+done
+put "$metainfodir/$APP_ID.metainfo.xml" 644 <"data/$APP_ID.metainfo.xml"
 put "$schemadir/$APP_ID.gschema.xml" 644 <"data/$APP_ID.gschema.xml"
 put "$mandir/agentcenter-cli.1" 644 <man/agentcenter-cli.1
 

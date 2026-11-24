@@ -49,6 +49,12 @@ expected=(
     "bin/agentcenter-cli"
     "share/applications/$APP_ID.desktop"
     "share/icons/hicolor/scalable/apps/$APP_ID.svg"
+    "share/icons/hicolor/16x16/apps/$APP_ID.png"
+    "share/icons/hicolor/32x32/apps/$APP_ID.png"
+    "share/icons/hicolor/48x48/apps/$APP_ID.png"
+    "share/icons/hicolor/128x128/apps/$APP_ID.png"
+    "share/icons/hicolor/256x256/apps/$APP_ID.png"
+    "share/metainfo/$APP_ID.metainfo.xml"
     "share/glib-2.0/schemas/$APP_ID.gschema.xml"
     "share/man/man1/agentcenter-cli.1"
     "share/agentcenter/installed.txt"
@@ -63,6 +69,11 @@ done
 cmp -s "data/$APP_ID.gschema.xml" "$prefix/share/glib-2.0/schemas/$APP_ID.gschema.xml" || fail "schema differs"
 cmp -s "data/icons/hicolor/scalable/apps/$APP_ID.svg" "$prefix/share/icons/hicolor/scalable/apps/$APP_ID.svg" ||
     fail "icon differs"
+cmp -s "data/$APP_ID.metainfo.xml" "$prefix/share/metainfo/$APP_ID.metainfo.xml" || fail "metainfo differs"
+for size in 16 32 48 128 256; do
+    cmp -s "data/icons/hicolor/${size}x${size}/apps/$APP_ID.png" \
+        "$prefix/share/icons/hicolor/${size}x${size}/apps/$APP_ID.png" || fail "${size}px icon differs"
+done
 desktop="$prefix/share/applications/$APP_ID.desktop"
 grep -qxF "Exec=\"$prefix/bin/agentcenter\"" "$desktop" || fail "Exec is not the quoted absolute path: $(grep '^Exec=' "$desktop")"
 grep -qxF "TryExec=$prefix/bin/agentcenter" "$desktop" || fail "TryExec is not the absolute path"

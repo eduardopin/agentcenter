@@ -11,6 +11,7 @@ pre-alpha.
 
 - CLI reference in `docs/CLI.md` and a man page, `man/agentcenter-cli.1` (installed by `install.sh`), both
   generated from the command table by `scripts/gen-docs.sh`; CI fails when they are stale.
+- Release tarball (`scripts/release-build.sh`) with `THIRD_PARTY_LICENSES.html` and binaries built without local paths.
 - `agentcenter-cli insights`: up to four findings from fixed rules and a two-sentence briefing. With
   `--llm` (or `AGENTCENTER_LLM`) a local model on loopback can word the briefing; its answer is checked and the
   rule text is shown when the check fails. No model is bundled and no other command calls one.
@@ -41,6 +42,8 @@ pre-alpha.
 
 ### Changed
 
+- The unknown session state is drawn as a ring with a centre dot, so it no longer
+  looks like idle by shape; only the colour told them apart before.
 - AgentCenter is now licensed AGPL-3.0-or-later, with section 7 terms in
   NOTICE (keep the author credit, mark modified versions, no trademark rights)
   and TRADEMARKS.md for the name, app id and icon. Revisions before 2026-11-11
