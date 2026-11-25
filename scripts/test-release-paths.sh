@@ -67,6 +67,9 @@ if [ -f .github/workflows/release.yml ]; then
     if grep -Eq 'gh release (edit|publish)|--draft=false|softprops/action-gh-release' .github/workflows/release.yml; then
         fail "release.yml: publishes the release (it must stay a draft)"
     fi
+    if grep -q 'secrets\.' .github/workflows/release.yml; then
+        fail "release.yml: reads a repository secret (only github.token is allowed)"
+    fi
 fi
 
 if [ "$fails" -ne 0 ]; then

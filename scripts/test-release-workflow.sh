@@ -86,6 +86,12 @@ if [ "$fails" -ne 0 ]; then
     echo "FAIL ($fails)"
     exit 1
 fi
+grep -Eq '^bash scripts/test-release-workflow\.sh$' scripts/ci.sh \
+    || fail "scripts/ci.sh: does not run the full release workflow test, so the .deb checks never run in CI"
+if [ "$fails" -ne 0 ]; then
+    echo "FAIL ($fails)"
+    exit 1
+fi
 [ "${1:-}" = "--static" ] && { echo "ok: release workflow (static)"; exit 0; }
 
 echo "release workflow: dist from fake binaries"
