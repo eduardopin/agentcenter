@@ -9,7 +9,7 @@ use std::fmt::Write as _;
 use std::io::Write;
 use std::time::Duration;
 
-const HELP: &str = "\
+pub const HELP: &str = "\
 usage: agentcenter-cli reclaim [--json] [--window-s N] [--proc-root PATH]
 
 Watches every AI session for N seconds (one sample per second) and lists the

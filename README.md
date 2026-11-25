@@ -15,6 +15,7 @@
 <p align="center">
   <a href="https://eduardopin.github.io/agentcenter/">Website</a> ·
   <a href="docs/ARCHITECTURE.md">Architecture</a> ·
+  <a href="docs/CLI.md">CLI reference</a> ·
   <a href="CONTRIBUTING.md">Contributing</a>
 </p>
 
@@ -115,6 +116,7 @@ installer puts it in `~/.local/bin`).
 | icons (SVG and PNG at 16, 32, 48, 128, 256 px) | `~/.local/share/icons/hicolor/` |
 | AppStream metainfo | `~/.local/share/metainfo/io.github.eduardopin.AgentCenter.metainfo.xml` |
 | settings schema | `~/.local/share/glib-2.0/schemas/` |
+| man page (`man agentcenter-cli`) | `~/.local/share/man/man1/` |
 | list of installed files | `~/.local/share/agentcenter/installed.txt` |
 
 Running it again rebuilds and updates in place. `bash install.sh --uninstall`
@@ -141,7 +143,8 @@ AGENTCENTER_EXTRA_AGENTS=my-agent agentcenter-cli snapshot  # extra agents by co
 `snapshot` takes two samples `--interval-ms` apart (default 1000) so CPU and
 disk rates are real deltas, and prints one row per session: the agent
 process plus everything below it. `--proc-root PATH` reads a fixture instead
-of `/proc`. `agentcenter-cli snapshot --help` lists the options.
+of `/proc`. `agentcenter-cli snapshot --help` lists the options; [docs/CLI.md](docs/CLI.md)
+has every command and flag.
 
 I/O stall percentage per session needs `kernel.task_delayacct=1`. Without it,
 AgentCenter falls back to counting threads in `D` state. To enable it until the

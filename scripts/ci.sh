@@ -132,6 +132,14 @@ prepare_test_display
 step "cargo test --workspace"
 cargo test --workspace
 
+step "gen-docs: docs/CLI.md and man/agentcenter-cli.1 are current"
+bash scripts/gen-docs.sh
+git diff --exit-code -- docs/CLI.md man/agentcenter-cli.1 \
+    || { echo "ci: generated CLI docs are stale; run scripts/gen-docs.sh and commit" >&2; exit 1; }
+# A new, still untracked file is a diff too.
+[ -z "$(git status --porcelain -- docs/CLI.md man/agentcenter-cli.1 | grep '^??' || true)" ] \
+    || { echo "ci: generated CLI docs are not committed" >&2; exit 1; }
+
 step "cargo build -p agentcenter"
 cargo build -p agentcenter
 

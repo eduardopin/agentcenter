@@ -6,7 +6,7 @@ use agentcenter_core::{ProcRoot, Registry};
 use std::fmt::Write as _;
 use std::io::{BufRead, IsTerminal, Write};
 
-const HELP: &str = "\
+pub const HELP: &str = "\
 usage: agentcenter-cli signal <stop|cont|term|kill> (--session PID | --pid PID) [--yes]
 
 Sends a signal to a whole session or to one process.

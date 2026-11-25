@@ -81,6 +81,7 @@ bindir="$prefix/bin"
 appsdir="$prefix/share/applications"
 icondir="$prefix/share/icons/hicolor"
 schemadir="$prefix/share/glib-2.0/schemas"
+mandir="$prefix/share/man/man1"
 statedir="$prefix/share/agentcenter"
 manifest="$statedir/installed.txt"
 
@@ -96,10 +97,10 @@ done
 managed_files=("$bindir/agentcenter" "$bindir/agentcenter-cli"
     "$appsdir/$APP_ID.desktop" "$icondir/scalable/apps/$APP_ID.svg"
     "${png_icons[@]}" "$metainfodir/$APP_ID.metainfo.xml"
-    "$schemadir/$APP_ID.gschema.xml")
+    "$schemadir/$APP_ID.gschema.xml" "$mandir/agentcenter-cli.1")
 managed_dirs=("$bindir" "$prefix/share" "$appsdir" "$prefix/share/icons"
     "$icondir" "$icondir/scalable" "$icondir/scalable/apps" "${png_dirs[@]}" "$metainfodir"
-    "$prefix/share/glib-2.0" "$schemadir" "$statedir")
+    "$prefix/share/glib-2.0" "$schemadir" "$prefix/share/man" "$mandir" "$statedir")
 cache_files=("$appsdir/mimeinfo.cache" "$icondir/icon-theme.cache"
     "$schemadir/gschemas.compiled")
 
@@ -367,6 +368,7 @@ for size in "${png_sizes[@]}"; do
 done
 put "$metainfodir/$APP_ID.metainfo.xml" 644 <"data/$APP_ID.metainfo.xml"
 put "$schemadir/$APP_ID.gschema.xml" 644 <"data/$APP_ID.gschema.xml"
+put "$mandir/agentcenter-cli.1" 644 <man/agentcenter-cli.1
 
 refresh_desktop_db
 refresh_icon_cache
