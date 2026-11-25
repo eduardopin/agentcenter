@@ -64,7 +64,6 @@ if [ -f .github/workflows/release.yml ]; then
         || fail "release.yml: does not run scripts/test-release-paths.sh"
     grep -q 'test-release-paths.sh --compare' .github/workflows/release.yml \
         || fail "release.yml: does not compare the two builds with --compare"
-    # Publishing is the owner's click on the draft; no step may do it.
     if grep -Eq 'gh release (edit|publish)|--draft=false|softprops/action-gh-release' .github/workflows/release.yml; then
         fail "release.yml: publishes the release (it must stay a draft)"
     fi

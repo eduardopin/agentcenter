@@ -1,11 +1,4 @@
 #!/usr/bin/env bash
-# Builds the .deb from the release tarball, so the package holds the very
-# binaries the tarball (and its attestation) holds.
-#
-#   bash scripts/release-deb.sh dist/agentcenter-<version>-<arch>-linux.tar.gz
-#
-# RELEASE_DIST (default dist/) is where the .deb lands. dpkg-deb only; the
-# same inputs and SOURCE_DATE_EPOCH give the same bytes.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 root="$(pwd)"
@@ -17,7 +10,6 @@ dist="${RELEASE_DIST:-dist}"
 
 APP_ID=io.github.eduardopin.AgentCenter
 version="$(basename "$tarball" | sed -E 's/^agentcenter-(.+)-[^-]+-linux\.tar\.gz$/\1/')"
-# dpkg reads the first hyphen as the revision; "~" sorts a prerelease before the final.
 deb_version="${version/-/\~}"
 case "$(uname -m)" in
     x86_64) arch=amd64 ;;
@@ -50,7 +42,6 @@ chmod 0644 "$pkg/usr/share/man/man1/agentcenter-cli.1.gz"
     install -D -m 0644 "$f" "$pkg/usr/share/icons/$f"
 done)
 
-# dpkg's triggers refresh the icon, desktop, metainfo and schema caches, so no maintainer scripts.
 size_kb="$(du -sk --exclude=DEBIAN "$pkg" | cut -f1)"
 cat > "$pkg/DEBIAN/control" <<CONTROL
 Package: agentcenter
@@ -67,7 +58,6 @@ Description: See what each AI coding session costs your machine
  sessions, with a companion command line tool, agentcenter-cli.
 CONTROL
 
-# Same mtime on every file, or two builds of one commit differ.
 find "$pkg" -exec touch -h -d "@$SOURCE_DATE_EPOCH" {} +
 mkdir -p "$dist"
 out="$dist/agentcenter_${deb_version}_${arch}.deb"

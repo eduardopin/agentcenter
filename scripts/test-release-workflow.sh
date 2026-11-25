@@ -1,14 +1,4 @@
 #!/usr/bin/env bash
-# Offline checks for the tag-driven release: what the workflow promises, and
-# what scripts/release.sh produces from a fake build.
-#   1. release.yml: build -> attest -> draft-release, SHA-pinned actions, write
-#      permissions only on the jobs that need them, the draft job gated by the
-#      `release` environment and never publishing;
-#   2. scripts/release.sh --package-only on fake binaries gives a tarball, a
-#      .deb and a SHA256SUMS that `sha256sum -c` accepts and rejects tampering;
-#   3. the .deb lists the binaries and the desktop file, and carries no path.
-# What only a tag run can prove (attestation, draft release, approval) is not
-# claimed here. `--static` runs step 1 only. No network, no cargo build.
 set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
@@ -16,7 +6,6 @@ wf=.github/workflows/release.yml
 fails=0
 fail() { echo " - $*"; fails=$((fails + 1)); }
 
-# Text between "  <job>:" and the next job at the same indent.
 job_block() {
     awk -v job="$1" '
         $0 ~ "^  " job ":[[:space:]]*$" { on = 1; next }
@@ -32,7 +21,6 @@ for job in build attest draft-release; do
     [ -n "$(job_block "$job")" ] || fail "$wf: no job '$job'"
 done
 
-# Pinned by 40-hex commit SHA, as every other workflow in the repo.
 while IFS= read -r line; do
     ref="${line#*uses:}"
     ref="$(echo "$ref" | awk '{print $1}')"
@@ -43,7 +31,6 @@ build="$(job_block build)"
 attest="$(job_block attest)"
 draft="$(job_block draft-release)"
 
-# Top level grants read only; jobs opt in.
 top="$(awk '/^permissions:/{on=1;next} on&&/^[^ ]/{exit} on{print}' "$wf")"
 echo "$top" | grep -Eq 'contents:[[:space:]]*read' || fail "$wf: top-level permissions are not contents: read"
 echo "$top" | grep -Eq 'write' && fail "$wf: top-level permissions grant write"
@@ -71,7 +58,6 @@ echo "$draft" | grep -q 'gh attestation verify' || fail "draft-release job does 
 echo "$draft" | grep -q 'SHA256SUMS' || fail "draft-release job does not attach SHA256SUMS"
 echo "$draft" | grep -Eq 'needs:.*attest' || fail "draft-release job does not wait for attest"
 echo "$attest" | grep -Eq 'needs:.*build' || fail "attest job does not wait for build"
-# A dispatch run has no tag to release.
 for j in "$attest" "$draft"; do
     echo "$j" | grep -q "startsWith(github.ref, 'refs/tags/v')" || fail "a release job is not limited to v* tags"
 done
@@ -90,7 +76,6 @@ done
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 mkdir -p "$work/target/release"
-# Real ELF files so `strings` and dpkg-deb behave as on the real binaries.
 cp /usr/bin/true "$work/target/release/agentcenter"
 cp /usr/bin/true "$work/target/release/agentcenter-cli"
 printf '<html>%0*d</html>\n' 2000 0 > "$work/target/THIRD_PARTY_LICENSES.html"
