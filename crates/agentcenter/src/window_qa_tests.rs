@@ -581,16 +581,28 @@ fn paned_position_gives_the_maps_all_but_the_top_five_list_rows() {
         paned_position(1200, PanedMode::Maps, false, None),
         1200 - list
     );
-    // Too short for 220 px of maps and five rows: the rows win.
+    // Too short for 220 px of maps and five rows: the rows win, and at the
+    // tallest density (LIST_TIGHT_PX) so the fifth is whole, not a sliver.
     assert_eq!(
         paned_position(400, PanedMode::Maps, false, None),
-        400 - list
+        400 - LIST_TIGHT_PX
+    );
+    // The last height with room for the maps' 220 px keeps the list as it was.
+    assert_eq!(
+        paned_position(LIST_TOP_PX + 220, PanedMode::Maps, false, None),
+        220
+    );
+    // One pixel shorter and the tight list takes over.
+    assert_eq!(
+        paned_position(LIST_TOP_PX + 219, PanedMode::Maps, false, None),
+        LIST_TOP_PX + 219 - LIST_TIGHT_PX
     );
     // Detail: 65 %, still leaving the rows.
     assert_eq!(paned_position(1000, PanedMode::Detail, false, None), 650);
+    // The detail page has no maps, so a short window keeps LIST_TOP_PX.
     assert_eq!(
         paned_position(500, PanedMode::Detail, false, None),
-        500 - list
+        500 - LIST_TOP_PX
     );
     // Strips replace the maps: a fixed short top.
     assert_eq!(paned_position(700, PanedMode::Maps, true, None), 64);
@@ -2088,22 +2100,54 @@ fn at_360_the_detail_page_does_not_overflow_sideways() {
     });
 }
 
+/// The memory strip is reachable at 360 x 640: whole inside what the paned
+/// top shows, or in the overview's vertical scroller, which then has range and
+/// brings it into view at the end. The list keeps 3 whole rows at this size
+/// (owner, 2026-11-16), so tipico-40's strips, taller than what is left, scroll
+/// as they already do under 40 waiting chips (#28).
+fn assert_memory_strip_reachable(window: &Window) {
+    let root = window.window.clone();
+    let shown = shown_by_paned_top(window);
+    assert!(
+        settle_until(|| mapped_with_class(window, "memory-bar").len() == 1),
+        "the memory strip is mapped"
+    );
+    let bars = mapped_with_class(window, "memory-bar");
+    let b = bounds_in(&bars[0], &root);
+    assert!(b.height() > 0.0, "the memory strip has a height");
+    if inside(&b, &shown) {
+        return;
+    }
+    let scroller = std::iter::successors(bars[0].parent(), |w| w.parent())
+        .take_while(|w| w != content_stack(window).upcast_ref::<gtk::Widget>())
+        .find_map(|w| w.downcast::<gtk::ScrolledWindow>().ok())
+        .unwrap_or_else(|| {
+            panic!("memory strip {b:?} clipped by the {shown:?} the paned top shows, no scroller")
+        });
+    let adj = scroller.vadjustment();
+    settle_until(|| adj.upper() > adj.page_size() + 1.0);
+    assert!(
+        adj.upper() > adj.page_size() + 1.0,
+        "the scroller has no range: upper {} for a page of {}",
+        adj.upper(),
+        adj.page_size()
+    );
+    adj.set_value(adj.upper() - adj.page_size());
+    settle_until(|| inside(&bounds_in(&bars[0], &root), &shown));
+    let b = bounds_in(&bars[0], &root);
+    assert!(
+        inside(&b, &shown),
+        "scrolled to the end the memory strip {b:?} is outside the {shown:?} the paned top shows"
+    );
+}
+
 #[test]
 fn at_360_the_memory_strip_is_visible() {
     gtk::test_synced(|| {
         let _font = DesktopLook::set();
         let window = open("io.agentcenter.Narrow360MemoryQA", 360, 640, &tipico());
         settle_paned(&window);
-        let root = window.window.clone();
-        let region = bounds_in(&content_stack(&window), &root);
-        let bars = mapped_with_class(&window, "memory-bar");
-        assert_eq!(bars.len(), 1, "the memory strip is mapped");
-        let b = bounds_in(&bars[0], &root);
-        assert!(b.height() > 0.0, "the memory strip has a height");
-        assert!(
-            inside(&b, &region),
-            "memory strip {b:?} clipped by the maps region {region:?}"
-        );
+        assert_memory_strip_reachable(&window);
         window.window.close();
         settle();
     });
@@ -2125,16 +2169,7 @@ fn at_360_the_memory_strip_stays_visible_when_a_busier_snapshot_arrives() {
             history: None,
         }));
         settle_paned(&window);
-        let root = window.window.clone();
-        let region = bounds_in(&content_stack(&window), &root);
-        let bars = mapped_with_class(&window, "memory-bar");
-        assert_eq!(bars.len(), 1, "the memory strip is mapped");
-        let b = bounds_in(&bars[0], &root);
-        assert!(b.height() > 0.0, "the memory strip has a height");
-        assert!(
-            inside(&b, &region),
-            "memory strip {b:?} clipped by the maps region {region:?}"
-        );
+        assert_memory_strip_reachable(&window);
         window.window.close();
         settle();
     });
@@ -2223,11 +2258,32 @@ fn at_360_the_paned_top_is_at_least_what_the_maps_need() {
             need > STRIPS_TOP_PX,
             "the strips need {need} px, no more than the {STRIPS_TOP_PX} px default"
         );
+        // The top takes what the strips need up to what leaves the list its
+        // chrome and 3 whole rows; the page scrolls for the rest.
+        let want =
+            need.min((paned.height() - LIST_STRIPS_PX).max(STRIPS_TOP_PX.min(paned.height())));
         assert!(
-            paned.position() >= need,
-            "the paned top is {} px, the maps need {need}",
+            paned.position() >= want,
+            "the paned top is {} px, the maps need {need} ({want} with the list's rows kept)",
             paned.position()
         );
+        if paned.position() < need {
+            // Cut short of what the strips need: the page scrolls for the rest.
+            let scroller = window
+                .map
+                .widget()
+                .ancestor(gtk::ScrolledWindow::static_type())
+                .and_downcast::<gtk::ScrolledWindow>()
+                .expect("the maps page sits in a scroller");
+            let adj = scroller.vadjustment();
+            settle_until(|| adj.upper() > adj.page_size() + 1.0);
+            assert!(
+                adj.upper() > adj.page_size() + 1.0,
+                "the top is cut short of the strips and the page has no range: upper {} for a page of {}",
+                adj.upper(),
+                adj.page_size()
+            );
+        }
         assert!(
             paned.position() <= paned.height() - LIST_CHROME_PX,
             "the paned top {} px leaves the list less than its {LIST_CHROME_PX} px chrome of {}",
@@ -2354,22 +2410,81 @@ fn whole_list_rows(window: &Window) -> usize {
         .count()
 }
 
-/// The strips' 4 px padding is the row: with the 16 px of the wide page the
-/// list under the strips shows one whole session instead of two.
-#[test]
-fn at_360x640_the_list_keeps_2_whole_rows() {
-    gtk::test_synced(|| {
+/// The list's scrolled viewport (the widget that holds the session rows) and
+/// the height of one row, both read from the real widgets.
+fn list_viewport_and_row(window: &Window) -> (gtk::graphene::Rect, f32) {
+    let rows: Vec<gtk::Widget> = mapped_with_class(window, "session-row");
+    let row = rows.first().expect("the list has a mapped session row");
+    let scrolled = row
+        .ancestor(gtk::ScrolledWindow::static_type())
+        .expect("the rows sit in a scroller");
+    (bounds_in(&scrolled, &window.window), row.height() as f32)
+}
+
+/// The list keeps `rows` whole session rows at `w` x `h` with tipico-40, and
+/// its viewport is at least that many row heights tall. Owner, 2026-11-16:
+/// 3 at 360 x 640, 5 at 640 x 640.
+fn assert_list_min_rows(id: &'static str, w: i32, h: i32, rows: usize) {
+    gtk::test_synced(move || {
         let _font = DesktopLook::set();
-        let window = open("io.agentcenter.Narrow360RowsQA", 360, 640, &tipico());
+        let window = open(id, w, h, &tipico());
         settle_paned(&window);
+        settle_until(|| whole_list_rows(&window) >= rows);
         let whole = whole_list_rows(&window);
+        let (viewport, row) = list_viewport_and_row(&window);
+        // Rows sit on a pitch of the row plus the 1 px gap.
+        let need = rows as f32 * row + (rows - 1) as f32;
         assert!(
-            whole >= 2,
-            "the list shows {whole} whole session rows at 360 x 640, 2 fit"
+            viewport.height() >= need,
+            "{w} x {h}: the list viewport is {} px, {rows} rows of {row} px need {need}",
+            viewport.height()
+        );
+        assert!(
+            whole >= rows,
+            "{w} x {h}: the list shows {whole} whole session rows, {rows} are required"
         );
         window.window.close();
         settle();
     });
+}
+
+#[test]
+fn at_360x640_the_list_shows_3_whole_rows() {
+    assert_list_min_rows("io.agentcenter.ListMinRows360", 360, 640, 3);
+}
+
+/// The strips' cap must not take the maps page to 0 px on a short window:
+/// the window's own minimum is 360 x 400, and base kept the page there.
+#[test]
+fn at_360x400_the_strips_page_keeps_its_top() {
+    gtk::test_synced(|| {
+        let _font = DesktopLook::set();
+        let window = open("io.agentcenter.Narrow360ShortQA", 360, 400, &tipico());
+        settle_paned(&window);
+        let top = paned_of(&window).position();
+        assert!(top > 0, "the paned top is {top} px at 360 x 400");
+        window.window.close();
+        settle();
+    });
+}
+
+/// The pure side of the same rule: on a short paned the top keeps a floor of
+/// the chrome's height, never 0.
+#[test]
+fn strips_top_cap_leaves_the_list_its_rows_then_the_top_keeps_a_floor() {
+    // Room for the rows: the list keeps them.
+    assert_eq!(strips_top_cap(379), 379 - LIST_STRIPS_PX);
+    // Too short for the rows: the top keeps 115 px (never 0), the list the rest.
+    assert_eq!(strips_top_cap(LIST_STRIPS_PX - 1), LIST_CHROME_PX);
+    assert_eq!(strips_top_cap(240), LIST_CHROME_PX);
+    // Shorter than that: the top takes the whole paned, never negative.
+    assert_eq!(strips_top_cap(LIST_CHROME_PX - 1), LIST_CHROME_PX - 1);
+    assert_eq!(strips_top_cap(0), 0);
+}
+
+#[test]
+fn at_640x640_the_list_shows_5_whole_rows() {
+    assert_list_min_rows("io.agentcenter.ListMinRows640", 640, 640, 5);
 }
 
 /// tipico-40 with every session that reports a state waiting for its user:
