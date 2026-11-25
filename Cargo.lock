@@ -4,7 +4,7 @@ version = 4
 
 [[package]]
 name = "agentcenter"
-version = "0.1.0"
+version = "0.0.0-rc.1"
 dependencies = [
  "agentcenter-core",
  "futures-channel",
@@ -16,7 +16,7 @@ dependencies = [
 
 [[package]]
 name = "agentcenter-cli"
-version = "0.1.0"
+version = "0.0.0-rc.1"
 dependencies = [
  "agentcenter-core",
  "serde_json",
@@ -24,7 +24,7 @@ dependencies = [
 
 [[package]]
 name = "agentcenter-core"
-version = "0.1.0"
+version = "0.0.0-rc.1"
 dependencies = [
  "criterion",
  "serde",
