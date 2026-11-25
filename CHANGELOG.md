@@ -11,6 +11,9 @@ pre-alpha.
 
 - CLI reference in `docs/CLI.md` and a man page, `man/agentcenter-cli.1` (installed by `install.sh`), both
   generated from the command table by `scripts/gen-docs.sh`; CI fails when they are stale.
+- Tag-driven release (`.github/workflows/release.yml`, `scripts/release.sh`): on a `v*` tag CI builds the tarball, a
+  `.deb` and `SHA256SUMS`, attests the tarball and the `.deb` with build provenance, and attaches them to a draft
+  release that waits for approval on the `release` environment.
 - Release tarball (`scripts/release-build.sh`) with `THIRD_PARTY_LICENSES.html` and binaries built without local paths.
 - `agentcenter-cli insights`: up to four findings from fixed rules and a two-sentence briefing. With
   `--llm` (or `AGENTCENTER_LLM`) a local model on loopback can word the briefing; its answer is checked and the

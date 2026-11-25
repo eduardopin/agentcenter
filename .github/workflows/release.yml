@@ -1,6 +1,7 @@
-# Builds the release tarball from a clean checkout and uploads it as a
-# workflow artifact. The logic lives in scripts/release-build.sh; publishing
-# to GitHub Releases is a separate workflow and is not done here.
+# Builds the tarball, .deb and SHA256SUMS from a clean checkout, attests them,
+# and on a v* tag attaches them to a DRAFT release. The build logic lives in
+# scripts/release.sh. Nothing here publishes: the owner publishes the draft by
+# hand, and the draft job waits for the approval set on the `release` environment.
 name: Release build
 
 on:
@@ -13,7 +14,7 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: true
 
-# The build only reads the repository; nothing here writes to GitHub.
+# Jobs that write to GitHub ask for it themselves.
 permissions:
   contents: read
 
@@ -49,8 +50,8 @@ jobs:
       - name: cargo-about
         run: cargo install --locked cargo-about --features cli --version "$CARGO_ABOUT_VERSION"
 
-      - name: Build the tarball
-        run: bash scripts/release-build.sh
+      - name: Build the tarball, .deb and SHA256SUMS
+        run: bash scripts/release.sh
 
       - name: Check paths and licences
         run: RELEASE_SKIP_BUILD=1 bash scripts/test-release-paths.sh
@@ -69,8 +70,71 @@ jobs:
           (cd second && RELEASE_DIST="$PWD/../dist-second" bash scripts/release-build.sh)
           bash scripts/test-release-paths.sh --compare dist/agentcenter-*.tar.gz dist-second/agentcenter-*.tar.gz
 
+      - name: Checksums hold on the files as built
+        run: (cd dist && sha256sum -c SHA256SUMS)
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: agentcenter-release
-          path: dist/agentcenter-*.tar.gz
+          path: |
+            dist/agentcenter-*.tar.gz
+            dist/agentcenter_*.deb
+            dist/SHA256SUMS
           if-no-files-found: error
+
+  # Signs what the build job produced; only this job may mint the OIDC token.
+  attest:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: agentcenter-release
+          path: dist
+
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/agentcenter-*.tar.gz
+            dist/agentcenter_*.deb
+
+  # Waits for the approval on the `release` environment, then attaches the
+  # files to a draft. It never publishes.
+  draft-release:
+    needs: attest
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-26.04
+    timeout-minutes: 10
+    environment: release
+    permissions:
+      contents: write
+      attestations: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: agentcenter-release
+          path: dist
+
+      - name: Checksums and attestations hold before anything is attached
+        run: |
+          (cd dist && sha256sum -c SHA256SUMS)
+          for f in dist/agentcenter-*.tar.gz dist/agentcenter_*.deb; do
+            gh attestation verify "$f" --repo "$GITHUB_REPOSITORY"
+          done
+
+      - name: Create the draft release
+        run: |
+          # A tag with a hyphen (v0.0.0-rc.1) is a prerelease.
+          flags=(--draft --verify-tag --generate-notes)
+          case "$TAG" in *-*) flags+=(--prerelease) ;; esac
+          gh release create "$TAG" "${flags[@]}" --repo "$GITHUB_REPOSITORY" --title "$TAG" \
+            dist/agentcenter-*.tar.gz dist/agentcenter_*.deb dist/SHA256SUMS
