@@ -42,6 +42,8 @@ need() { [ -f "$1" ] || fail "missing: $1"; }
 
 echo "release: static checks"
 need scripts/release-build.sh
+need scripts/release.sh
+need scripts/release-deb.sh
 need about.toml
 need about.hbs
 need .github/workflows/release.yml
@@ -54,15 +56,19 @@ if [ -f scripts/release-build.sh ]; then
         || fail "scripts/release-build.sh: does not pack THIRD_PARTY_LICENSES.html"
 fi
 if [ -f .github/workflows/release.yml ]; then
-    grep -q 'scripts/release-build.sh' .github/workflows/release.yml \
-        || fail "release.yml: does not call scripts/release-build.sh"
+    grep -q 'scripts/release.sh' .github/workflows/release.yml \
+        || fail "release.yml: does not call scripts/release.sh"
+    grep -q 'release-build.sh' scripts/release.sh \
+        || fail "scripts/release.sh: does not call scripts/release-build.sh"
     grep -q 'scripts/test-release-paths.sh' .github/workflows/release.yml \
         || fail "release.yml: does not run scripts/test-release-paths.sh"
     grep -q 'test-release-paths.sh --compare' .github/workflows/release.yml \
         || fail "release.yml: does not compare the two builds with --compare"
-    # Publishing is the next card; this workflow only uploads an artifact.
-    if grep -Eq 'secrets\.|environment:|softprops/action-gh-release|gh release|contents: write' .github/workflows/release.yml; then
-        fail "release.yml: publishes or uses secrets (out of scope for this workflow)"
+    if grep -Eq 'gh release (edit|publish)|--draft=false|softprops/action-gh-release' .github/workflows/release.yml; then
+        fail "release.yml: publishes the release (it must stay a draft)"
+    fi
+    if grep -q 'secrets\.' .github/workflows/release.yml; then
+        fail "release.yml: reads a repository secret (only github.token is allowed)"
     fi
 fi
 
@@ -101,6 +107,21 @@ for name in agentcenter agentcenter-cli; do
     hits="$(strings -a "$bin" | grep -E '/(home|root)/' | head -n5 || true)"
     [ -z "$hits" ] || fail "$name embeds a local path: $(echo "$hits" | tr '\n' ' ')"
 done
+
+deb="$(find "$dist" -maxdepth 1 -name "agentcenter_*.deb" | head -n1)"
+if [ -n "$deb" ]; then
+    echo "release: strings on the .deb binaries (same check as the tarball)"
+    mkdir "$work/deb"
+    dpkg-deb -x "$deb" "$work/deb"
+    for name in agentcenter agentcenter-cli; do
+        bin="$work/deb/usr/bin/$name"
+        [ -f "$bin" ] || { fail ".deb has no $name binary"; continue; }
+        hits="$(strings -a "$bin" | grep -E '/(home|root)/' | head -n5 || true)"
+        [ -z "$hits" ] || fail ".deb $name embeds a local path: $(echo "$hits" | tr '\n' ' ')"
+    done
+else
+    echo "release: no .deb in $dist, skipped"
+fi
 
 target_dir="${CARGO_TARGET_DIR:-target}"
 if [ -f "$target_dir/release/agentcenter" ] && [ -f "$target_dir/THIRD_PARTY_LICENSES.html" ]; then
