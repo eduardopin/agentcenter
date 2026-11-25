@@ -92,12 +92,13 @@ export async function createOperations({ getContext, outputRoot, onChange }) {
   }
   const registry = pickupRegistry();
   // A draft (or an open slash menu, which shows as "/...") must survive the arm;
-  // if the editor cannot be read, refuse rather than risk losing the draft.
+  // if the editor cannot be read (a throw, or anything but a string, as a
+  // custom editor component may return), refuse rather than risk losing the draft.
   function editorHoldsDraft(ctx) {
     if (!ctx.hasUI) return false;
     try {
       const text = ctx.ui.getEditorText();
-      return typeof text === 'string' && text.length > 0;
+      return typeof text !== 'string' || text.length > 0;
     } catch { return true; }
   }
 

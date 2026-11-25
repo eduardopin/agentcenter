@@ -88,15 +88,19 @@ is not offered a pickup.
 
 `handoff_pickup` is refused with `rejected`/`editor_draft` when the Pi editor
 holds text (an unsent draft, or an open slash autocomplete, which shows as
-`/...`) or its text cannot be read. The pickup command replaces the editor, so
-arming would destroy the draft. The refusal arms nothing and leaves the editor
-and the registry untouched; the client may retry once the editor is empty. It
-is skipped when Pi runs without a UI.
+`/...`) or its text cannot be read (the read throws or returns anything but a
+string). The pickup command replaces the editor, so arming would destroy the
+draft. The refusal arms nothing and leaves the editor and the registry
+untouched; the client may retry once the editor is empty, and the app tells the
+owner to clear the editor and click again. It is skipped when Pi runs without a
+UI.
 
-Two gaps stay open. Pi has no probe for an open autocomplete, so a menu opened
+Three gaps stay open. Pi has no probe for an open autocomplete, so a menu opened
 with Tab on an empty editor is not seen and the arm goes through. The check
 runs when the pickup is armed, and the command is typed later: a draft started
-in between joins the command. A draft on a busy Pi is reported as
+in between joins the command. The check reads only the TUI editor: in RPC mode
+Pi reports `hasUI: true` but `getEditorText()` returns an empty string, so a
+draft held in an RPC client is not seen. A draft on a busy Pi is reported as
 `editor_draft`, not `busy`; both arm nothing.
 
 ## Trust and timing

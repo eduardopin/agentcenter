@@ -196,6 +196,18 @@ test('arm when the editor cannot be read fails closed; a Pi without UI has no ed
     assert.deepEqual((({ state, code }) => [state, code])(await w.send('handoff_pickup')), ['rejected', 'editor_draft']);
     assert.equal(w.registry()?.active, undefined);
   } finally { await w.close(); }
+  // A read that returns something other than a string is as unreadable as a throw.
+  for (const value of [undefined, null, 0, {}]) {
+    w = await world();
+    try {
+      w.editor = value;
+      const reply = await w.send('handoff_pickup');
+      assert.deepEqual([reply.state, reply.code], ['rejected', 'editor_draft'], String(value));
+      assert.equal(w.registry()?.active, undefined, String(value));
+      assert.equal(w.calls + w.newSession + w.sent.length, 0, String(value));
+      assert.deepEqual(w.editorWrites, [], String(value));
+    } finally { await w.close(); }
+  }
   w = await world();
   try {
     w.hasUI = false; w.editor = 'ignored: there is no editor without a UI'; w.editorFails = true;
