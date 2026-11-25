@@ -91,6 +91,17 @@ export async function createOperations({ getContext, outputRoot, onChange }) {
       capabilities: { handoff: { ...capability }, compact: { ...capability } } };
   }
   const registry = pickupRegistry();
+  // A draft (or an open slash menu, which shows as "/...") must survive the arm;
+  // if the editor cannot be read (a throw, or anything but a string, as a
+  // custom editor component may return), refuse rather than risk losing the draft.
+  function editorHoldsDraft(ctx) {
+    if (!ctx.hasUI) return false;
+    try {
+      const text = ctx.ui.getEditorText();
+      return typeof text !== 'string' || text.length > 0;
+    } catch { return true; }
+  }
+
   function pickupBusy() {
     const current = registry.active;
     if (!current) return false;
@@ -348,6 +359,7 @@ export async function createOperations({ getContext, outputRoot, onChange }) {
     const reason = precondition(request);
     if (reason) return reply(request, 'rejected', reason);
     if (modelAuth(getContext()) !== 'configured') return reply(request, 'rejected', 'disabled');
+    if (request.action === 'handoff_pickup' && editorHoldsDraft(getContext())) return reply(request, 'rejected', 'editor_draft');
     if (active || pickupBusy()) return reply(request, 'rejected', 'busy');
     if (request.action === 'handoff_pickup') {
       // Arming has no effect: only the registered command, delivered by the

@@ -43,7 +43,9 @@ async function world() {
   const root = await mkdtemp(`${privateBase}/ac-pu-`);
   const runtimeDir = join(root, 'runtime'); await mkdir(runtimeDir, { mode: 0o700 });
   const handoffs = join(root, 'handoffs'); await mkdir(handoffs, { mode: 0o700 });
-  const w = { root, handoffs, revision: '1', busy: false, guarded: true, model: true, calls: 0, newSession: 0, sent: [], onChange: undefined };
+  const w = { root, handoffs, revision: '1', busy: false, guarded: true, model: true, calls: 0, newSession: 0, sent: [], onChange: undefined,
+    // The owner's Pi editor: its text, whether reading it fails, and every write the extension makes to it.
+    hasUI: true, editor: '', editorFails: false, editorWrites: [] };
   const runtime = await ModelRuntime.create({ credentials: AuthStorage.inMemory(), modelsPath: null, refreshOnCreate: false, allowModelNetwork: false });
   runtime.registerProvider('cc5-unit', { baseUrl: 'http://invalid.invalid', apiKey: 'synthetic', api: 'cc5-unit',
     models: [{ id: 'fake', name: 'fake', input: ['text'], reasoning: false, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }, contextWindow: 65536, maxTokens: 2048 }],
@@ -60,6 +62,9 @@ async function world() {
   const model = registry.find('cc5-unit', 'fake');
   const ctx = {
     cwd: root, modelRegistry: registry,
+    get hasUI() { return w.hasUI; },
+    ui: { getEditorText: () => { if (w.editorFails) throw new Error('synthetic editor failure'); return w.editor; },
+      setEditorText: text => { w.editorWrites.push(text); } },
     get model() { return w.model ? model : undefined; },
     get compactGuardedCapability() { return w.guarded ? 'agentcenter.compactGuarded.v1' : undefined; },
     compactGuarded: async () => { throw new Error('compact is not part of these tests'); },
@@ -118,6 +123,7 @@ test('arm refusals: real replies carry metadata and no record, and match the Rus
       assert.equal((await w.send('handoff_pickup')).code, 'armed');
       return w.send('handoff_pickup', { expected: { ...EXPECTED, leafId: 'other' } });
     },
+    editor_draft: async w => { w.editor = 'half-written prompt'; return w.send('handoff_pickup'); },
     expired: async w => {
       assert.equal((await w.send('handoff_pickup')).code, 'armed');
       assert.equal((await w.send('cancel')).code, 'cancelled');
@@ -143,6 +149,70 @@ test('arm refusals: real replies carry metadata and no record, and match the Rus
   }
   if (process.env.AGENTCENTER_WRITE_FIXTURES === '1') await writeFile(FIXTURE, JSON.stringify(replies, null, 2) + '\n');
   assert.deepEqual(replies, JSON.parse(await readFile(FIXTURE, 'utf8')));
+});
+
+// Herdr's agent.prompt types into the live editor: a draft would be joined to
+// the command and sent to the model, and with the slash autocomplete open the
+// command arrives as //agentcenter-pickup. The arm is the last point before
+// anything is typed, so it refuses there and leaves the editor alone.
+test('arm with a draft in the editor is refused: no record, no model request, draft untouched', { timeout: 10000 }, async () => {
+  const w = await world();
+  try {
+    w.editor = 'half-written prompt the owner has not sent';
+    const reply = await w.send('handoff_pickup');
+    assert.deepEqual([reply.protocol_version, reply.state, reply.code], [3, 'rejected', 'editor_draft']);
+    assert.equal(Object.hasOwn(reply, 'pickup'), false);
+    assert.equal(w.registry()?.ops.has(OP) ?? false, false, 'nothing armed');
+    assert.equal(w.registry()?.active, undefined);
+    assert.equal(w.calls, 0, 'the fake provider received no request');
+    assert.equal(w.newSession, 0);
+    assert.equal(w.editor, 'half-written prompt the owner has not sent');
+    assert.deepEqual(w.editorWrites, [], 'the extension never writes the editor');
+    // The refusal is not sticky: once the owner clears the draft the same click arms.
+    w.editor = '';
+    assert.equal((await w.send('handoff_pickup')).code, 'armed');
+  } finally { await w.close(); }
+});
+
+test('arm with the slash autocomplete open (editor holds "/" or a command prefix) sends nothing', { timeout: 10000 }, async () => {
+  for (const text of ['/', '/agent', '/agentcenter-pickup ', '  ', '@src/']) {
+    const w = await world();
+    try {
+      w.editor = text;
+      const reply = await w.send('handoff_pickup');
+      assert.deepEqual([reply.state, reply.code], ['rejected', 'editor_draft'], JSON.stringify(text));
+      assert.equal(w.registry()?.active, undefined, JSON.stringify(text));
+      assert.equal(w.calls + w.newSession + w.sent.length, 0, JSON.stringify(text));
+      assert.equal(w.editor, text);
+      assert.deepEqual(w.editorWrites, []);
+    } finally { await w.close(); }
+  }
+});
+
+test('arm when the editor cannot be read fails closed; a Pi without UI has no editor to protect', { timeout: 10000 }, async () => {
+  let w = await world();
+  try {
+    w.editorFails = true;
+    assert.deepEqual((({ state, code }) => [state, code])(await w.send('handoff_pickup')), ['rejected', 'editor_draft']);
+    assert.equal(w.registry()?.active, undefined);
+  } finally { await w.close(); }
+  // A read that returns something other than a string is as unreadable as a throw.
+  for (const value of [undefined, null, 0, {}]) {
+    w = await world();
+    try {
+      w.editor = value;
+      const reply = await w.send('handoff_pickup');
+      assert.deepEqual([reply.state, reply.code], ['rejected', 'editor_draft'], String(value));
+      assert.equal(w.registry()?.active, undefined, String(value));
+      assert.equal(w.calls + w.newSession + w.sent.length, 0, String(value));
+      assert.deepEqual(w.editorWrites, [], String(value));
+    } finally { await w.close(); }
+  }
+  w = await world();
+  try {
+    w.hasUI = false; w.editor = 'ignored: there is no editor without a UI'; w.editorFails = true;
+    assert.equal((await w.send('handoff_pickup')).code, 'armed');
+  } finally { await w.close(); }
 });
 
 test('protocol 2 stays protocol 2: no pickup capability, no v3 echo, no arming', async () => {

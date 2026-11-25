@@ -385,6 +385,12 @@ impl Status {
             Self::Completed(Evidence::Compact { entry_id, .. }) => {
                 format!("Native compact persisted: {entry_id}")
             }
+            // Only the owner can clear this one, in the Pi editor, so the code alone
+            // would leave them stuck; the code stays in the text for logs and bug reports.
+            Self::Refused(why) if why == "editor_draft" => {
+                "Refused (editor_draft): the Pi editor holds a draft; clear it and click again"
+                    .into()
+            }
             Self::Refused(why) => format!("Refused: {why}"),
             Self::Failed(why) => format!("Failed: {why}"),
             Self::Cancelled => "Cancelled — already persisted effects are not undone".into(),
@@ -2591,5 +2597,12 @@ mod tests {
             assert_eq!(c.visible_status(), Some(&status));
             assert!(c.query().is_none());
         }
+    }
+    #[test]
+    fn editor_draft_refusal_tells_the_owner_what_to_do() {
+        let text = Status::Refused("editor_draft".into()).text();
+        assert!(text.contains("editor_draft"), "{text}");
+        assert!(text.contains("clear it and click again"), "{text}");
+        assert_eq!(Status::Refused("quota".into()).text(), "Refused: quota");
     }
 }
